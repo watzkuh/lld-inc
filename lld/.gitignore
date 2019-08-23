@@ -22,3 +22,12 @@
 #==============================================================================#
 # Sphinx build files.
 docs/_build
+
+.idea
+CMakeFiles
+COFF/.idea
+COFF/cmake-build-debug
+ELF/CMakeFiles
+cmake-build-debug
+test/CMakeCache.txt
+test/CMakeFiles
