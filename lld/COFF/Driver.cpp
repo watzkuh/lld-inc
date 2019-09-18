@@ -16,6 +16,7 @@
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "Writer.h"
+#include "IncrementalLinkFile.h"
 #include "lld/Common/Args.h"
 #include "lld/Common/Driver.h"
 #include "lld/Common/ErrorHandler.h"
@@ -60,6 +61,7 @@ namespace coff {
 static Timer inputFileTimer("Input File Reading", Timer::root());
 
 Configuration *config;
+IncrementalLinkFile *incrementalLinkFile;
 LinkerDriver *driver;
 
 bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
@@ -75,6 +77,7 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
   stderrOS.enable_colors(stderrOS.has_colors());
 
   config = make<Configuration>();
+  incrementalLinkFile = make<IncrementalLinkFile>();
   symtab = make<SymbolTable>();
   driver = make<LinkerDriver>();
 
@@ -1635,6 +1638,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     return false;
   };
 
+<<<<<<< HEAD
   // Create a list of input files. These can be given as OPT_INPUT options
   // and OPT_wholearchive_file options, and we also need to track OPT_start_lib
   // and OPT_end_lib.
@@ -1664,6 +1668,15 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
       break;
     }
   }
+=======
+  // Create a list of input files. Files can be given as arguments
+  // for /defaultlib option.
+  for (auto *arg : args.filtered(OPT_INPUT, OPT_wholearchive_file))
+    if (Optional<StringRef> path = findFile(arg->getValue())) {
+      enqueuePath(*path, isWholeArchive(*path));
+      incrementalLinkFile->objects.push_back(*path);
+    }
+>>>>>>> Add a basic bookkeeping structure
 
   // Process files specified as /defaultlib. These should be enequeued after
   // other files, which is why they are in a separate loop.
@@ -1793,6 +1806,23 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (auto e = tryCreateFile(config->outputFile)) {
     error("cannot open output file " + config->outputFile + ": " + e.message());
     return;
+  }
+
+  std::vector<llvm::StringRef> mArgs;
+  for (auto arg : argsArr) {
+    mArgs.push_back(arg);
+  }
+  incrementalLinkFile->arguments = mArgs;
+
+  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError = MemoryBuffer::getFile(
+      config->outputFile + IncrementalLinkFile::fileEnding);
+  if (ilkOrError) {
+    yaml::Input yin(ilkOrError->get()->getBuffer());
+    IncrementalLinkFile previousLink;
+    yin >> previousLink;
+    if (previousLink.arguments == incrementalLinkFile->arguments) {
+      // Attempt an incremental link
+    }
   }
 
   if (shouldCreatePDB) {
@@ -2028,6 +2058,13 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
 
   // Write the result.
   writeResult();
+
+  // Write bookkeeping file for incremental links
+  std::error_code code;
+  raw_fd_ostream out(config->outputFile + IncrementalLinkFile::fileEnding, code);
+  llvm::yaml::Output yout(out);
+  yout << *incrementalLinkFile;
+  out.close();
 
   // Stop early so we can print the results.
   Timer::root().stop();
