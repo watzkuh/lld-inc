@@ -80,7 +80,6 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
   stderrOS.enable_colors(stderrOS.has_colors());
 
   config = make<Configuration>();
-  incrementalLinkFile = make<IncrementalLinkFile>();
   symtab = make<SymbolTable>();
   driver = make<LinkerDriver>();
 
@@ -1110,6 +1109,8 @@ Optional<std::string> getReproduceFile(const opt::InputArgList &args) {
 
 bool LinkerDriver::shouldAttemptIncrementalLink(
     ArrayRef<const char *> argsArr) {
+  incrementalLinkFile = make<IncrementalLinkFile>();
+
   std::vector<std::string> mArgs;
   for (auto arg : argsArr) {
     mArgs.push_back(arg);
@@ -1117,11 +1118,13 @@ bool LinkerDriver::shouldAttemptIncrementalLink(
   ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
       MemoryBuffer::getFile(IncrementalLinkFile::fileEnding);
   if (!ilkOrError) {
+    // Add the new arguments anyway
+    incrementalLinkFile->arguments = mArgs;
     return false;
   }
   yaml::Input yin(ilkOrError->get()->getBuffer());
   yin >> *incrementalLinkFile;
-  bool sameArgs = mArgs == incrementalLinkFile->arguments;
+  bool sameArgs = (mArgs == incrementalLinkFile->arguments);
   incrementalLinkFile->arguments = mArgs;
   ErrorOr<std::unique_ptr<MemoryBuffer>> outputOrError =
       MemoryBuffer::getFile(incrementalLinkFile->outputFile);
@@ -1698,6 +1701,16 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   config->incrementalLink =
       args.hasFlag(OPT_incrementallink, OPT_incrementallink_no, false);
 
+  if (config->incrementalLink) {
+    ScopedTimer t3(ilkInputTimer);
+    if (shouldAttemptIncrementalLink(argsArr)) {
+      outs() << "attempting incremental link\n";
+    } else {
+      outs() << "no incremental link\n";
+    }
+    t3.stop();
+  }
+
   // Create a list of input files. Files can be given as arguments
   // for /defaultlib option.
   for (auto *arg : args.filtered(OPT_INPUT, OPT_wholearchive_file))
@@ -1717,16 +1730,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   // Windows specific -- Create a resource file containing a manifest file.
   if (config->manifest == Configuration::Embed)
     addBuffer(createManifestRes(), false, false);
-
-  if (config->incrementalLink) {
-    ScopedTimer t3(ilkInputTimer);
-    if (shouldAttemptIncrementalLink(argsArr)) {
-      outs() << "attempting incremental link\n";
-    } else {
-      outs() << "no incremental link\n";
-    }
-    t3.stop();
-  }
 
   // Read all input files given via the command line.
   run();

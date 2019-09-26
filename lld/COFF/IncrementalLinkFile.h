@@ -17,11 +17,10 @@ struct IncrementalLinkFile {
 public:
   IncrementalLinkFile() = default;
   IncrementalLinkFile(std::vector<std::string> args,
-                      std::vector<std::string> obj,
                       std::map<std::string, uint64_t> fh, std::string of,
                       uint64_t oh)
-      : arguments((args)), objects((obj)),
-        fileHashes(std::move(fh)), outputFile(std::move(of)), outputHash(oh) {}
+      : arguments(std::move((args))), fileHashes(std::move(fh)), outputFile(std::move(of)),
+        outputHash(oh) {}
 
   std::vector<std::string> arguments;
   std::vector<std::string> objects;
@@ -87,8 +86,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
       for (auto &f : files) {
         fileHashes[f.name] = f.hashValue;
       }
-      return IncrementalLinkFile(arguments, objects, fileHashes, outputFile,
-                                 outputHash);
+      return IncrementalLinkFile(arguments, fileHashes, outputFile, outputHash);
     }
 
     std::vector<NormalizedFileMap> files;
