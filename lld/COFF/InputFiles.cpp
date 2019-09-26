@@ -185,12 +185,15 @@ void ObjFile::parse() {
   std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
 
   if (auto *obj = dyn_cast<COFFObjectFile>(bin.get())) {
-    u_int64_t hash = xxHash64(bin->getData());
-    std::string name = bin->getFileName();
-    if (incrementalLinkFile->fileHashes[name] != hash) {
-      outs() << name << " has changed\n";
-      incrementalLinkFile->fileHashes[name] = hash;
+    if (config->incrementalLink) {
+      u_int64_t hash = xxHash64(bin->getData());
+      std::string name = bin->getFileName();
+      if (incrementalLinkFile->fileHashes[name] != hash) {
+        outs() << name << " has changed\n";
+        incrementalLinkFile->fileHashes[name] = hash;
+      }
     }
+
     bin.release();
     coffObj.reset(obj);
   } else {

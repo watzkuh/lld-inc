@@ -163,6 +163,9 @@ defm highentropyva : B<"highentropyva",
 defm incremental : B<"incremental",
                      "Keep original import library if contents are unchanged",
                      "Overwrite import library even if contents are unchanged">;
+defm incrementallink : B<"incrementallink",
+                     "Incrementally update binary",
+                     "Rewrite binary from scratch">;
 defm integritycheck : B<"integritycheck",
                         "Set FORCE_INTEGRITY bit in PE header",
                         "No effect (default)">;

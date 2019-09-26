@@ -1843,8 +1843,10 @@ void Writer::writeBuildId() {
       reinterpret_cast<coff_file_header *>(buf);
   coffHeader->TimeDateStamp = timestamp;
 
-  incrementalLinkFile->outputFile = config->outputFile;
-  incrementalLinkFile->outputHash = xxHash64(outputFileData);
+  if (config->incrementalLink) {
+    incrementalLinkFile->outputFile = config->outputFile;
+    incrementalLinkFile->outputHash = xxHash64(outputFileData);
+  }
 }
 
 // Sort .pdata section contents according to PE/COFF spec 5.5.

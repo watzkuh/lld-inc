@@ -80,7 +80,6 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
   stderrOS.enable_colors(stderrOS.has_colors());
 
   config = make<Configuration>();
-  incrementalLinkFile = make<IncrementalLinkFile>();
   symtab = make<SymbolTable>();
   driver = make<LinkerDriver>();
 
@@ -1666,7 +1665,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     return false;
   };
 
-<<<<<<< HEAD
   // Create a list of input files. These can be given as OPT_INPUT options
   // and OPT_wholearchive_file options, and we also need to track OPT_start_lib
   // and OPT_end_lib.
@@ -1696,15 +1694,20 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
       break;
     }
   }
-=======
+  config->incrementalLink =
+      args.hasFlag(OPT_incrementallink, OPT_incrementallink_no, false);
+
   // Create a list of input files. Files can be given as arguments
   // for /defaultlib option.
   for (auto *arg : args.filtered(OPT_INPUT, OPT_wholearchive_file))
     if (Optional<StringRef> path = findFile(arg->getValue())) {
       enqueuePath(*path, isWholeArchive(*path));
-      incrementalLinkFile->objects.push_back(*path);
+      if (config->incrementalLink) {
+        // first occurrence of ilf, so let's just init it here (hackish)
+        incrementalLinkFile = make<IncrementalLinkFile>();
+        incrementalLinkFile->objects.push_back(*path);
+      }
     }
->>>>>>> Add a basic bookkeeping structure
 
   // Process files specified as /defaultlib. These should be enequeued after
   // other files, which is why they are in a separate loop.
@@ -1716,13 +1719,15 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (config->manifest == Configuration::Embed)
     addBuffer(createManifestRes(), false, false);
 
-  ScopedTimer t3(ilkInputTimer);
-  if (shouldAttemptIncrementalLink(argsArr)) {
-    outs() << "attempting incremental link\n";
-  } else {
-    outs() << "no incremental link\n";
+  if (config->incrementalLink) {
+    ScopedTimer t3(ilkInputTimer);
+    if (shouldAttemptIncrementalLink(argsArr)) {
+      outs() << "attempting incremental link\n";
+    } else {
+      outs() << "no incremental link\n";
+    }
+    t3.stop();
   }
-  t3.stop();
 
   // Read all input files given via the command line.
   run();
@@ -2080,14 +2085,17 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   // Write the result.
   writeResult();
 
-  ScopedTimer t2(ilkOutputTimer);
-  // Write bookkeeping file for incremental links
-  std::error_code code;
-  raw_fd_ostream out(IncrementalLinkFile::fileEnding, code);
-  llvm::yaml::Output yout(out);
-  yout << *incrementalLinkFile;
-  out.close();
-  t2.stop();
+  if (config->incrementalLink) {
+    ScopedTimer t2(ilkOutputTimer);
+    // Write bookkeeping file for incremental links
+    std::error_code code;
+    raw_fd_ostream out(IncrementalLinkFile::fileEnding, code);
+    llvm::yaml::Output yout(out);
+    yout << *incrementalLinkFile;
+    out.close();
+    t2.stop();
+  }
+
   // Stop early so we can print the results.
   Timer::root().stop();
   if (config->showTiming)

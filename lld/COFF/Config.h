@@ -228,6 +228,7 @@ struct Configuration {
   bool warnDebugInfoUnusable = true;
   bool warnLongSectionNames = true;
   bool incremental = true;
+  bool incrementalLink = false;
   bool integrityCheck = false;
   bool killAt = false;
   bool repro = false;
