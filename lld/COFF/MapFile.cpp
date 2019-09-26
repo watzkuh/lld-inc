@@ -28,7 +28,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "MapFile.h"
-#include "IncrementalLinkFile.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "Writer.h"
