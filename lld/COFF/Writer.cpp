@@ -9,6 +9,7 @@
 #include "Writer.h"
 #include "Config.h"
 #include "DLL.h"
+#include "IncrementalLinkFile.h"
 #include "InputFiles.h"
 #include "LLDMapFile.h"
 #include "MapFile.h"
@@ -300,6 +301,7 @@ private:
 } // anonymous namespace
 
 static Timer codeLayoutTimer("Code Layout", Timer::root());
+static Timer mapFileTimer("Create Map File", Timer::root());
 static Timer diskCommitTimer("Commit Output File", Timer::root());
 
 void lld::coff::writeResult() { Writer().run(); }
@@ -627,6 +629,7 @@ void Writer::run() {
   sortExceptionTable();
 
   t1.stop();
+  ScopedTimer t3(mapFileTimer);
 
   if (!config->pdbPath.empty() && config->debug) {
     assert(buildId);
@@ -635,8 +638,7 @@ void Writer::run() {
   writeBuildId();
 
   writeLLDMapFile(outputSections);
-  writeMapFile(outputSections);
-
+  t3.stop();
   if (errorCount())
     return;
 

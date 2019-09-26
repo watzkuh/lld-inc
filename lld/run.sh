@@ -4,6 +4,8 @@ if [ "$1" = "test" ]; then
 fi
 ninja lld || exit
 cd /home/kai/master/test || exit
-ninja clean
+if [ "$1" = "debug" ]; then
+   ninja debug
+fi
 ninja
 wine a.exe

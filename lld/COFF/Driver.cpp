@@ -59,6 +59,8 @@ namespace lld {
 namespace coff {
 
 static Timer inputFileTimer("Input File Reading", Timer::root());
+static Timer ilkOutputTimer("Ilk File output", Timer::root());
+static Timer ilkInputTimer("Ilk File input", Timer::root());
 
 Configuration *config;
 IncrementalLinkFile *incrementalLinkFile;
@@ -1105,6 +1107,25 @@ Optional<std::string> getReproduceFile(const opt::InputArgList &args) {
   return None;
 }
 
+bool LinkerDriver::shouldAttemptIncrementalLink(ArrayRef<const char *> argsArr,
+                                                opt::InputArgList *args) {
+  std::vector<std::string> mArgs;
+  for (auto arg : argsArr) {
+    mArgs.push_back(arg);
+  }
+
+  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
+      MemoryBuffer::getFile(IncrementalLinkFile::fileEnding);
+  if (!ilkOrError) {
+    return false;
+  }
+  yaml::Input yin(ilkOrError->get()->getBuffer());
+  yin >> *incrementalLinkFile;
+  bool sameArgs= mArgs == incrementalLinkFile->arguments;
+  incrementalLinkFile->arguments = mArgs;
+  return sameArgs;
+}
+
 void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   // Needed for LTO.
   InitializeAllTargetInfos();
@@ -1688,6 +1709,14 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (config->manifest == Configuration::Embed)
     addBuffer(createManifestRes(), false, false);
 
+  ScopedTimer t3(ilkInputTimer);
+  if (shouldAttemptIncrementalLink(argsArr, &args)) {
+    outs() << "attempting incremental link\n";
+  } else {
+    outs() << "no incremental link\n";
+  }
+  t3.stop();
+
   // Read all input files given via the command line.
   run();
 
@@ -1806,23 +1835,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (auto e = tryCreateFile(config->outputFile)) {
     error("cannot open output file " + config->outputFile + ": " + e.message());
     return;
-  }
-
-  std::vector<llvm::StringRef> mArgs;
-  for (auto arg : argsArr) {
-    mArgs.push_back(arg);
-  }
-  incrementalLinkFile->arguments = mArgs;
-
-  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError = MemoryBuffer::getFile(
-      config->outputFile + IncrementalLinkFile::fileEnding);
-  if (ilkOrError) {
-    yaml::Input yin(ilkOrError->get()->getBuffer());
-    IncrementalLinkFile previousLink;
-    yin >> previousLink;
-    if (previousLink.arguments == incrementalLinkFile->arguments) {
-      // Attempt an incremental link
-    }
   }
 
   if (shouldCreatePDB) {
@@ -1958,6 +1970,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   // Do LTO by compiling bitcode input files to a set of native COFF files then
   // link those files (unless -thinlto-index-only was given, in which case we
   // resolve symbols and write indices, but don't generate native code or link).
+  // Probably also hard with incremental link
   symtab->addCombinedLTOObjects();
 
   // If -thinlto-index-only is given, we should create only "index
@@ -2051,6 +2064,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   convertResources();
 
   // Identify identical COMDAT sections to merge them.
+  // Should probably not do that if it's an incremental link
   if (config->doICF) {
     findKeepUniqueSections();
     doICF(symtab->getChunks());
@@ -2059,13 +2073,14 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   // Write the result.
   writeResult();
 
+  ScopedTimer t2(ilkOutputTimer);
   // Write bookkeeping file for incremental links
   std::error_code code;
-  raw_fd_ostream out(config->outputFile + IncrementalLinkFile::fileEnding, code);
+  raw_fd_ostream out(IncrementalLinkFile::fileEnding, code);
   llvm::yaml::Output yout(out);
   yout << *incrementalLinkFile;
   out.close();
-
+  t2.stop();
   // Stop early so we can print the results.
   Timer::root().stop();
   if (config->showTiming)

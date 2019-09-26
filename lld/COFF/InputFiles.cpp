@@ -1,4 +1,4 @@
-//===- InputFiles.cpp -----------------------------------------------------===//
+  //===- InputFiles.cpp -----------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,6 +11,7 @@
 #include "Config.h"
 #include "DebugTypes.h"
 #include "Driver.h"
+#include "IncrementalLinkFile.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "lld/Common/DWARF.h"
@@ -34,6 +35,7 @@
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/xxhash.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cstring>
 #include <system_error>
@@ -183,6 +185,12 @@ void ObjFile::parse() {
   std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
 
   if (auto *obj = dyn_cast<COFFObjectFile>(bin.get())) {
+    u_int64_t hash = xxHash64(bin->getData());
+    std::string name = bin->getFileName();
+    if (incrementalLinkFile->fileHashes[name] != hash) {
+      outs() << name << " has changed\n";
+      incrementalLinkFile->fileHashes[name] = hash;
+    }
     bin.release();
     coffObj.reset(obj);
   } else {

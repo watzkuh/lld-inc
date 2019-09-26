@@ -28,6 +28,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MapFile.h"
+#include "IncrementalLinkFile.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "Writer.h"
@@ -36,6 +37,7 @@
 #include "lld/Common/Timer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include <unordered_map>
 
 using namespace llvm;
 using namespace llvm::object;
