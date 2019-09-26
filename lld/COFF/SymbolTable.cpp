@@ -34,6 +34,12 @@ SymbolTable *symtab;
 
 void SymbolTable::addFile(InputFile *file) {
   log("Reading " + toString(file));
+  if (config->incrementalLink) {
+    if (file->hasChanged()){
+      outs() << file->getName() << " has changed\n";
+    }
+  }
+
   file->parse();
 
   MachineTypes mt = file->getMachineType();

@@ -99,6 +99,10 @@ static bool ignoredSymbolName(StringRef name) {
 
 ArchiveFile::ArchiveFile(MemoryBufferRef m) : InputFile(ArchiveKind, m) {}
 
+bool ArchiveFile::hasChanged() {
+  return false;
+}
+
 void ArchiveFile::parse() {
   // Parse a MemoryBufferRef as an archive file.
   file = CHECK(Archive::create(mb), this);
@@ -180,20 +184,28 @@ void LazyObjFile::parse() {
   }
 }
 
+bool ObjFile::hasChanged() {
+  // Parse a memory buffer as a COFF file.
+  std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
+
+  if (dyn_cast<COFFObjectFile>(bin.get())) {
+    u_int64_t hash = xxHash64(bin->getData());
+    std::string name = bin->getFileName();
+    if (incrementalLinkFile->fileHashes[name] != hash) {
+      incrementalLinkFile->fileHashes[name] = hash;
+      return true;
+    }
+    return false;
+  } else {
+    fatal(toString(this) + " is not a COFF file");
+  }
+}
+
 void ObjFile::parse() {
   // Parse a memory buffer as a COFF file.
   std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
 
   if (auto *obj = dyn_cast<COFFObjectFile>(bin.get())) {
-    if (config->incrementalLink) {
-      u_int64_t hash = xxHash64(bin->getData());
-      std::string name = bin->getFileName();
-      if (incrementalLinkFile->fileHashes[name] != hash) {
-        outs() << name << " has changed\n";
-        incrementalLinkFile->fileHashes[name] = hash;
-      }
-    }
-
     bin.release();
     coffObj.reset(obj);
   } else {
@@ -846,6 +858,8 @@ static StringRef ltrim1(StringRef s, const char *chars) {
   return s;
 }
 
+bool ImportFile::hasChanged() { return false; }
+
 void ImportFile::parse() {
   const char *buf = mb.getBufferStart();
   const auto *hdr = reinterpret_cast<const coff_import_header *>(buf);
@@ -924,6 +938,11 @@ BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
 }
 
 BitcodeFile::~BitcodeFile() = default;
+
+bool BitcodeFile::hasChanged() {
+  fatal("Incremental linking not compatible with linking");
+  return false;
+}
 
 void BitcodeFile::parse() {
   std::vector<std::pair<Symbol *, bool>> comdat(obj->getComdatTable().size());
