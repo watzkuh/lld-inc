@@ -20,6 +20,7 @@ add_lld_library(lldCOFF
   MarkLive.cpp
   MinGW.cpp
   PDB.cpp
+  ReWriter.cpp
   SymbolTable.cpp
   Symbols.cpp
   Writer.cpp

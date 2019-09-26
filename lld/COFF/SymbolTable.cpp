@@ -11,6 +11,7 @@
 #include "Driver.h"
 #include "LTO.h"
 #include "PDB.h"
+#include "ReWriter.h"
 #include "Symbols.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
@@ -35,8 +36,14 @@ SymbolTable *symtab;
 void SymbolTable::addFile(InputFile *file) {
   log("Reading " + toString(file));
   if (config->incrementalLink) {
-    if (file->hasChanged()){
+    if (!file->hasChanged()) {
+      // Skip all the remaining stuff;
+    } else {
       outs() << file->getName() << " has changed\n";
+      bool success = rewrite();
+      if (success)
+        // either restart from scratch or we are done
+        outs() << "Ipsum\n";
     }
   }
 

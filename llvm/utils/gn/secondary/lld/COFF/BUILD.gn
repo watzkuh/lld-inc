@@ -40,6 +40,7 @@ static_library("COFF") {
     "MarkLive.cpp",
     "MinGW.cpp",
     "PDB.cpp",
+    "ReWriter.cpp",
     "SymbolTable.cpp",
     "Symbols.cpp",
     "Writer.cpp",
