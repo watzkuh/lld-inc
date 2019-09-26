@@ -80,6 +80,7 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
   stderrOS.enable_colors(stderrOS.has_colors());
 
   config = make<Configuration>();
+  incrementalLinkFile = make<IncrementalLinkFile>();
   symtab = make<SymbolTable>();
   driver = make<LinkerDriver>();
 
@@ -1703,8 +1704,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     if (Optional<StringRef> path = findFile(arg->getValue())) {
       enqueuePath(*path, isWholeArchive(*path));
       if (config->incrementalLink) {
-        // first occurrence of ilf, so let's just init it here (hackish)
-        incrementalLinkFile = make<IncrementalLinkFile>();
         incrementalLinkFile->objects.push_back(*path);
       }
     }
