@@ -67,8 +67,7 @@ private:
 class LinkerDriver {
 public:
   void link(llvm::ArrayRef<const char *> args);
-  static bool shouldAttemptIncrementalLink(ArrayRef<const char *> argsArr,
-                              llvm::opt::InputArgList* args);
+  static bool shouldAttemptIncrementalLink(ArrayRef<const char *> argsArr);
   // Used by the resolver to parse .drectve section contents.
   void parseDirectives(InputFile *file);
 

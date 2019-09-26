@@ -19,9 +19,12 @@ public:
   IncrementalLinkFile(std::vector<std::string> arguments,
                       std::vector<std::string> objects,
                       std::vector<std::string> fileNames,
-                      std::vector<uint64_t> fileHashes) {
-    this->arguments = arguments;
-    this->objects = objects;
+                      std::vector<uint64_t> fileHashes, std::string outputFile,
+                      uint64_t outputHash) {
+    this->arguments = std::move(arguments);
+    this->objects = std::move(objects);
+    this->outputFile = std::move(outputFile);
+    this->outputHash = outputHash;
     for (unsigned long i = 0; i < fileNames.size(); i++) {
       this->fileHashes[fileNames[i]] = fileHashes[i];
     }
@@ -29,6 +32,8 @@ public:
   std::vector<std::string> arguments;
   std::vector<std::string> objects;
   std::map<std::string, uint64_t> fileHashes;
+  std::string outputFile;
+  uint64_t outputHash;
   constexpr static const char *fileEnding = {".ilk.yaml"};
 };
 
@@ -48,6 +53,8 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     NormalizedIlf(IO &, IncrementalLinkFile &ilf) {
       arguments = ilf.arguments;
       objects = ilf.objects;
+      outputFile = ilf.outputFile;
+      outputHash = ilf.outputHash;
       for (auto &p : ilf.fileHashes) {
         fileNames.push_back(p.first);
         fileHashes.push_back(p.second);
@@ -55,14 +62,16 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     }
 
     IncrementalLinkFile denormalize(IO &) {
-      return IncrementalLinkFile(arguments, objects, fileNames,
-                                 fileHashes);
+      return IncrementalLinkFile(arguments, objects, fileNames, fileHashes,
+                                 outputFile, outputHash);
     }
     std::vector<std::string> arguments;
     std::vector<std::string> objects;
 
     std::vector<std::string> fileNames;
     std::vector<uint64_t> fileHashes;
+    std::string outputFile;
+    uint64_t outputHash;
   };
 
   static void mapping(IO &io, IncrementalLinkFile &ilf) {
@@ -71,6 +80,8 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     io.mapRequired("object-files", keys->objects);
     io.mapRequired("file-names", keys->fileNames);
     io.mapRequired("file-hashes", keys->fileHashes);
+    io.mapRequired("output-file", keys->outputFile);
+    io.mapRequired("output-hash", keys->outputHash);
   }
 };
 

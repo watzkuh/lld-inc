@@ -10,13 +10,13 @@
 #include "Config.h"
 #include "DebugTypes.h"
 #include "ICF.h"
+#include "IncrementalLinkFile.h"
 #include "InputFiles.h"
 #include "MarkLive.h"
 #include "MinGW.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "Writer.h"
-#include "IncrementalLinkFile.h"
 #include "lld/Common/Args.h"
 #include "lld/Common/Driver.h"
 #include "lld/Common/ErrorHandler.h"
@@ -48,6 +48,7 @@
 #include "llvm/ToolDrivers/llvm-lib/LibDriver.h"
 #include <algorithm>
 #include <future>
+#include <llvm/Support/xxhash.h>
 #include <memory>
 
 using namespace llvm;
@@ -1107,13 +1108,12 @@ Optional<std::string> getReproduceFile(const opt::InputArgList &args) {
   return None;
 }
 
-bool LinkerDriver::shouldAttemptIncrementalLink(ArrayRef<const char *> argsArr,
-                                                opt::InputArgList *args) {
+bool LinkerDriver::shouldAttemptIncrementalLink(
+    ArrayRef<const char *> argsArr) {
   std::vector<std::string> mArgs;
   for (auto arg : argsArr) {
     mArgs.push_back(arg);
   }
-
   ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
       MemoryBuffer::getFile(IncrementalLinkFile::fileEnding);
   if (!ilkOrError) {
@@ -1121,9 +1121,16 @@ bool LinkerDriver::shouldAttemptIncrementalLink(ArrayRef<const char *> argsArr,
   }
   yaml::Input yin(ilkOrError->get()->getBuffer());
   yin >> *incrementalLinkFile;
-  bool sameArgs= mArgs == incrementalLinkFile->arguments;
+  bool sameArgs = mArgs == incrementalLinkFile->arguments;
   incrementalLinkFile->arguments = mArgs;
-  return sameArgs;
+  ErrorOr<std::unique_ptr<MemoryBuffer>> outputOrError =
+      MemoryBuffer::getFile(incrementalLinkFile->outputFile);
+  if (!outputOrError) {
+    return false;
+  }
+  bool outputUntouched = xxHash64(outputOrError->get()->getBuffer()) ==
+                         incrementalLinkFile->outputHash;
+  return sameArgs && outputUntouched;
 }
 
 void LinkerDriver::link(ArrayRef<const char *> argsArr) {
@@ -1710,7 +1717,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     addBuffer(createManifestRes(), false, false);
 
   ScopedTimer t3(ilkInputTimer);
-  if (shouldAttemptIncrementalLink(argsArr, &args)) {
+  if (shouldAttemptIncrementalLink(argsArr)) {
     outs() << "attempting incremental link\n";
   } else {
     outs() << "no incremental link\n";
