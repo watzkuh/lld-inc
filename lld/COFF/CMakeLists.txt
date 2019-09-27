@@ -13,6 +13,7 @@ add_lld_library(lldCOFF
   Driver.cpp
   DriverUtils.cpp
   ICF.cpp
+  IncrementalLinkFile.cpp
   InputFiles.cpp
   LLDMapFile.cpp
   LTO.cpp

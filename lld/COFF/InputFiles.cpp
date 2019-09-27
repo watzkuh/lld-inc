@@ -191,8 +191,8 @@ bool ObjFile::hasChanged() {
   if (dyn_cast<COFFObjectFile>(bin.get())) {
     u_int64_t hash = xxHash64(bin->getData());
     std::string name = bin->getFileName();
-    if (incrementalLinkFile->fileHashes[name] != hash) {
-      incrementalLinkFile->fileHashes[name] = hash;
+    if (incrementalLinkFile->objFiles[name].hash != hash) {
+      incrementalLinkFile->objFiles[name].hash = hash;
       return true;
     }
     return false;

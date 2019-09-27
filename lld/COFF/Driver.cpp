@@ -48,7 +48,6 @@
 #include "llvm/ToolDrivers/llvm-lib/LibDriver.h"
 #include <algorithm>
 #include <future>
-#include <llvm/Support/xxhash.h>
 #include <memory>
 
 using namespace llvm;
@@ -1107,35 +1106,6 @@ Optional<std::string> getReproduceFile(const opt::InputArgList &args) {
   return None;
 }
 
-bool LinkerDriver::shouldAttemptIncrementalLink(
-    ArrayRef<const char *> argsArr) {
-  incrementalLinkFile = make<IncrementalLinkFile>();
-
-  std::vector<std::string> mArgs;
-  for (auto arg : argsArr) {
-    mArgs.push_back(arg);
-  }
-  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
-      MemoryBuffer::getFile(IncrementalLinkFile::fileEnding);
-  if (!ilkOrError) {
-    // Add the new arguments anyway
-    incrementalLinkFile->arguments = mArgs;
-    return false;
-  }
-  yaml::Input yin(ilkOrError->get()->getBuffer());
-  yin >> *incrementalLinkFile;
-  bool sameArgs = (mArgs == incrementalLinkFile->arguments);
-  incrementalLinkFile->arguments = mArgs;
-  ErrorOr<std::unique_ptr<MemoryBuffer>> outputOrError =
-      MemoryBuffer::getFile(incrementalLinkFile->outputFile);
-  if (!outputOrError) {
-    return false;
-  }
-  bool outputUntouched = xxHash64(outputOrError->get()->getBuffer()) ==
-                         incrementalLinkFile->outputHash;
-  return sameArgs && outputUntouched;
-}
-
 void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   // Needed for LTO.
   InitializeAllTargetInfos();
@@ -1703,7 +1673,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
 
   if (config->incrementalLink) {
     ScopedTimer t3(ilkInputTimer);
-    if (shouldAttemptIncrementalLink(argsArr)) {
+    if (lld::coff::initializeIlf(argsArr)) {
       outs() << "attempting incremental link\n";
     } else {
       outs() << "no incremental link\n";
@@ -1717,7 +1687,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     if (Optional<StringRef> path = findFile(arg->getValue())) {
       enqueuePath(*path, isWholeArchive(*path));
       if (config->incrementalLink) {
-        incrementalLinkFile->objects.push_back(*path);
+        incrementalLinkFile->input.push_back(*path);
       }
     }
 
