@@ -638,7 +638,9 @@ void Writer::run() {
   writeBuildId();
 
   writeLLDMapFile(outputSections);
-  writeSectionData(outputSections);
+
+  writeIlfSectionData(outputSections);
+
   t3.stop();
   if (errorCount())
     return;

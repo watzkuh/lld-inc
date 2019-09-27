@@ -39,7 +39,7 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr) {
   return incrementalLinkFile->rewritePossible;
 }
 
-void coff::writeSectionData(llvm::ArrayRef<OutputSection *> outputSections) {
+void coff::writeIlfSectionData(llvm::ArrayRef<OutputSection *> outputSections) {
   if (!config->incrementalLink)
     return;
   for (OutputSection *sec : outputSections) {
@@ -53,7 +53,8 @@ void coff::writeSectionData(llvm::ArrayRef<OutputSection *> outputSections) {
             incrementalLinkFile->objFiles[sc->file->getName()].sectionData;
         sec.name = ".data";
         sec.size = sc->getSize();
-        sec.address = sc->getRVA();
+        sec.virtualAddress = sc->getRVA();
+        sec.rawAddress = sc->getOutputSection()->getFileOff();
       }
     }
   }

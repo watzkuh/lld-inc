@@ -19,7 +19,8 @@ struct IncrementalLinkFile {
 
   struct SectionData {
     std::string name;
-    uint32_t address;
+    uint32_t virtualAddress;
+    uint32_t rawAddress;
     size_t size;
   };
 
@@ -50,7 +51,7 @@ public:
 extern IncrementalLinkFile *incrementalLinkFile;
 
 class OutputSection;
-void writeSectionData(llvm::ArrayRef<OutputSection *> outputSections);
+void writeIlfSectionData(llvm::ArrayRef<OutputSection *> outputSections);
 
 bool initializeIlf(ArrayRef<const char *> argsArr);
 
@@ -87,7 +88,8 @@ template <> struct yaml::MappingTraits<NormalizedFileMap> {
     io.mapRequired("name", file.name);
     io.mapRequired("hash", file.hashValue);
     io.mapOptional("section-name", file.sectionData.name);
-    io.mapOptional("address", file.sectionData.address);
+    io.mapOptional("virtual-address", file.sectionData.virtualAddress);
+    io.mapOptional("raw-address", file.sectionData.rawAddress);
     io.mapOptional("size", file.sectionData.size);
   }
 };
