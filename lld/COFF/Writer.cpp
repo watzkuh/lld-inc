@@ -1790,6 +1790,10 @@ void Writer::writeSections() {
     // ADD instructions).
     if (sec->header.Characteristics & IMAGE_SCN_CNT_CODE)
       memset(secBuf, 0xCC, sec->getRawSize());
+    if (config->incrementalLink && sec->name == ".data") {
+      incrementalLinkFile->outputDataSectionRaw = sec->getFileOff();
+      incrementalLinkFile->outputDataSectionRVA = sec->getRVA();
+    }
     parallelForEach(sec->chunks, [&](Chunk *c) {
       c->writeTo(secBuf + c->getRVA() - sec->getRVA());
     });

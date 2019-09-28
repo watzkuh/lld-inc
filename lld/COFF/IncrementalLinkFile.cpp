@@ -54,7 +54,6 @@ void coff::writeIlfSectionData(llvm::ArrayRef<OutputSection *> outputSections) {
         sec.name = ".data";
         sec.size = sc->getSize();
         sec.virtualAddress = sc->getRVA();
-        sec.rawAddress = sc->getOutputSection()->getFileOff();
       }
     }
   }

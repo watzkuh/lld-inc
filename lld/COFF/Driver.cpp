@@ -14,6 +14,7 @@
 #include "InputFiles.h"
 #include "MarkLive.h"
 #include "MinGW.h"
+#include "ReWriter.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "Writer.h"
@@ -59,8 +60,8 @@ namespace lld {
 namespace coff {
 
 static Timer inputFileTimer("Input File Reading", Timer::root());
-static Timer ilkOutputTimer("Ilk File output", Timer::root());
-static Timer ilkInputTimer("Ilk File input", Timer::root());
+static Timer ilkOutputTimer("Ilk File Output", Timer::root());
+static Timer ilkInputTimer("Ilk File Input", Timer::root());
 
 Configuration *config;
 IncrementalLinkFile *incrementalLinkFile;
@@ -1674,9 +1675,9 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (config->incrementalLink) {
     ScopedTimer t3(ilkInputTimer);
     if (lld::coff::initializeIlf(argsArr)) {
-      outs() << "attempting incremental link\n";
+      outs() << "Attempting incremental link\n";
     } else {
-      outs() << "no incremental link\n";
+      outs() << "No incremental link\n";
     }
     t3.stop();
   }
@@ -1706,6 +1707,28 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
 
   if (errorCount())
     return;
+
+  if (config->incrementalLink && incrementalLinkFile->rewritePossible) {
+    rewriteResult();
+
+    //TODO: make writing part of IncrementalLinkFile
+    if (config->incrementalLink) {
+      ScopedTimer t2(ilkOutputTimer);
+      // Write bookkeeping file for incremental links
+      std::error_code code;
+      raw_fd_ostream out(IncrementalLinkFile::fileEnding, code);
+      llvm::yaml::Output yout(out);
+      yout << *incrementalLinkFile;
+      out.close();
+      t2.stop();
+    }
+
+    // Stop early so we can print the results.
+    Timer::root().stop();
+    if (config->showTiming)
+      Timer::root().print();
+    exit(0);
+  }
 
   // We should have inferred a machine type by now from the input files, but if
   // not we assume x64.

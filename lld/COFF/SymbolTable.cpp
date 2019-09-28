@@ -9,6 +9,7 @@
 #include "SymbolTable.h"
 #include "Config.h"
 #include "Driver.h"
+#include "IncrementalLinkFile.h"
 #include "LTO.h"
 #include "PDB.h"
 #include "ReWriter.h"
@@ -35,16 +36,16 @@ SymbolTable *symtab;
 
 void SymbolTable::addFile(InputFile *file) {
   log("Reading " + toString(file));
-  if (config->incrementalLink) {
+  if (config->incrementalLink && incrementalLinkFile->rewritePossible) {
     if (!file->hasChanged()) {
-      // Skip all the remaining stuff;
+      enqueueTask([=]() { doNothing(); });
+      return;
     } else {
       outs() << file->getName() << " has changed\n";
-      bool success = rewrite();
-      if (success)
-        // either restart from scratch or we are done
-        outs() << "Ipsum\n";
+      file->parse();
+      enqueueTask([=] { rewriteDataSection(file); });
     }
+    return;
   }
 
   file->parse();
