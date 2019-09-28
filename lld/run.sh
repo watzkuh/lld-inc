@@ -1,9 +1,10 @@
-cd /home/kai/master/llvm-project/out || exit
+set -e
+cd /home/kai/master/llvm-project/out
 if [ "$1" = "test" ]; then
    ninja check-lld
 fi
-ninja lld || exit
-cd /home/kai/master/test || exit
+ninja lld
+cd /home/kai/master/test
 if [ "$1" = "debug" ]; then
    ninja debug
 fi
