@@ -77,8 +77,7 @@ class InMemoryBuffer : public FileOutputBuffer {
 public:
   InMemoryBuffer(StringRef Path, MemoryBlock Buf, std::size_t BufSize,
                  unsigned Mode)
-      : FileOutputBuffer(Path), Buffer(Buf), BufferSize(BufSize),
-        Mode(Mode) {}
+      : FileOutputBuffer(Path), Buffer(Buf), BufferSize(BufSize), Mode(Mode) {}
 
   uint8_t *getBufferStart() const override { return (uint8_t *)Buffer.base(); }
 
@@ -125,25 +124,30 @@ createInMemoryBuffer(StringRef Path, size_t Size, unsigned Mode) {
 }
 
 static Expected<std::unique_ptr<FileOutputBuffer>>
-createOnDiskBuffer(StringRef Path, size_t Size, unsigned Mode) {
+createOnDiskBuffer(StringRef Path, size_t Size, bool InitExisting,
+                   unsigned Mode) {
   Expected<fs::TempFile> FileOrErr =
       fs::TempFile::create(Path + ".tmp%%%%%%%", Mode);
   if (!FileOrErr)
     return FileOrErr.takeError();
   fs::TempFile File = std::move(*FileOrErr);
 
+  if (InitExisting) {
+    if (auto EC = sys::fs::copy_file(Path, File.FD))
+      return errorCodeToError(EC);
+  } else {
 #ifndef _WIN32
-  // On Windows, CreateFileMapping (the mmap function on Windows)
-  // automatically extends the underlying file. We don't need to
-  // extend the file beforehand. _chsize (ftruncate on Windows) is
-  // pretty slow just like it writes specified amount of bytes,
-  // so we should avoid calling that function.
-  if (auto EC = fs::resize_file(File.FD, Size)) {
-    consumeError(File.discard());
-    return errorCodeToError(EC);
-  }
+    // On Windows, CreateFileMapping (the mmap function on Windows)
+    // automatically extends the underlying file. We don't need to
+    // extend the file beforehand. _chsize (ftruncate on Windows) is
+    // pretty slow just like it writes specified amount of bytes,
+    // so we should avoid calling that function.
+    if (auto EC = fs::resize_file(File.FD, Size)) {
+      consumeError(File.discard());
+      return errorCodeToError(EC);
+    }
 #endif
-
+  }
   // Mmap it.
   std::error_code EC;
   auto MappedFile = std::make_unique<fs::mapped_file_region>(
@@ -158,7 +162,7 @@ createOnDiskBuffer(StringRef Path, size_t Size, unsigned Mode) {
   }
 
   return std::make_unique<OnDiskBuffer>(Path, std::move(File),
-                                         std::move(MappedFile));
+                                        std::move(MappedFile));
 }
 
 // Create an instance of FileOutputBuffer.
@@ -169,11 +173,20 @@ FileOutputBuffer::create(StringRef Path, size_t Size, unsigned Flags) {
     return createInMemoryBuffer("-", Size, /*Mode=*/0);
 
   unsigned Mode = fs::all_read | fs::all_write;
-  if (Flags & F_executable)
+  if (Flags == F_executable)
     Mode |= fs::all_exe;
 
   fs::file_status Stat;
   fs::status(Path, Stat);
+
+  if ((Flags == F_modify) && Size == size_t(-1)) {
+    if (Stat.type() == fs::file_type::regular_file)
+      Size = Stat.getSize();
+    else if (Stat.type() == fs::file_type::file_not_found)
+      return errorCodeToError(errc::no_such_file_or_directory);
+    else
+      return errorCodeToError(errc::invalid_argument);
+  }
 
   // Usually, we want to create OnDiskBuffer to create a temporary file in
   // the same directory as the destination file and atomically replaces it
@@ -189,10 +202,10 @@ FileOutputBuffer::create(StringRef Path, size_t Size, unsigned Flags) {
   case fs::file_type::regular_file:
   case fs::file_type::file_not_found:
   case fs::file_type::status_error:
-    if (Flags & F_no_mmap)
+    if (Flags == F_no_mmap)
       return createInMemoryBuffer(Path, Size, Mode);
     else
-      return createOnDiskBuffer(Path, Size, Mode);
+      return createOnDiskBuffer(Path, Size, (Flags == F_modify), Mode);
   default:
     return createInMemoryBuffer(Path, Size, Mode);
   }

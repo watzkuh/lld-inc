@@ -38,6 +38,11 @@ public:
     F_no_mmap = 2,
   };
 
+    /// the contents of the new file are initialized from the file that exists
+    /// at the location (if present).  This allows in-place modification of an
+    /// existing file.
+    F_modify = 3
+  };
   /// Factory method to create an OutputBuffer object which manages a read/write
   /// buffer of the specified size. When committed, the buffer will be written
   /// to the file at the specified path.
