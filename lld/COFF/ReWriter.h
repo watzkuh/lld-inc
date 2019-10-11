@@ -9,7 +9,7 @@ using namespace llvm;
 namespace lld {
 namespace coff {
 
-void rewriteDataSection(InputFile *file);
+void rewriteDataSection(ObjFile *file);
 void doNothing();
 
 static std::list<std::function<void()>> rewriteQueue;

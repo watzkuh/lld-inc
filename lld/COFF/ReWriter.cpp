@@ -1,5 +1,10 @@
+
 #include "ReWriter.h"
+#include "Chunks.h"
 #include "IncrementalLinkFile.h"
+#include "InputFiles.h"
+#include "SymbolTable.h"
+#include "llvm/Object/COFF.h"
 #include <lld/Common/ErrorHandler.h>
 #include <lld/Common/Timer.h>
 #include <llvm/Support/Error.h>
@@ -13,16 +18,22 @@ using namespace lld;
 static Timer patchTimer("Binary Patching", Timer::root());
 std::unique_ptr<FileOutputBuffer> binary;
 
-void coff::rewriteDataSection(InputFile *file) {
+void coff::rewriteDataSection(ObjFile *file) {
   outs() << "Rewriting .data section for file " << file->getName() << "\n";
   auto &secData = incrementalLinkFile->objFiles[file->getName()].sectionData;
-  auto start = incrementalLinkFile->outputDataSectionRaw +
+  auto offset = incrementalLinkFile->outputDataSectionRaw +
                secData.virtualAddress -
                incrementalLinkFile->outputDataSectionRVA;
-  // TODO: Actual rewrite is just dummy data at the moment
-  for (uint64_t i = start; i < start + secData.size - 1; i++) {
-    binary->getBufferStart()[i] = '!';
+  for (Chunk *c : file->getChunks()) {
+    auto *sc = dyn_cast<SectionChunk>(c);
+    if (sc->getSectionName() == ".data") {
+      auto a = sc->getContents();
+      for (uint64_t i = 0; i < secData.size - 1; i++) {
+        binary->getBufferStart()[i + offset] = a[i];
+      }
+    }
   }
+
   outs() << "Patched " << secData.size << " bytes \n";
 }
 

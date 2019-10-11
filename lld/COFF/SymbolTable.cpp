@@ -43,7 +43,9 @@ void SymbolTable::addFile(InputFile *file) {
     } else {
       outs() << file->getName() << " has changed\n";
       file->parse();
-      enqueueTask([=] { rewriteDataSection(file); });
+      if (auto *f = dyn_cast<ObjFile>(file)) {
+        enqueueTask([=] { rewriteDataSection(f); });
+      }
     }
     return;
   }

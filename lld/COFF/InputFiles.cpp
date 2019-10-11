@@ -99,9 +99,7 @@ static bool ignoredSymbolName(StringRef name) {
 
 ArchiveFile::ArchiveFile(MemoryBufferRef m) : InputFile(ArchiveKind, m) {}
 
-bool ArchiveFile::hasChanged() {
-  return false;
-}
+bool ArchiveFile::hasChanged() { return false; }
 
 void ArchiveFile::parse() {
   // Parse a MemoryBufferRef as an archive file.
@@ -185,7 +183,8 @@ void LazyObjFile::parse() {
 }
 
 bool ObjFile::hasChanged() {
-  // Parse a memory buffer as a COFF file.
+  // TODO: Maybe use timestamp (file system or read from COFF header for better
+  // performance)
   std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
 
   if (dyn_cast<COFFObjectFile>(bin.get())) {
@@ -206,6 +205,10 @@ void ObjFile::parse() {
   std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
 
   if (auto *obj = dyn_cast<COFFObjectFile>(bin.get())) {
+    if (config->incrementalLink) {
+      incrementalLinkFile->objFiles[bin->getFileName()].hash =
+          xxHash64(bin->getData());
+    }
     bin.release();
     coffObj.reset(obj);
   } else {
