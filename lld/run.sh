@@ -1,5 +1,5 @@
 set -e
-cd /home/kai/master/llvm-project/out
+cd /home/kai/master/llvm-project/out/release
 if [ "$1" = "test" ]; then
    ninja check-lld
 fi

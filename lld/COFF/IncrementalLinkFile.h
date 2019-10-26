@@ -46,6 +46,7 @@ public:
   uint32_t outputDataSectionRVA;
   bool rewritePossible = false;
 
+  void writeToFile();
   constexpr static const char *fileEnding = {".ilk.yaml"};
 };
 

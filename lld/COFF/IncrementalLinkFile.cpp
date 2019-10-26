@@ -4,7 +4,6 @@
 #include "Writer.h"
 #include <llvm/Support/xxhash.h>
 
-
 using namespace lld;
 using namespace lld::coff;
 
@@ -15,8 +14,10 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr) {
   for (auto arg : argsArr) {
     mArgs.push_back(arg);
   }
-  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
-      MemoryBuffer::getFile(IncrementalLinkFile::fileEnding);
+  incrementalLinkFile->outputFile = config->outputFile;
+  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError = MemoryBuffer::getFile(
+        incrementalLinkFile->outputFile + incrementalLinkFile->fileEnding
+      );
   if (!ilkOrError) {
     // Add the new arguments anyway
     incrementalLinkFile->arguments = mArgs;
@@ -33,9 +34,9 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr) {
     incrementalLinkFile->rewritePossible = false;
     return incrementalLinkFile->rewritePossible;
   }
-  bool outputUntouched = xxHash64(outputOrError->get()->getBuffer()) ==
-                         incrementalLinkFile->outputHash;
-  incrementalLinkFile->rewritePossible = sameArgs && outputUntouched;
+  // bool outputUntouched = xxHash64(outputOrError->get()->getBuffer()) ==
+  //                       incrementalLinkFile->outputHash;
+  incrementalLinkFile->rewritePossible = sameArgs;
   return incrementalLinkFile->rewritePossible;
 }
 
@@ -57,4 +58,12 @@ void coff::writeIlfSectionData(llvm::ArrayRef<OutputSection *> outputSections) {
       }
     }
   }
+}
+
+void IncrementalLinkFile::writeToFile() {
+  std::error_code code;
+  raw_fd_ostream out(incrementalLinkFile->outputFile + incrementalLinkFile->fileEnding, code);
+  llvm::yaml::Output yout(out);
+  yout << *incrementalLinkFile;
+  out.close();
 }

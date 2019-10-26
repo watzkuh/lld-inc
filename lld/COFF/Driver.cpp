@@ -1711,15 +1711,10 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (config->incrementalLink && incrementalLinkFile->rewritePossible) {
     rewriteResult();
 
-    //TODO: make writing part of IncrementalLinkFile
     if (config->incrementalLink) {
       ScopedTimer t2(ilkOutputTimer);
       // Write bookkeeping file for incremental links
-      std::error_code code;
-      raw_fd_ostream out(IncrementalLinkFile::fileEnding, code);
-      llvm::yaml::Output yout(out);
-      yout << *incrementalLinkFile;
-      out.close();
+      incrementalLinkFile->writeToFile();
       t2.stop();
     }
 
@@ -2083,11 +2078,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (config->incrementalLink) {
     ScopedTimer t2(ilkOutputTimer);
     // Write bookkeeping file for incremental links
-    std::error_code code;
-    raw_fd_ostream out(IncrementalLinkFile::fileEnding, code);
-    llvm::yaml::Output yout(out);
-    yout << *incrementalLinkFile;
-    out.close();
+    incrementalLinkFile->writeToFile();
     t2.stop();
   }
 
