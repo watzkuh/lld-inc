@@ -22,15 +22,13 @@ void coff::rewriteDataSection(ObjFile *file) {
   outs() << "Rewriting .data section for file " << file->getName() << "\n";
   auto &secData = incrementalLinkFile->objFiles[file->getName()].sectionData;
   auto offset = incrementalLinkFile->outputDataSectionRaw +
-               secData.virtualAddress -
-               incrementalLinkFile->outputDataSectionRVA;
+                secData.virtualAddress -
+                incrementalLinkFile->outputDataSectionRVA;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
     if (sc->getSectionName() == ".data") {
       auto a = sc->getContents();
-      for (uint64_t i = 0; i < secData.size - 1; i++) {
-        binary->getBufferStart()[i + offset] = a[i];
-      }
+      memcpy(binary->getBufferStart() + offset, a.data(), secData.size - 1);
     }
   }
 
