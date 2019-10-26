@@ -46,8 +46,8 @@ public:
   uint32_t outputDataSectionRVA;
   bool rewritePossible = false;
 
-  void writeToFile();
-  constexpr static const char *fileEnding = {".ilk.yaml"};
+  static void writeToFile();
+  static std::string getFileName();
 };
 
 extern IncrementalLinkFile *incrementalLinkFile;

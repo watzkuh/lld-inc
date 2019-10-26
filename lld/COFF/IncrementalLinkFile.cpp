@@ -15,9 +15,8 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr) {
     mArgs.push_back(arg);
   }
   incrementalLinkFile->outputFile = config->outputFile;
-  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError = MemoryBuffer::getFile(
-        incrementalLinkFile->outputFile + incrementalLinkFile->fileEnding
-      );
+  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
+      MemoryBuffer::getFile(IncrementalLinkFile::getFileName());
   if (!ilkOrError) {
     // Add the new arguments anyway
     incrementalLinkFile->arguments = mArgs;
@@ -59,10 +58,13 @@ void coff::writeIlfSectionData(llvm::ArrayRef<OutputSection *> outputSections) {
     }
   }
 }
+std::string IncrementalLinkFile::getFileName() {
+  return incrementalLinkFile->outputFile + ".ilk.yaml";
+}
 
 void IncrementalLinkFile::writeToFile() {
   std::error_code code;
-  raw_fd_ostream out(incrementalLinkFile->outputFile + incrementalLinkFile->fileEnding, code);
+  raw_fd_ostream out(IncrementalLinkFile::getFileName(), code);
   llvm::yaml::Output yout(out);
   yout << *incrementalLinkFile;
   out.close();
