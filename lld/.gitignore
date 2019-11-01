@@ -25,9 +25,10 @@ docs/_build
 
 .idea
 CMakeFiles
-COFF/.idea
-COFF/cmake-build-debug
-ELF/CMakeFiles
 cmake-build-debug
+ELF/CMakeFiles
 test/CMakeCache.txt
 test/CMakeFiles
+llvm/cmake-build-debug/
+llvm/include/llvm/cmake-build-debug/
+out/
