@@ -33,9 +33,9 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr) {
     incrementalLinkFile->rewritePossible = false;
     return incrementalLinkFile->rewritePossible;
   }
-  // bool outputUntouched = xxHash64(outputOrError->get()->getBuffer()) ==
-  //                       incrementalLinkFile->outputHash;
-  incrementalLinkFile->rewritePossible = sameArgs;
+  bool outputUntouched = xxHash64(outputOrError->get()->getBuffer()) ==
+                         incrementalLinkFile->outputHash;
+  incrementalLinkFile->rewritePossible = sameArgs && outputUntouched;
   return incrementalLinkFile->rewritePossible;
 }
 

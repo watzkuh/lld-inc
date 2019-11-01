@@ -3,8 +3,6 @@
 #include "Chunks.h"
 #include "IncrementalLinkFile.h"
 #include "InputFiles.h"
-#include "SymbolTable.h"
-#include "llvm/Object/COFF.h"
 #include <lld/Common/ErrorHandler.h>
 #include <lld/Common/Timer.h>
 #include <llvm/Support/Error.h>
