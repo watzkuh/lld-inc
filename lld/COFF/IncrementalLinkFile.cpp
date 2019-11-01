@@ -62,7 +62,7 @@ std::string IncrementalLinkFile::getFileName() {
   return incrementalLinkFile->outputFile + ".ilk.yaml";
 }
 
-void IncrementalLinkFile::writeToFile() {
+void IncrementalLinkFile::writeToDisk() {
   std::error_code code;
   raw_fd_ostream out(IncrementalLinkFile::getFileName(), code);
   llvm::yaml::Output yout(out);

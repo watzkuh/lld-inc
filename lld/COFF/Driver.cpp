@@ -1714,7 +1714,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     if (config->incrementalLink) {
       ScopedTimer t2(ilkOutputTimer);
       // Write bookkeeping file for incremental links
-      incrementalLinkFile->writeToFile();
+      incrementalLinkFile->writeToDisk();
       t2.stop();
     }
 
@@ -2078,7 +2078,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (config->incrementalLink) {
     ScopedTimer t2(ilkOutputTimer);
     // Write bookkeeping file for incremental links
-    incrementalLinkFile->writeToFile();
+    incrementalLinkFile->writeToDisk();
     t2.stop();
   }
 

@@ -46,7 +46,7 @@ public:
   uint32_t outputDataSectionRVA;
   bool rewritePossible = false;
 
-  static void writeToFile();
+  static void writeToDisk();
   static std::string getFileName();
 };
 
