@@ -1,5 +1,6 @@
 
 #include "IncrementalLinkFile.h"
+#include "Driver.h"
 #include "Symbols.h"
 #include "Writer.h"
 #include <llvm/Support/xxhash.h>
@@ -7,7 +8,8 @@
 using namespace lld;
 using namespace lld::coff;
 
-bool coff::initializeIlf(ArrayRef<char const *> argsArr) {
+bool coff::initializeIlf(ArrayRef<char const *> argsArr,
+                         std::string possibleOutput) {
   incrementalLinkFile = make<IncrementalLinkFile>();
 
   std::vector<std::string> mArgs;
@@ -15,6 +17,8 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr) {
     mArgs.push_back(arg);
   }
   incrementalLinkFile->outputFile = config->outputFile;
+  if (incrementalLinkFile->outputFile.empty())
+    incrementalLinkFile->outputFile = std::move(possibleOutput);
   ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
       MemoryBuffer::getFile(IncrementalLinkFile::getFileName());
   if (!ilkOrError) {
@@ -58,6 +62,7 @@ void coff::writeIlfSectionData(llvm::ArrayRef<OutputSection *> outputSections) {
     }
   }
 }
+
 std::string IncrementalLinkFile::getFileName() {
   return incrementalLinkFile->outputFile + ".ilk.yaml";
 }

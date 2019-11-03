@@ -55,7 +55,7 @@ extern IncrementalLinkFile *incrementalLinkFile;
 class OutputSection;
 void writeIlfSectionData(llvm::ArrayRef<OutputSection *> outputSections);
 
-bool initializeIlf(ArrayRef<const char *> argsArr);
+bool initializeIlf(ArrayRef<const char *> argsArr, std::string possibleOutput);
 
 } // namespace coff
 } // namespace lld

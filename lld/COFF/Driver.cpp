@@ -1674,7 +1674,9 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
 
   if (config->incrementalLink) {
     ScopedTimer t3(ilkInputTimer);
-    if (lld::coff::initializeIlf(argsArr)) {
+    auto possibleOutput =
+        getOutputPath((*args.filtered(OPT_INPUT).begin())->getValue());
+    if (lld::coff::initializeIlf(argsArr, possibleOutput)) {
       outs() << "Attempting incremental link\n";
     } else {
       outs() << "No incremental link\n";
