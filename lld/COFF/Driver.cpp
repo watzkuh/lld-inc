@@ -1713,12 +1713,10 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (config->incrementalLink && incrementalLinkFile->rewritePossible) {
     rewriteResult();
 
-    if (config->incrementalLink) {
-      ScopedTimer t2(ilkOutputTimer);
-      // Write bookkeeping file for incremental links
-      incrementalLinkFile->writeToDisk();
-      t2.stop();
-    }
+    ScopedTimer t2(ilkOutputTimer);
+    // Write bookkeeping file for incremental links
+    incrementalLinkFile->writeToDisk();
+    t2.stop();
 
     // Stop early so we can print the results.
     Timer::root().stop();
