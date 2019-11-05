@@ -3,6 +3,7 @@
 #include "Chunks.h"
 #include "IncrementalLinkFile.h"
 #include "InputFiles.h"
+#include "Writer.h"
 #include <lld/Common/ErrorHandler.h>
 #include <lld/Common/Timer.h>
 #include <llvm/Support/Error.h>
@@ -25,8 +26,12 @@ void coff::rewriteDataSection(ObjFile *file) {
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
     if (sc->getSectionName() == ".data") {
-      auto a = sc->getContents();
-      memcpy(binary->getBufferStart() + offset, a.data(), secData.size - 1);
+      auto contents = sc->getContents();
+      int sizeDiff = secData.size != contents.size();
+      if (sizeDiff) {
+        outs() << "New data section is not the same size \n";
+      }
+      memcpy(binary->getBufferStart() + offset, contents.data(), secData.size);
     }
   }
 
