@@ -9,6 +9,8 @@ using namespace llvm;
 namespace lld {
 namespace coff {
 
+void rewriteFile(ObjFile *file);
+void rewriteTextSection(ObjFile *file);
 void rewriteDataSection(ObjFile *file);
 void doNothing();
 

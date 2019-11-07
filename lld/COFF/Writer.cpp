@@ -639,7 +639,7 @@ void Writer::run() {
 
   writeLLDMapFile(outputSections);
 
-  writeIlfSectionData(outputSections);
+  writeIlfSections(outputSections);
 
   t3.stop();
   if (errorCount())
@@ -1781,7 +1781,6 @@ void Writer::writeSections() {
   // Record the number of sections to apply section index relocations
   // against absolute symbols. See applySecIdx in Chunks.cpp..
   DefinedAbsolute::numOutputSections = outputSections.size();
-
   uint8_t *buf = buffer->getBufferStart();
   for (OutputSection *sec : outputSections) {
     uint8_t *secBuf = buf + sec->getFileOff();
@@ -1790,10 +1789,6 @@ void Writer::writeSections() {
     // ADD instructions).
     if (sec->header.Characteristics & IMAGE_SCN_CNT_CODE)
       memset(secBuf, 0xCC, sec->getRawSize());
-    if (config->incrementalLink && sec->name == ".data") {
-      incrementalLinkFile->outputDataSectionRaw = sec->getFileOff();
-      incrementalLinkFile->outputDataSectionRVA = sec->getRVA();
-    }
     parallelForEach(sec->chunks, [&](Chunk *c) {
       c->writeTo(secBuf + c->getRVA() - sec->getRVA());
     });

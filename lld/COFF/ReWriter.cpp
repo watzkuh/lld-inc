@@ -17,12 +17,22 @@ using namespace lld;
 static Timer patchTimer("Binary Patching", Timer::root());
 std::unique_ptr<FileOutputBuffer> binary;
 
+void coff::rewriteFile(coff::ObjFile *file) {
+  rewriteTextSection(file);
+  rewriteDataSection(file);
+}
+
+void coff::rewriteTextSection(ObjFile *file) {
+  outs() << "Rewriting .text section for file " << file->getName() << "\n";
+}
+
 void coff::rewriteDataSection(ObjFile *file) {
   outs() << "Rewriting .data section for file " << file->getName() << "\n";
-  auto &secData = incrementalLinkFile->objFiles[file->getName()].sectionData;
-  auto offset = incrementalLinkFile->outputDataSectionRaw +
-                secData.virtualAddress -
-                incrementalLinkFile->outputDataSectionRVA;
+  auto &secData =
+      incrementalLinkFile->objFiles[file->getName()].sections[".data"];
+  auto offset = incrementalLinkFile->outputDataSectionRaw -
+                incrementalLinkFile->outputDataSectionRVA +
+                secData.virtualAddress;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
     if (sc->getSectionName() == ".data") {
