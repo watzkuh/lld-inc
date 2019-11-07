@@ -23,7 +23,6 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
   ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
       MemoryBuffer::getFile(IncrementalLinkFile::getFileName());
   if (!ilkOrError) {
-    error("Error reading in incremental link file");
     // Add the new arguments anyway
     incrementalLinkFile->arguments = mArgs;
     incrementalLinkFile->rewritePossible = false;
