@@ -12,5 +12,5 @@ cd /home/kai/master/test
 if [ "$1" = "debug" ]; then
   ninja debug
 fi
-ninja
-wine a.exe
+#ninja
+#wine a.exe

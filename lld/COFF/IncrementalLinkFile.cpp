@@ -84,7 +84,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
         // output file can consist of n OutputChunks. However, they seem to
         // always be directly after each other, so storing the lowest address
         // and the sum of the sizes could work
-        if (sec.virtualAddress < sc->getRVA())
+        if (sec.virtualAddress == 0 || sec.virtualAddress > sc->getRVA())
           sec.virtualAddress = sc->getRVA();
         sec.size += sc->getSize();
       }
