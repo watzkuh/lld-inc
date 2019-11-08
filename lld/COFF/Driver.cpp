@@ -1679,6 +1679,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     if (lld::coff::initializeIlf(argsArr, possibleOutput)) {
       outs() << "Attempting incremental link\n";
     } else {
+      incrementalLinkFile->objFiles.clear();
       outs() << "No incremental link\n";
     }
     t3.stop();
