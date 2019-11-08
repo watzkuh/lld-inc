@@ -28,24 +28,21 @@ void coff::rewriteTextSection(ObjFile *file) {
 
 void coff::rewriteDataSection(ObjFile *file) {
   outs() << "Rewriting .data section for file " << file->getName() << "\n";
-  auto &secData =
+  auto &secInfo =
       incrementalLinkFile->objFiles[file->getName()].sections[".data"];
-  auto offset = incrementalLinkFile->outputDataSectionRaw -
-                incrementalLinkFile->outputDataSectionRVA +
-                secData.virtualAddress;
+  auto offset = incrementalLinkFile->outputDataSectionRaw +
+                incrementalLinkFile->outputDataSectionRVA -
+                secInfo.virtualAddress;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
     if (sc->getSectionName() == ".data") {
-      auto contents = sc->getContents();
-      int sizeDiff = secData.size != contents.size();
-      if (sizeDiff) {
+      if (secInfo.size != sc->getSize()) {
         outs() << "New data section is not the same size \n";
       }
-      memcpy(binary->getBufferStart() + offset, contents.data(), secData.size);
+      c->writeTo(binary->getBufferStart() + offset);
     }
   }
-
-  outs() << "Patched " << secData.size << " bytes \n";
+  outs() << "Patched " << secInfo.size << " bytes \n";
 }
 
 void coff::doNothing() {}
