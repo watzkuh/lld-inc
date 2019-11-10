@@ -12,4 +12,4 @@ CHECK: No incremental
 INC: Attempting incremental link
 INC-NOT: function.obj has changed
 INC-NEXT: extern-data.obj has changed
-INC-NEXT: Rewriting
+INC: Rewriting
