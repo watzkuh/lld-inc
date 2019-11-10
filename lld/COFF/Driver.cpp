@@ -1711,6 +1711,14 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (errorCount())
     return;
 
+  // We should have inferred a machine type by now from the input files, but if
+  // not we assume x64.
+  if (config->machine == IMAGE_FILE_MACHINE_UNKNOWN) {
+    warn("/machine is not specified. x64 is assumed");
+    config->machine = AMD64;
+  }
+  config->wordsize = config->is64() ? 8 : 4;
+
   if (config->incrementalLink && incrementalLinkFile->rewritePossible) {
     rewriteResult();
 
@@ -1725,14 +1733,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
       Timer::root().print();
     exit(0);
   }
-
-  // We should have inferred a machine type by now from the input files, but if
-  // not we assume x64.
-  if (config->machine == IMAGE_FILE_MACHINE_UNKNOWN) {
-    warn("/machine is not specified. x64 is assumed");
-    config->machine = AMD64;
-  }
-  config->wordsize = config->is64() ? 8 : 4;
 
   // Handle /safeseh, x86 only, on by default, except for mingw.
   if (config->machine == I386 &&
