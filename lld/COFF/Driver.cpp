@@ -1657,12 +1657,18 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
       inLib = true;
       break;
     case OPT_wholearchive_file:
-      if (Optional<StringRef> path = findFile(arg->getValue()))
+      if (Optional<StringRef> path = findFile(arg->getValue())) {
         enqueuePath(*path, true, inLib);
+        if (config->incrementalLink)
+          incrementalLinkFile->input.push_back(*path);
+      }
       break;
     case OPT_INPUT:
-      if (Optional<StringRef> path = findFile(arg->getValue()))
+      if (Optional<StringRef> path = findFile(arg->getValue())) {
         enqueuePath(*path, isWholeArchive(*path), inLib);
+        if (config->incrementalLink)
+          incrementalLinkFile->input.push_back(*path);
+      }
       break;
     default:
       // Ignore other options.
@@ -1684,16 +1690,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     }
     t3.stop();
   }
-
-  // Create a list of input files. Files can be given as arguments
-  // for /defaultlib option.
-  for (auto *arg : args.filtered(OPT_INPUT, OPT_wholearchive_file))
-    if (Optional<StringRef> path = findFile(arg->getValue())) {
-      enqueuePath(*path, isWholeArchive(*path));
-      if (config->incrementalLink) {
-        incrementalLinkFile->input.push_back(*path);
-      }
-    }
 
   // Process files specified as /defaultlib. These should be enequeued after
   // other files, which is why they are in a separate loop.
