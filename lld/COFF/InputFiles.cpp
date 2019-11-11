@@ -151,7 +151,7 @@ void LazyObjFile::fetch() {
   mb = {};
   symtab->addFile(file);
 }
-
+bool LazyObjFile::hasChanged() { return false; }
 void LazyObjFile::parse() {
   if (isBitcode(this->mb)) {
     // Bitcode file.

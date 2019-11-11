@@ -124,6 +124,7 @@ public:
   static bool classof(const InputFile *f) {
     return f->kind() == LazyObjectKind;
   }
+  bool hasChanged() override;
   // Makes this object file part of the link.
   void fetch();
   // Adds the symbols in this file to the symbol table as LazyObject symbols.
