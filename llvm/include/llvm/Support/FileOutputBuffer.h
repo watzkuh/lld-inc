@@ -36,12 +36,11 @@ public:
     /// Don't use mmap and instead write an in-memory buffer to a file when this
     /// buffer is closed.
     F_no_mmap = 2,
-  };
 
     /// the contents of the new file are initialized from the file that exists
     /// at the location (if present).  This allows in-place modification of an
     /// existing file.
-    F_modify = 3
+    F_modify = 4
   };
   /// Factory method to create an OutputBuffer object which manages a read/write
   /// buffer of the specified size. When committed, the buffer will be written

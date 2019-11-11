@@ -173,13 +173,13 @@ FileOutputBuffer::create(StringRef Path, size_t Size, unsigned Flags) {
     return createInMemoryBuffer("-", Size, /*Mode=*/0);
 
   unsigned Mode = fs::all_read | fs::all_write;
-  if (Flags == F_executable)
+  if (Flags & F_executable)
     Mode |= fs::all_exe;
 
   fs::file_status Stat;
   fs::status(Path, Stat);
 
-  if ((Flags == F_modify) && Size == size_t(-1)) {
+  if ((Flags & F_modify) && Size == size_t(-1)) {
     if (Stat.type() == fs::file_type::regular_file)
       Size = Stat.getSize();
     else if (Stat.type() == fs::file_type::file_not_found)
@@ -202,10 +202,10 @@ FileOutputBuffer::create(StringRef Path, size_t Size, unsigned Flags) {
   case fs::file_type::regular_file:
   case fs::file_type::file_not_found:
   case fs::file_type::status_error:
-    if (Flags == F_no_mmap)
+    if (Flags & F_no_mmap)
       return createInMemoryBuffer(Path, Size, Mode);
     else
-      return createOnDiskBuffer(Path, Size, (Flags == F_modify), Mode);
+      return createOnDiskBuffer(Path, Size, !!(Flags & F_modify), Mode);
   default:
     return createInMemoryBuffer(Path, Size, Mode);
   }
