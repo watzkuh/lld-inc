@@ -48,20 +48,6 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   if (!config->incrementalLink)
     return;
 
-  /* Some debug output how many sectionChunks there are
-  for (OutputSection *sec : outputSections) {
-    outs() << sec->name << ": ";
-    int nrOfChunks = 0;
-    for (Chunk *c : sec->chunks) {
-      auto *sc = dyn_cast<SectionChunk>(c);
-      if (!sc)
-        continue;
-
-      nrOfChunks++;
-    }
-    outs() << nrOfChunks << " Chunks\n";
-  } */
-
   for (OutputSection *sec : outputSections) {
     StringRef const section = sec->name;
     if (section == ".text" || section == ".data") {
