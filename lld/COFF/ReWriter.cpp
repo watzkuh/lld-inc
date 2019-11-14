@@ -93,9 +93,9 @@ void rewriteDataSection(ObjFile *file) {
   outs() << "Rewriting .data section for file " << file->getName() << "\n";
   auto &secInfo =
       incrementalLinkFile->objFiles[file->getName()].sections[".data"];
-  auto offset = incrementalLinkFile->outputTextSectionRaw +
-                secInfo.virtualAddress -
-                incrementalLinkFile->outputTextSectionRVA;
+  auto offset = incrementalLinkFile->outputDataSectionRaw +
+                incrementalLinkFile->outputDataSectionRVA -
+                secInfo.virtualAddress;
 
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
