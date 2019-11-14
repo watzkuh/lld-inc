@@ -7,7 +7,6 @@
 
 CHECK: No incremental
 
-# RUN: llvm-readobj --sections --section-data %t.dir/inc.exe > %t.dir/clean-link
 # RUN: yaml2obj %p/Inputs/extern-data-modified.yaml > %t.dir/extern-data.obj
 # RUN: lld-link /out:%t.dir/inc.exe /entry:main /nodefaultlib /incrementallink \
 # RUN:   %t.dir/extern-data.obj %t.dir/function.obj | FileCheck --check-prefix=INC %s
@@ -18,10 +17,25 @@ INC-NEXT: extern-data.obj has changed
 INC: Rewriting .text section
 INC: Rewriting .data section
 
-# RUN: llvm-readobj --sections --section-data %t.dir/inc.exe > %t.dir/incremental-link
-# RUN: diff %t.dir/clean-link %t.dir/incremental-link | FileCheck --check-prefix=DIFF %s
+# RUN: llvm-readobj --sections --section-data %t.dir/inc.exe | FileCheck --check-prefix=DIFF %s
 
-DIFF: 65c65
-DIFF-NEXT: <       0000: 48656C6C 6F20576F 726C642E 0A000000  |Hello World.....|
-DIFF-NEXT: ---
-DIFF-NEXT: >       0000: 48656C6C 6F204C6F 72656D2E 0A000000  |Hello Lorem.....|
+#DIFF:  Section {
+#DIFF:    Number: 3
+#DIFF-NEXT:    Name: .data (2E 64 61 74 61 00 00 00)
+#DIFF-NEXT:    VirtualSize: 0x10
+#DIFF-NEXT:    VirtualAddress: 0x3000
+#DIFF-NEXT:    RawDataSize: 512
+#DIFF-NEXT:    PointerToRawData: 0x800
+#DIFF-NEXT:    PointerToRelocations: 0x0
+#DIFF-NEXT:    PointerToLineNumbers: 0x0
+#DIFF-NEXT:    RelocationCount: 0
+#DIFF-NEXT:    LineNumberCount: 0
+#DIFF-NEXT:    Characteristics [ (0xC0000040)
+#DIFF-NEXT:      IMAGE_SCN_CNT_INITIALIZED_DATA (0x40)
+#DIFF-NEXT:      IMAGE_SCN_MEM_READ (0x40000000)
+#DIFF-NEXT:      IMAGE_SCN_MEM_WRITE (0x80000000)
+#DIFF-NEXT:    ]
+#DIFF-NEXT:    SectionData (
+#DIFF-NEXT:      0000: 48656C6C 6F204C6F 72656D2E 0A000000  |Hello Lorem.....|
+#DIFF-NEXT:    )
+#DIFF-NEXT:  }
