@@ -35,11 +35,13 @@ public:
   IncrementalLinkFile(std::vector<std::string> args,
                       std::map<std::string, ObjectFile> obj, std::string of,
                       uint64_t oh, uint32_t outDataRaw, uint32_t outDataRVA,
-                      uint32_t outTextRaw, uint32_t outTextRVA)
+                      uint32_t outTextRaw, uint32_t outTextRVA,
+                      std::map<std::string, uint64_t> defSyms)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
         outputDataSectionRaw(outDataRaw), outputDataSectionRVA(outDataRVA),
-        outputTextSectionRaw(outTextRaw), outputTextSectionRVA(outTextRVA) {}
+        outputTextSectionRaw(outTextRaw), outputTextSectionRVA(outTextRVA),
+        definedSymbols(defSyms) {}
 
   std::vector<std::string> arguments;
   std::vector<std::string> input;
@@ -52,6 +54,7 @@ public:
   uint32_t outputDataSectionRVA;
   uint32_t outputTextSectionRaw;
   uint32_t outputTextSectionRVA;
+  std::map<std::string, uint64_t > definedSymbols;
   bool rewritePossible = false;
 
   static void writeToDisk();
@@ -158,6 +161,34 @@ template <> struct yaml::MappingTraits<NormalizedFileMap> {
   }
 };
 
+struct NormalizedSymbolMap {
+  NormalizedSymbolMap() {}
+  NormalizedSymbolMap(std::string n, uint64_t a)
+      : name(std::move(n)), relativeAddress(a) {}
+  std::string name;
+  uint64_t relativeAddress;
+};
+
+template <> struct yaml::MappingTraits<NormalizedSymbolMap> {
+  static void mapping(IO &io, NormalizedSymbolMap &symbol) {
+    io.mapRequired("name", symbol.name);
+    io.mapRequired("address", symbol.relativeAddress);
+  }
+};
+
+template <>
+struct llvm::yaml::SequenceTraits<std::vector<NormalizedSymbolMap>> {
+  static size_t size(IO &io, std::vector<NormalizedSymbolMap> &seq) {
+    return seq.size();
+  }
+  static NormalizedSymbolMap &
+  element(IO &io, std::vector<NormalizedSymbolMap> &seq, size_t index) {
+    if (index >= seq.size())
+      seq.resize(index + 1);
+    return seq[index];
+  }
+};
+
 template <> struct MappingTraits<IncrementalLinkFile> {
   struct NormalizedIlf {
   public:
@@ -181,6 +212,10 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         NormalizedFileMap fileMap(f.first, f.second.hash, sections);
         files.push_back(fileMap);
       }
+      for (auto &s : ilf.definedSymbols) {
+        NormalizedSymbolMap symMap(s.first, s.second);
+        definedSymbols.push_back(symMap);
+      }
     }
 
     IncrementalLinkFile denormalize(IO &) {
@@ -198,9 +233,15 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         }
         objFiles[f.name] = obj;
       }
+      std::map<std::string, uint64_t> definedSymbols;
+      for (auto &s : this->definedSymbols) {
+        definedSymbols[s.name] = s.relativeAddress;
+      }
+
       return IncrementalLinkFile(arguments, objFiles, outputFile, outputHash,
                                  outputDataSectionRaw, outputDataSectionRVA,
-                                 outputTextSectionRaw, outputTextSectionRVA);
+                                 outputTextSectionRaw, outputTextSectionRVA,
+                                 definedSymbols);
     }
 
     std::vector<NormalizedFileMap> files;
@@ -212,6 +253,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     uint32_t outputDataSectionRVA;
     uint32_t outputTextSectionRaw;
     uint32_t outputTextSectionRVA;
+    std::vector<NormalizedSymbolMap> definedSymbols;
   };
 
   static void mapping(IO &io, IncrementalLinkFile &ilf) {
@@ -225,6 +267,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     io.mapRequired("output-data-section-rva", keys->outputDataSectionRVA);
     io.mapRequired("output-text-section-raw", keys->outputTextSectionRaw);
     io.mapRequired("output-text-section-rva", keys->outputTextSectionRVA);
+    io.mapOptional("defined-symbols", keys->definedSymbols);
   }
 };
 

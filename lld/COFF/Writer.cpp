@@ -639,7 +639,8 @@ void Writer::run() {
 
   writeLLDMapFile(outputSections);
 
-  writeIlfSections(outputSections);
+  if (config->incrementalLink)
+    writeIlfSections(outputSections);
 
   t3.stop();
   if (errorCount())

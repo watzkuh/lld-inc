@@ -9,6 +9,19 @@
 using namespace lld;
 using namespace lld::coff;
 
+// Copied from MapFile.cpp
+// Returns a list of all symbols that we want to print out.
+// TODO:
+static std::vector<DefinedRegular *> getSymbols() {
+  std::vector<DefinedRegular *> v;
+  for (ObjFile *file : ObjFile::instances)
+    for (Symbol *b : file->getSymbols())
+      if (auto *sym = dyn_cast_or_null<DefinedRegular>(b))
+        if (sym && !sym->getCOFFSymbol().isSectionDefinition())
+          v.push_back(sym);
+  return v;
+}
+
 bool coff::initializeIlf(ArrayRef<char const *> argsArr,
                          std::string possibleOutput) {
   incrementalLinkFile = make<IncrementalLinkFile>();
@@ -75,6 +88,12 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
           sec.virtualAddress = sc->getRVA();
         sec.size += sc->getSize();
       }
+    }
+  }
+  for (auto &sym : getSymbols()) {
+    std::string a = sym->getName();
+    if (sym->getRVA() != 0) {
+      incrementalLinkFile->definedSymbols[sym->getName()] = sym->getRVA();
     }
   }
 }
