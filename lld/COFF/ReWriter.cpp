@@ -46,17 +46,19 @@ void rewriteTextSection(ObjFile *file) {
 
       for (size_t i = 0, e = sc->getRelocs().size(); i < e; i++) {
         const coff_relocation &rel = sc->getRelocs()[i];
-        auto *sym =
-            dyn_cast_or_null<Defined>(file->getSymbol(rel.SymbolTableIndex));
-        if (sym == nullptr) {
-          outs() << file->getSymbol(rel.SymbolTableIndex)->getName();
-          continue;
+        auto *sym = file->getSymbol(rel.SymbolTableIndex);
+        auto *definedSym = dyn_cast_or_null<Defined>(sym);
+        uint64_t s;
+        if (definedSym != nullptr) {
+          s = incrementalLinkFile->objFiles[file->getName()]
+                  .sections[definedSym->getChunk()->getSectionName()]
+                  .virtualAddress +
+              definedSym->getRVA();
+        } else {
+          s = incrementalLinkFile->definedSymbols[sym->getName()];
         }
         uint8_t *off = buf + rel.VirtualAddress;
-        uint64_t s = incrementalLinkFile->objFiles[file->getName()]
-                         .sections[sym->getChunk()->getSectionName()]
-                         .virtualAddress +
-                     sym->getRVA();
+
         // Compute the RVA of the relocation for relative relocations.
         uint64_t p = incrementalLinkFile->objFiles[file->getName()]
                          .sections[".text"]
