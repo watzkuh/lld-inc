@@ -51,7 +51,7 @@ void rewriteTextSection(ObjFile *file) {
         auto *definedSym = dyn_cast_or_null<Defined>(sym);
         uint64_t s;
         if (definedSym != nullptr) {
-          s = incrementalLinkFile->objFiles[file->getName()]
+          s = incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
                   .sections[definedSym->getChunk()->getSectionName()]
                   .virtualAddress +
               definedSym->getRVA();

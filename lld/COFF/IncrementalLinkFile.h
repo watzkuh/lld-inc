@@ -54,7 +54,7 @@ public:
   uint32_t outputDataSectionRVA;
   uint32_t outputTextSectionRaw;
   uint32_t outputTextSectionRVA;
-  std::map<std::string, uint64_t > definedSymbols;
+  std::map<std::string, uint64_t> definedSymbols;
   bool rewritePossible = false;
 
   static void writeToDisk();
