@@ -25,6 +25,11 @@ struct IncrementalLinkFile {
     std::vector<ChunkInfo> chunks;
   };
 
+  struct OutputSectionInfo {
+    uint64_t rawAddress;
+    uint64_t virtualAddress;
+    size_t size;
+  };
   struct ObjectFile {
     uint64_t hash;
     std::map<std::string, SectionInfo> sections;
@@ -34,14 +39,13 @@ public:
   IncrementalLinkFile() = default;
   IncrementalLinkFile(std::vector<std::string> args,
                       std::map<std::string, ObjectFile> obj, std::string of,
-                      uint64_t oh, uint32_t outDataRaw, uint32_t outDataRVA,
-                      uint32_t outTextRaw, uint32_t outTextRVA,
+                      uint64_t oh,
+                      std::map<std::string, OutputSectionInfo> outSections,
                       std::map<std::string, uint64_t> defSyms)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
-        outputDataSectionRaw(outDataRaw), outputDataSectionRVA(outDataRVA),
-        outputTextSectionRaw(outTextRaw), outputTextSectionRVA(outTextRVA),
-        definedSymbols(defSyms) {}
+        outputSections(std::move(outSections)),
+        definedSymbols(std::move(defSyms)) {}
 
   std::vector<std::string> arguments;
   std::vector<std::string> input;
@@ -49,11 +53,7 @@ public:
   std::string outputFile;
   uint64_t outputHash;
 
-  // TODO: Restructure this; Probably move it to SectionData
-  uint32_t outputDataSectionRaw;
-  uint32_t outputDataSectionRVA;
-  uint32_t outputTextSectionRaw;
-  uint32_t outputTextSectionRVA;
+  std::map<std::string, OutputSectionInfo> outputSections;
   std::map<std::string, uint64_t> definedSymbols;
   bool rewritePossible = false;
 
@@ -74,6 +74,39 @@ bool initializeIlf(ArrayRef<const char *> argsArr, std::string possibleOutput);
 using namespace llvm;
 using lld::coff::IncrementalLinkFile;
 using yaml::MappingTraits;
+
+struct NormalizedOutputSectionMap {
+  NormalizedOutputSectionMap() {}
+  NormalizedOutputSectionMap(std::string n, uint64_t raw, uint64_t rva,
+                             size_t s)
+      : name(std::move(n)), rawAddress(raw), virtualAddress(rva), size(s) {}
+  std::string name;
+  uint64_t rawAddress;
+  uint64_t virtualAddress;
+  size_t size;
+};
+
+template <> struct yaml::MappingTraits<NormalizedOutputSectionMap> {
+  static void mapping(IO &io, NormalizedOutputSectionMap &sec) {
+    io.mapRequired("name", sec.name);
+    io.mapRequired("raw-address", sec.rawAddress);
+    io.mapRequired("virtual-address", sec.virtualAddress);
+    io.mapOptional("size", sec.size);
+  }
+};
+
+template <>
+struct llvm::yaml::SequenceTraits<std::vector<NormalizedOutputSectionMap>> {
+  static size_t size(IO &io, std::vector<NormalizedOutputSectionMap> &seq) {
+    return seq.size();
+  }
+  static NormalizedOutputSectionMap &
+  element(IO &io, std::vector<NormalizedOutputSectionMap> &seq, size_t index) {
+    if (index >= seq.size())
+      seq.resize(index + 1);
+    return seq[index];
+  }
+};
 
 struct NormalizedSectionMap {
   NormalizedSectionMap() {}
@@ -198,10 +231,12 @@ template <> struct MappingTraits<IncrementalLinkFile> {
       input = ilf.input;
       outputFile = ilf.outputFile;
       outputHash = ilf.outputHash;
-      outputDataSectionRaw = ilf.outputDataSectionRaw;
-      outputDataSectionRVA = ilf.outputDataSectionRVA;
-      outputTextSectionRaw = ilf.outputTextSectionRaw;
-      outputTextSectionRVA = ilf.outputTextSectionRVA;
+      for (const auto &s : ilf.outputSections) {
+        NormalizedOutputSectionMap outSection(s.first, s.second.rawAddress,
+                                              s.second.virtualAddress,
+                                              s.second.size);
+        outputSections.push_back(outSection);
+      }
       for (const auto &f : ilf.objFiles) {
         std::vector<NormalizedSectionMap> sections;
         for (const auto &s : f.second.sections) {
@@ -212,7 +247,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         NormalizedFileMap fileMap(f.first, f.second.hash, sections);
         files.push_back(fileMap);
       }
-      for (auto &s : ilf.definedSymbols) {
+      for (const auto &s : ilf.definedSymbols) {
         NormalizedSymbolMap symMap(s.first, s.second);
         definedSymbols.push_back(symMap);
       }
@@ -221,6 +256,13 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     IncrementalLinkFile denormalize(IO &) {
       std::map<std::string, lld::coff::IncrementalLinkFile::ObjectFile>
           objFiles;
+      std::map<std::string, lld::coff::IncrementalLinkFile::OutputSectionInfo>
+          outSections;
+      for (auto &s : outputSections) {
+        lld::coff::IncrementalLinkFile::OutputSectionInfo sec{
+            s.rawAddress, s.virtualAddress, s.size};
+        outSections[s.name] = sec;
+      }
       for (auto &f : files) {
         lld::coff::IncrementalLinkFile::ObjectFile obj;
         obj.hash = f.hashValue;
@@ -239,9 +281,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
       }
 
       return IncrementalLinkFile(arguments, objFiles, outputFile, outputHash,
-                                 outputDataSectionRaw, outputDataSectionRVA,
-                                 outputTextSectionRaw, outputTextSectionRVA,
-                                 definedSymbols);
+                                 outSections, definedSymbols);
     }
 
     std::vector<NormalizedFileMap> files;
@@ -249,10 +289,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     std::vector<std::string> input;
     std::string outputFile;
     uint64_t outputHash;
-    uint32_t outputDataSectionRaw;
-    uint32_t outputDataSectionRVA;
-    uint32_t outputTextSectionRaw;
-    uint32_t outputTextSectionRVA;
+    std::vector<NormalizedOutputSectionMap> outputSections;
     std::vector<NormalizedSymbolMap> definedSymbols;
   };
 
@@ -263,10 +300,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     io.mapRequired("files", keys->files);
     io.mapRequired("output-file", keys->outputFile);
     io.mapRequired("output-hash", keys->outputHash);
-    io.mapRequired("output-data-section-raw", keys->outputDataSectionRaw);
-    io.mapRequired("output-data-section-rva", keys->outputDataSectionRVA);
-    io.mapRequired("output-text-section-raw", keys->outputTextSectionRaw);
-    io.mapRequired("output-text-section-rva", keys->outputTextSectionRVA);
+    io.mapRequired("output-sections", keys->outputSections);
     io.mapOptional("defined-symbols", keys->definedSymbols);
   }
 };

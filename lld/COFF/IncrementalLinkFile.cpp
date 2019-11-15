@@ -63,14 +63,9 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
 
   for (OutputSection *sec : outputSections) {
     StringRef const secName = sec->name;
-    if (secName == ".text") {
-      incrementalLinkFile->outputTextSectionRaw = sec->getFileOff();
-      incrementalLinkFile->outputTextSectionRVA = sec->getRVA();
-    }
-    if (secName == ".data") {
-      incrementalLinkFile->outputDataSectionRaw = sec->getFileOff();
-      incrementalLinkFile->outputDataSectionRVA = sec->getRVA();
-    }
+    IncrementalLinkFile::OutputSectionInfo outputSectionInfo{
+        sec->getFileOff(), sec->getRVA(), sec->getRawSize()};
+    incrementalLinkFile->outputSections[secName] = outputSectionInfo;
     for (Chunk *c : sec->chunks) {
       auto *sc = dyn_cast<SectionChunk>(c);
       if (!sc || sc->getSectionName() != secName)

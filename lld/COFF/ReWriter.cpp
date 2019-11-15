@@ -26,9 +26,9 @@ void rewriteTextSection(ObjFile *file) {
 
   auto &secInfo =
       incrementalLinkFile->objFiles[file->getName()].sections[".text"];
-  auto offset = incrementalLinkFile->outputTextSectionRaw +
-                secInfo.virtualAddress -
-                incrementalLinkFile->outputTextSectionRVA;
+  auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
+  auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
+                outputTextSection.virtualAddress;
 
   uint8_t *buf = binary->getBufferStart() + offset;
   for (Chunk *c : file->getChunks()) {
@@ -93,9 +93,9 @@ void rewriteDataSection(ObjFile *file) {
   outs() << "Rewriting .data section for file " << file->getName() << "\n";
   auto &secInfo =
       incrementalLinkFile->objFiles[file->getName()].sections[".data"];
-  auto offset = incrementalLinkFile->outputDataSectionRaw +
-                incrementalLinkFile->outputDataSectionRVA -
-                secInfo.virtualAddress;
+  auto &outputDataSection = incrementalLinkFile->outputSections[".data"];
+  auto offset = outputDataSection.rawAddress +
+                outputDataSection.virtualAddress - secInfo.virtualAddress;
 
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
