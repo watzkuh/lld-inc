@@ -1640,6 +1640,22 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     return false;
   };
 
+  config->incrementalLink =
+      args.hasFlag(OPT_incrementallink, OPT_incrementallink_no, false);
+
+  if (config->incrementalLink) {
+    ScopedTimer t3(ilkInputTimer);
+    auto possibleOutput =
+        getOutputPath((*args.filtered(OPT_INPUT).begin())->getValue());
+    if (lld::coff::initializeIlf(argsArr, possibleOutput)) {
+      outs() << "Attempting incremental link\n";
+    } else {
+      incrementalLinkFile->objFiles.clear();
+      outs() << "No incremental link\n";
+    }
+    t3.stop();
+  }
+
   // Create a list of input files. These can be given as OPT_INPUT options
   // and OPT_wholearchive_file options, and we also need to track OPT_start_lib
   // and OPT_end_lib.
@@ -1674,21 +1690,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
       // Ignore other options.
       break;
     }
-  }
-  config->incrementalLink =
-      args.hasFlag(OPT_incrementallink, OPT_incrementallink_no, false);
-
-  if (config->incrementalLink) {
-    ScopedTimer t3(ilkInputTimer);
-    auto possibleOutput =
-        getOutputPath((*args.filtered(OPT_INPUT).begin())->getValue());
-    if (lld::coff::initializeIlf(argsArr, possibleOutput)) {
-      outs() << "Attempting incremental link\n";
-    } else {
-      incrementalLinkFile->objFiles.clear();
-      outs() << "No incremental link\n";
-    }
-    t3.stop();
   }
 
   // Process files specified as /defaultlib. These should be enequeued after
