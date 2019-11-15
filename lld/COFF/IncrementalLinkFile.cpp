@@ -62,32 +62,30 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     return;
 
   for (OutputSection *sec : outputSections) {
-    StringRef const section = sec->name;
-    if (section == ".text" || section == ".data") {
-      if (section == ".text") {
-        incrementalLinkFile->outputTextSectionRaw = sec->getFileOff();
-        incrementalLinkFile->outputTextSectionRVA = sec->getRVA();
-      }
-      if (section == ".data") {
-        incrementalLinkFile->outputDataSectionRaw = sec->getFileOff();
-        incrementalLinkFile->outputDataSectionRVA = sec->getRVA();
-      }
-      for (Chunk *c : sec->chunks) {
-        auto *sc = dyn_cast<SectionChunk>(c);
-        if (!sc)
-          continue;
-        StringRef const name = sc->file->getName();
-        auto &sec = incrementalLinkFile->objFiles[name].sections[section];
-        IncrementalLinkFile::ChunkInfo chunkInfo = {sc->getRVA()};
-        sec.chunks.push_back(chunkInfo);
-        // The contribution of one object file to one of the sections of the
-        // output file can consist of n OutputChunks. However, they seem to
-        // always be directly after each other, so storing the lowest address
-        // and the sum of the sizes could work
-        if (sec.virtualAddress == 0 || sec.virtualAddress > sc->getRVA())
-          sec.virtualAddress = sc->getRVA();
-        sec.size += sc->getSize();
-      }
+    StringRef const secName = sec->name;
+    if (secName == ".text") {
+      incrementalLinkFile->outputTextSectionRaw = sec->getFileOff();
+      incrementalLinkFile->outputTextSectionRVA = sec->getRVA();
+    }
+    if (secName == ".data") {
+      incrementalLinkFile->outputDataSectionRaw = sec->getFileOff();
+      incrementalLinkFile->outputDataSectionRVA = sec->getRVA();
+    }
+    for (Chunk *c : sec->chunks) {
+      auto *sc = dyn_cast<SectionChunk>(c);
+      if (!sc || sc->getSectionName() != secName)
+        continue;
+      StringRef const name = sc->file->getName();
+      auto &sec = incrementalLinkFile->objFiles[name].sections[secName];
+      IncrementalLinkFile::ChunkInfo chunkInfo = {sc->getRVA()};
+      sec.chunks.push_back(chunkInfo);
+      // The contribution of one object file to one of the sections of the
+      // output file can consist of n OutputChunks. However, they seem to
+      // always be directly after each other, so storing the lowest address
+      // and the sum of the sizes could work
+      if (sec.virtualAddress == 0 || sec.virtualAddress > sc->getRVA())
+        sec.virtualAddress = sc->getRVA();
+      sec.size += sc->getSize();
     }
   }
   for (auto &sym : getSymbols()) {
