@@ -80,9 +80,10 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       // and the sum of the sizes could work
       if (sec.virtualAddress == 0 || sec.virtualAddress > sc->getRVA())
         sec.virtualAddress = sc->getRVA();
-      sec.size += sc->getSize();
+      sec.size += alignTo(sc->getSize(), sc->getAlignment());
     }
   }
+  // TODO: Create own function for writing symbol list
   for (auto &sym : getSymbols()) {
     std::string a = sym->getName();
     if (sym->getRVA() != 0) {
