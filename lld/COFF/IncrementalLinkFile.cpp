@@ -72,7 +72,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
         continue;
       StringRef const name = sc->file->getName();
       auto &sec = incrementalLinkFile->objFiles[name].sections[secName];
-      IncrementalLinkFile::ChunkInfo chunkInfo = {sc->getRVA()};
+      IncrementalLinkFile::ChunkInfo chunkInfo = {sc->getRVA(), sc->getSize()};
       sec.chunks.push_back(chunkInfo);
       // The contribution of one object file to one of the sections of the
       // output file can consist of n OutputChunks. However, they seem to

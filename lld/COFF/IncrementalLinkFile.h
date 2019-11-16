@@ -17,6 +17,7 @@ struct IncrementalLinkFile {
 
   struct ChunkInfo {
     uint32_t virtualAddress;
+    size_t size;
   };
 
   struct SectionInfo {
@@ -152,15 +153,16 @@ template <>
 struct yaml::MappingTraits<lld::coff::IncrementalLinkFile::ChunkInfo> {
   static void mapping(IO &io, lld::coff::IncrementalLinkFile::ChunkInfo &c) {
     io.mapRequired("address", c.virtualAddress);
+    io.mapRequired("size", c.size);
   }
 };
 
 template <> struct yaml::MappingTraits<NormalizedSectionMap> {
-  static void mapping(IO &io, NormalizedSectionMap &file) {
-    io.mapRequired("name", file.name);
-    io.mapRequired("start-address", file.virtualAddress);
-    io.mapOptional("size", file.size);
-    io.mapOptional("chunks", file.chunks);
+  static void mapping(IO &io, NormalizedSectionMap &sec) {
+    io.mapRequired("name", sec.name);
+    io.mapRequired("start-address", sec.virtualAddress);
+    io.mapOptional("size", sec.size);
+    io.mapOptional("chunks", sec.chunks);
   }
 };
 
