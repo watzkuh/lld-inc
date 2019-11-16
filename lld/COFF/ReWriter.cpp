@@ -31,61 +31,65 @@ void rewriteTextSection(ObjFile *file) {
                 outputTextSection.virtualAddress;
 
   uint8_t *buf = binary->getBufferStart() + offset;
+  int visitedChunks = 0;
+
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
 
-    if (sc->getSectionName() == ".text") {
-      size_t size = sc->getSize();
-
-      int sizeDiff = secInfo.size != size;
-      if (sizeDiff) {
-        outs() << "New text section is not the same size \n";
-        outs() << "New: " << sc->getSize() << "\tOld: " << secInfo.size << "\n";
-      }
-      memcpy(buf, sc->getContents().data(), secInfo.size);
-      outs() << "Patched " << secInfo.size << " bytes \n";
-
-      for (size_t i = 0, e = sc->getRelocs().size(); i < e; i++) {
-        const coff_relocation &rel = sc->getRelocs()[i];
-        auto *sym = file->getSymbol(rel.SymbolTableIndex);
-        auto *definedSym = dyn_cast_or_null<Defined>(sym);
-        uint64_t s;
-        if (definedSym != nullptr) {
-          s = incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
-                  .sections[definedSym->getChunk()->getSectionName()]
-                  .virtualAddress +
-              definedSym->getRVA();
-        } else {
-          s = incrementalLinkFile->definedSymbols[sym->getName()];
-        }
-        uint8_t *off = buf + rel.VirtualAddress;
-
-        // Compute the RVA of the relocation for relative relocations.
-        uint64_t p = incrementalLinkFile->objFiles[file->getName()]
-                         .sections[".text"]
-                         .chunks.front()
-                         .virtualAddress +
-                     rel.VirtualAddress;
-        OutputSection *os = nullptr; // not that interesting at the moment
-        switch (config->machine) {
-        case AMD64:
-          sc->applyRelX64(off, rel.Type, os, s, p);
-          break;
-        case I386:
-          sc->applyRelX86(off, rel.Type, os, s, p);
-          break;
-        case ARMNT:
-          sc->applyRelARM(off, rel.Type, os, s, p);
-          break;
-        case ARM64:
-          sc->applyRelARM64(off, rel.Type, os, s, p);
-          break;
-        default:
-          llvm_unreachable("unknown machine type");
-        }
-      }
-      buf += size;
+    if (sc->getSectionName() != ".text") {
+      continue;
     }
+    const size_t size = sc->getSize();
+
+    memset(buf, 0xCC, size);
+    memcpy(buf, sc->getContents().data(), size);
+    outs() << "Patched " << size << " bytes \n";
+
+    for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
+      const coff_relocation &rel = sc->getRelocs()[j];
+      auto *sym = file->getSymbol(rel.SymbolTableIndex);
+      auto *definedSym = dyn_cast_or_null<Defined>(sym);
+      uint64_t s = 0;
+      if (definedSym != nullptr) {
+        // The target of the relocation
+        s = incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
+                .sections[definedSym->getChunk()->getSectionName()]
+                .virtualAddress +
+            definedSym->getRVA(); //  only returns offset within the same chunk
+      }
+      // Fallback to symbol table if we either have no information
+      // about the chunk or the symbol
+      if (definedSym == nullptr || s == 0 || definedSym->getRVA() == 0) {
+        s = incrementalLinkFile->definedSymbols[sym->getName()];
+      }
+      uint8_t *off = buf + rel.VirtualAddress;
+
+      // Compute the RVA of the relocation for relative relocations.
+      uint64_t p = incrementalLinkFile->objFiles[file->getName()]
+                       .sections[".text"]
+                       .chunks[visitedChunks]
+                       .virtualAddress +
+                   rel.VirtualAddress;
+      OutputSection *os = nullptr; // not that interesting at the moment TODO:
+      switch (config->machine) {
+      case AMD64:
+        sc->applyRelX64(off, rel.Type, os, s, p);
+        break;
+      case I386:
+        sc->applyRelX86(off, rel.Type, os, s, p);
+        break;
+      case ARMNT:
+        sc->applyRelARM(off, rel.Type, os, s, p);
+        break;
+      case ARM64:
+        sc->applyRelARM64(off, rel.Type, os, s, p);
+        break;
+      default:
+        llvm_unreachable("unknown machine type");
+      }
+    }
+    visitedChunks++;
+    buf += alignTo(size, sc->getAlignment());
   }
 }
 
