@@ -162,7 +162,7 @@ template <> struct yaml::MappingTraits<NormalizedSectionMap> {
   static void mapping(IO &io, NormalizedSectionMap &sec) {
     io.mapRequired("name", sec.name);
     io.mapRequired("start-address", sec.virtualAddress);
-    io.mapOptional("size", sec.size);
+    io.mapOptional("total-size", sec.size);
     io.mapOptional("chunks", sec.chunks);
   }
 };
