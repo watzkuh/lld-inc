@@ -5,6 +5,7 @@
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -49,7 +50,7 @@ public:
         definedSymbols(std::move(defSyms)) {}
 
   std::vector<std::string> arguments;
-  std::vector<std::string> input;
+  std::set<std::string> input;
   std::map<std::string, ObjectFile> objFiles;
   std::string outputFile;
   uint64_t outputHash;
@@ -230,7 +231,8 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     NormalizedIlf(IO &io){};
     NormalizedIlf(IO &, IncrementalLinkFile &ilf) {
       arguments = ilf.arguments;
-      input = ilf.input;
+      std::vector<std::string> inputVector(ilf.input.begin(), ilf.input.end());
+      input = inputVector;
       outputFile = ilf.outputFile;
       outputHash = ilf.outputHash;
       for (const auto &s : ilf.outputSections) {

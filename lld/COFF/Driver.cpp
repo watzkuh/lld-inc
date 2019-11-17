@@ -1676,14 +1676,14 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
       if (Optional<StringRef> path = findFile(arg->getValue())) {
         enqueuePath(*path, true, inLib);
         if (config->incrementalLink)
-          incrementalLinkFile->input.push_back(*path);
+          incrementalLinkFile->input.insert(*path);
       }
       break;
     case OPT_INPUT:
       if (Optional<StringRef> path = findFile(arg->getValue())) {
         enqueuePath(*path, isWholeArchive(*path), inLib);
         if (config->incrementalLink)
-          incrementalLinkFile->input.push_back(*path);
+          incrementalLinkFile->input.insert(*path);
       }
       break;
     default:
