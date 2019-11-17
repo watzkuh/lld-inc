@@ -1271,7 +1271,16 @@ void Writer::assignAddresses() {
         (sec->header.Characteristics & IMAGE_SCN_MEM_EXECUTE);
     uint32_t padding = isCodeSection ? config->functionPadMin : 0;
 
+    bool padNext = false;
     for (Chunk *c : sec->chunks) {
+      if (auto *sc = dyn_cast<SectionChunk>(c)) {
+        if (padNext)
+          c->setAlignment(incrementalLinkFile->paddedAlignment);
+        padNext = incrementalLinkFile->input.find(sc->file->getName()) !=
+                      incrementalLinkFile->input.end() &&
+                  (sc->getSectionName() == ".text" ||
+                   sc->getSectionName() == ".data");
+      }
       if (padding && c->isHotPatchable())
         virtualSize += padding;
       virtualSize = alignTo(virtualSize, c->getAlignment());

@@ -72,7 +72,9 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
         continue;
       StringRef const name = sc->file->getName();
       auto &sec = incrementalLinkFile->objFiles[name].sections[secName];
-      IncrementalLinkFile::ChunkInfo chunkInfo = {sc->getRVA(), sc->getSize()};
+      IncrementalLinkFile::ChunkInfo chunkInfo = {
+          sc->getRVA(),
+          alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment)};
       sec.chunks.push_back(chunkInfo);
       // The contribution of one object file to one of the sections of the
       // output file can consist of n OutputChunks. However, they seem to
@@ -80,7 +82,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       // and the sum of the sizes could work
       if (sec.virtualAddress == 0 || sec.virtualAddress > sc->getRVA())
         sec.virtualAddress = sc->getRVA();
-      sec.size += alignTo(sc->getSize(), sc->getAlignment());
+      sec.size += alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
     }
   }
   // TODO: Create own function for writing symbol list

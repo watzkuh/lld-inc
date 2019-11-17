@@ -39,11 +39,12 @@ void rewriteTextSection(ObjFile *file) {
     if (sc->getSectionName() != ".text") {
       continue;
     }
-    const size_t size = sc->getSize();
+    const size_t paddedSize =
+        alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
 
-    memset(buf, 0xCC, size);
-    memcpy(buf, sc->getContents().data(), size);
-    outs() << "Patched " << size << " bytes \n";
+    memset(buf, 0xCC, paddedSize);
+    memcpy(buf, sc->getContents().data(), sc->getSize());
+    outs() << "Patched " << paddedSize << " bytes \n";
 
     for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
       const coff_relocation &rel = sc->getRelocs()[j];
@@ -89,7 +90,7 @@ void rewriteTextSection(ObjFile *file) {
       }
     }
     visitedChunks++;
-    buf += alignTo(size, sc->getAlignment());
+    buf += alignTo(paddedSize, sc->getAlignment());
   }
 }
 
