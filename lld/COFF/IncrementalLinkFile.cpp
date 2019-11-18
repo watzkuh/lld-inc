@@ -87,8 +87,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   }
   // TODO: Create own function for writing symbol list
   for (auto &sym : getSymbols()) {
-    std::string a = sym->getName();
-    if (sym->getRVA() != 0) {
+    if (sym->getRVA() != 0 && sym->isLive()) {
       incrementalLinkFile->definedSymbols[sym->getName()] = sym->getRVA();
     }
   }
