@@ -1596,27 +1596,33 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
          "'.\n>>> ignoring /lldmap");
     config->lldmapFile.clear();
   }
+  config->incrementalLink =
+      args.hasFlag(OPT_incrementallink, OPT_incrementallink_no, false);
 
-  if (config->incremental && args.hasArg(OPT_profile)) {
+  if ((config->incremental || config->incrementalLink) && args.hasArg(OPT_profile)) {
     warn("ignoring '/incremental' due to '/profile' specification");
     config->incremental = false;
+    config->incrementalLink = false;
   }
 
-  if (config->incremental && args.hasArg(OPT_order)) {
+  if ((config->incremental || config->incrementalLink) && args.hasArg(OPT_order)) {
     warn("ignoring '/incremental' due to '/order' specification");
     config->incremental = false;
+    config->incrementalLink = false;
   }
 
-  if (config->incremental && config->doGC) {
+  if ((config->incremental || config->incrementalLink) && config->doGC) {
     warn("ignoring '/incremental' because REF is enabled; use '/opt:noref' to "
          "disable");
     config->incremental = false;
+    config->incrementalLink = false;
   }
 
-  if (config->incremental && config->doICF) {
+  if ((config->incremental || config->incrementalLink) && config->doICF) {
     warn("ignoring '/incremental' because ICF is enabled; use '/opt:noicf' to "
          "disable");
     config->incremental = false;
+    config->incrementalLink = false;
   }
 
   if (errorCount())
@@ -1639,9 +1645,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
       return wholeArchives.count(*id);
     return false;
   };
-
-  config->incrementalLink =
-      args.hasFlag(OPT_incrementallink, OPT_incrementallink_no, false);
 
   if (config->incrementalLink) {
     ScopedTimer t3(ilkInputTimer);
