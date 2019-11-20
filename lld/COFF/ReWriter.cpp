@@ -31,7 +31,9 @@ void rewriteTextSection(ObjFile *file) {
                 outputTextSection.virtualAddress;
 
   uint8_t *buf = binary->getBufferStart() + offset;
-  int visitedChunks = 0;
+  uint32_t chunkStart = incrementalLinkFile->objFiles[file->getName()]
+                            .sections[".text"]
+                            .virtualAddress;
 
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
@@ -66,11 +68,7 @@ void rewriteTextSection(ObjFile *file) {
       uint8_t *off = buf + rel.VirtualAddress;
 
       // Compute the RVA of the relocation for relative relocations.
-      uint64_t p = incrementalLinkFile->objFiles[file->getName()]
-                       .sections[".text"]
-                       .chunks[visitedChunks]
-                       .virtualAddress +
-                   rel.VirtualAddress;
+      uint64_t p = chunkStart + rel.VirtualAddress;
       OutputSection *os = nullptr; // not that interesting at the moment TODO:
       switch (config->machine) {
       case AMD64:
@@ -89,8 +87,8 @@ void rewriteTextSection(ObjFile *file) {
         llvm_unreachable("unknown machine type");
       }
     }
-    visitedChunks++;
-    buf += alignTo(paddedSize, sc->getAlignment());
+    chunkStart += paddedSize;
+    buf += paddedSize;
   }
 }
 
