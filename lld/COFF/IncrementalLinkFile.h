@@ -16,15 +16,9 @@ namespace coff {
 
 struct IncrementalLinkFile {
 
-  struct ChunkInfo {
-    uint32_t virtualAddress;
-    size_t size;
-  };
-
   struct SectionInfo {
     uint32_t virtualAddress;
     size_t size;
-    std::vector<ChunkInfo> chunks;
   };
 
   struct OutputSectionInfo {
@@ -113,13 +107,11 @@ struct llvm::yaml::SequenceTraits<std::vector<NormalizedOutputSectionMap>> {
 
 struct NormalizedSectionMap {
   NormalizedSectionMap() {}
-  NormalizedSectionMap(std::string n, uint32_t a, size_t s,
-                       std::vector<lld::coff::IncrementalLinkFile::ChunkInfo> c)
-      : name(std::move(n)), virtualAddress(a), size(s), chunks(std::move(c)) {}
+  NormalizedSectionMap(std::string n, uint32_t a, size_t s)
+      : name(std::move(n)), virtualAddress(a), size(s) {}
   std::string name;
   uint32_t virtualAddress;
   size_t size;
-  std::vector<lld::coff::IncrementalLinkFile::ChunkInfo> chunks;
 };
 
 template <>
@@ -135,36 +127,11 @@ struct llvm::yaml::SequenceTraits<std::vector<NormalizedSectionMap>> {
   }
 };
 
-template <>
-struct llvm::yaml::SequenceTraits<
-    std::vector<lld::coff::IncrementalLinkFile::ChunkInfo>> {
-  static size_t
-  size(IO &io, std::vector<lld::coff::IncrementalLinkFile::ChunkInfo> &seq) {
-    return seq.size();
-  }
-  static lld::coff::IncrementalLinkFile::ChunkInfo &
-  element(IO &io, std::vector<lld::coff::IncrementalLinkFile::ChunkInfo> &seq,
-          size_t index) {
-    if (index >= seq.size())
-      seq.resize(index + 1);
-    return seq[index];
-  }
-};
-
-template <>
-struct yaml::MappingTraits<lld::coff::IncrementalLinkFile::ChunkInfo> {
-  static void mapping(IO &io, lld::coff::IncrementalLinkFile::ChunkInfo &c) {
-    io.mapRequired("address", c.virtualAddress);
-    io.mapRequired("size", c.size);
-  }
-};
-
 template <> struct yaml::MappingTraits<NormalizedSectionMap> {
   static void mapping(IO &io, NormalizedSectionMap &sec) {
     io.mapRequired("name", sec.name);
     io.mapRequired("start-address", sec.virtualAddress);
     io.mapOptional("total-size", sec.size);
-    io.mapOptional("chunks", sec.chunks);
   }
 };
 
@@ -246,7 +213,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         std::vector<NormalizedSectionMap> sections;
         for (const auto &s : f.second.sections) {
           NormalizedSectionMap sectionMap(s.first, s.second.virtualAddress,
-                                          s.second.size, s.second.chunks);
+                                          s.second.size);
           sections.push_back(sectionMap);
         }
         NormalizedFileMap fileMap(f.first, f.second.hash, sections);
@@ -275,7 +242,6 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           lld::coff::IncrementalLinkFile::SectionInfo sectionData;
           sectionData.size = s.size;
           sectionData.virtualAddress = s.virtualAddress;
-          sectionData.chunks = s.chunks;
           obj.sections[s.name] = sectionData;
         }
         objFiles[f.name] = obj;

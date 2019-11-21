@@ -72,10 +72,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
         continue;
       StringRef const name = sc->file->getName();
       auto &sec = incrementalLinkFile->objFiles[name].sections[secName];
-      IncrementalLinkFile::ChunkInfo chunkInfo = {
-          sc->getRVA(),
-          alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment)};
-      sec.chunks.push_back(chunkInfo);
+
       // The contribution of one object file to one of the sections of the
       // output file can consist of n OutputChunks. However, they seem to
       // always be directly after each other, so storing the lowest address
