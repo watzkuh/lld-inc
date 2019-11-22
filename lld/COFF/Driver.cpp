@@ -82,6 +82,7 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
   config = make<Configuration>();
   symtab = make<SymbolTable>();
   driver = make<LinkerDriver>();
+  incrementalLinkFile = make<IncrementalLinkFile>();
 
   driver->link(args);
 
@@ -504,6 +505,10 @@ Optional<StringRef> LinkerDriver::findLib(StringRef filename) {
     if (!visitedFiles.insert(*id).second)
       return None;
   return path;
+}
+
+void LinkerDriver::clearVisitedFiles() {
+  visitedFiles.clear();
 }
 
 // Parses LIB environment which contains a list of search paths.

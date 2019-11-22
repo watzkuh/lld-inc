@@ -52,6 +52,7 @@ public:
   std::map<std::string, OutputSectionInfo> outputSections;
   std::map<std::string, uint64_t> definedSymbols;
   bool rewritePossible = false;
+  bool rewriteAborted = false;
   size_t paddedAlignment = 64;
 
   static void writeToDisk();

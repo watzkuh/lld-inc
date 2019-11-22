@@ -24,8 +24,10 @@ static std::vector<DefinedRegular *> getSymbols() {
 
 bool coff::initializeIlf(ArrayRef<char const *> argsArr,
                          std::string possibleOutput) {
-  incrementalLinkFile = make<IncrementalLinkFile>();
-
+  if (incrementalLinkFile->rewriteAborted) {
+    incrementalLinkFile->rewritePossible = false;
+    return incrementalLinkFile->rewritePossible;
+  }
   std::vector<std::string> mArgs;
   for (auto arg : argsArr) {
     mArgs.push_back(arg);

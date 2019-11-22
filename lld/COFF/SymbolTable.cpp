@@ -823,6 +823,9 @@ void SymbolTable::addCombinedLTOObjects() {
     ObjFile::instances.push_back(obj);
   }
 }
+void SymbolTable::clear() {
+  symMap.clear();
+}
 
 } // namespace coff
 } // namespace lld

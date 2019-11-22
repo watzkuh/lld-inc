@@ -116,6 +116,8 @@ public:
       callback(pair.second);
   }
 
+  void clear();
+
 private:
   /// Given a name without "__imp_" prefix, returns a defined symbol
   /// with the "__imp_" prefix, if it exists.

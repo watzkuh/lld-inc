@@ -79,6 +79,8 @@ public:
 
   void enqueuePath(StringRef path, bool wholeArchive, bool lazy);
 
+  void clearVisitedFiles();
+
 private:
   std::unique_ptr<llvm::TarWriter> tar; // for /linkrepro
 

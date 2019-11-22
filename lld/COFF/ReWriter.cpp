@@ -1,6 +1,7 @@
 
 #include "ReWriter.h"
 #include "Chunks.h"
+#include "Driver.h"
 #include "IncrementalLinkFile.h"
 #include "InputFiles.h"
 #include "SymbolTable.h"
@@ -21,6 +22,18 @@ using namespace lld::coff;
 static Timer patchTimer("Binary Patching", Timer::root());
 std::unique_ptr<FileOutputBuffer> binary;
 
+void abortIncrementalLink() {
+  outs() << "Incremental link aborted, starting clean link...\n";
+  binary->discard();
+  symtab->clear();
+  incrementalLinkFile->rewriteAborted = true;
+  driver->clearVisitedFiles();
+  std::vector<char *> args;
+  for (auto &a : incrementalLinkFile->arguments)
+    args.push_back(&a[0]);
+  driver->link(ArrayRef<char *>(args));
+}
+
 void rewriteTextSection(ObjFile *file) {
   outs() << "Rewriting .text section for file " << file->getName() << "\n";
 
@@ -34,11 +47,12 @@ void rewriteTextSection(ObjFile *file) {
   uint32_t chunkStart = incrementalLinkFile->objFiles[file->getName()]
                             .sections[".text"]
                             .virtualAddress;
+  uint32_t contribSize = 0;
 
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
 
-    if (sc->getSectionName() != ".text") {
+    if (sc->getSectionName() != ".text" || sc->getSize() == 0) {
       continue;
     }
     const size_t paddedSize =
@@ -68,7 +82,7 @@ void rewriteTextSection(ObjFile *file) {
       uint8_t *off = buf + rel.VirtualAddress;
 
       // Compute the RVA of the relocation for relative relocations.
-      uint64_t p = chunkStart + rel.VirtualAddress;
+      uint64_t p = chunkStart + contribSize + rel.VirtualAddress;
       OutputSection *os = nullptr; // not that interesting at the moment TODO:
       switch (config->machine) {
       case AMD64:
@@ -87,8 +101,14 @@ void rewriteTextSection(ObjFile *file) {
         llvm_unreachable("unknown machine type");
       }
     }
-    chunkStart += paddedSize;
+    contribSize += paddedSize;
     buf += paddedSize;
+  }
+  if (secInfo.size != contribSize) {
+    outs() << "New text section is not the same size \n";
+    outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
+    abortIncrementalLink();
+    return;
   }
 }
 
@@ -101,13 +121,17 @@ void rewriteDataSection(ObjFile *file) {
                 outputDataSection.virtualAddress;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
-    if (sc->getSectionName() == ".data") {
-      if (secInfo.size != sc->getSize()) {
-        outs() << "New data section is not the same size \n";
-        outs() << "New: " << sc->getSize() << "\tOld: " << secInfo.size << "\n";
-      }
-      c->writeTo(binary->getBufferStart() + offset);
+    if (sc->getSectionName() != ".data" || sc->getSize() == 0) {
+      continue;
     }
+    auto newSize = alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+    if (secInfo.size != newSize) {
+      outs() << "New data section is not the same size \n";
+      outs() << "New: " << newSize << "\tOld: " << secInfo.size << "\n";
+      abortIncrementalLink();
+      return;
+    }
+    c->writeTo(binary->getBufferStart() + offset);
   }
   outs() << "Patched " << secInfo.size << " bytes \n";
 }
@@ -124,10 +148,16 @@ void coff::rewriteResult() {
   binary = CHECK(FileOutputBuffer::create(incrementalLinkFile->outputFile, -1,
                                           llvm::FileOutputBuffer::F_modify),
                  "failed to open " + incrementalLinkFile->outputFile);
-  while (!rewriteQueue.empty()) {
+  while (!rewriteQueue.empty() && !incrementalLinkFile->rewriteAborted) {
     rewriteQueue.front()();
     rewriteQueue.pop_front();
   }
+
+  if (incrementalLinkFile->rewriteAborted) {
+    t.stop();
+    return;
+  }
+
   StringRef binaryFileData(
       reinterpret_cast<const char *>(binary->getBufferStart()),
       binary->getBufferSize());
