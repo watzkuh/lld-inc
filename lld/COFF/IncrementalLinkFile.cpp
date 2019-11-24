@@ -95,12 +95,11 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     }
     auto &s = incrementalLinkFile->definedSymbols[sym->getName()];
     s.definitionAddress = sym->getRVA();
-    s.fileDefinedIn = sym->getFile()->getName();
     if (s.filesUsedIn.size() <= 1)
       continue;
     for (auto &used : s.filesUsedIn) {
-      if (used != s.fileDefinedIn)
-        incrementalLinkFile->objFiles[s.fileDefinedIn].dependentFiles.insert(
+      if (used != sym->getFile()->getName())
+        incrementalLinkFile->objFiles[sym->getFile()->getName()].dependentFiles.insert(
             used);
     }
   }

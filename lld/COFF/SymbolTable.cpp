@@ -483,7 +483,10 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef name) {
 
 std::pair<Symbol *, bool> SymbolTable::insert(StringRef name, InputFile *file) {
   std::pair<Symbol *, bool> result = insert(name);
-  if (file && config->incrementalLink) {
+  if (file && config->incrementalLink &&
+      incrementalLinkFile->input.count(
+          file->getName())) { // TODO: Kind of hacky way, maybe create hashmap
+                              // of input -> exitsts or not
     incrementalLinkFile->definedSymbols[name.str()].filesUsedIn.insert(
         file->getName().str());
   }

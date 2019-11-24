@@ -41,7 +41,6 @@ struct IncrementalLinkFile {
 
   struct SymbolInfo {
     uint64_t definitionAddress;
-    std::string fileDefinedIn;
     std::set<std::string> filesUsedIn;
   };
 
@@ -212,13 +211,8 @@ template <> struct yaml::MappingTraits<NormalizedFileMap> {
 
 struct NormalizedSymbolInfo {
   NormalizedSymbolInfo() {}
-  NormalizedSymbolInfo(uint64_t d, std::string f,
-                       std::vector<std::string> files)
-      : definitionAddress(d), fileDefinedIn(std::move(f)),
-        filesUsedIn(std::move(files)) {}
+  NormalizedSymbolInfo(uint64_t d) : definitionAddress(d) {}
   uint64_t definitionAddress;
-  std::string fileDefinedIn;
-  std::vector<std::string> filesUsedIn;
 };
 
 struct NormalizedSymbolMap {
@@ -233,8 +227,6 @@ template <> struct yaml::MappingTraits<NormalizedSymbolMap> {
   static void mapping(IO &io, NormalizedSymbolMap &symbol) {
     io.mapRequired("name", symbol.name);
     io.mapRequired("address", symbol.symInfo.definitionAddress);
-    io.mapRequired("defined-in", symbol.symInfo.fileDefinedIn);
-    io.mapRequired("used-in", symbol.symInfo.filesUsedIn);
   }
 };
 
@@ -283,14 +275,8 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         files.push_back(fileMap);
       }
       for (const auto &s : ilf.definedSymbols) {
-        NormalizedSymbolMap symMap;
-        NormalizedSymbolInfo symInfo;
-        symInfo.fileDefinedIn = s.second.fileDefinedIn;
-        symInfo.definitionAddress = s.second.definitionAddress;
-        for (auto &a : s.second.filesUsedIn)
-          symInfo.filesUsedIn.push_back(a);
-        symMap.name = s.first;
-        symMap.symInfo = symInfo;
+        NormalizedSymbolInfo symInfo{s.second.definitionAddress};
+        NormalizedSymbolMap symMap{s.first, symInfo};
         definedSymbols.push_back(symMap);
       }
     }
@@ -324,12 +310,9 @@ template <> struct MappingTraits<IncrementalLinkFile> {
       std::map<std::string, lld::coff::IncrementalLinkFile::SymbolInfo>
           definedSymbols;
       for (auto &s : this->definedSymbols) {
-        std::set<std::string> filesUsedIn;
-        for (auto &used : s.symInfo.filesUsedIn) {
-          filesUsedIn.insert(used);
-        }
-        definedSymbols[s.name] = lld::coff::IncrementalLinkFile::SymbolInfo{
-            s.symInfo.definitionAddress, s.symInfo.fileDefinedIn, filesUsedIn};
+        lld::coff::IncrementalLinkFile::SymbolInfo symInfo;
+        symInfo.definitionAddress = s.symInfo.definitionAddress;
+        definedSymbols[s.name] = symInfo;
       }
 
       return IncrementalLinkFile(arguments, objFiles, outputFile, outputHash,
