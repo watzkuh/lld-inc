@@ -15,10 +15,11 @@ using namespace lld::coff;
 static std::vector<DefinedRegular *> getSymbols() {
   std::vector<DefinedRegular *> v;
   for (ObjFile *file : ObjFile::instances)
-    for (Symbol *b : file->getSymbols())
+    for (Symbol *b : file->getSymbols()) {
       if (auto *sym = dyn_cast_or_null<DefinedRegular>(b))
         if (sym && !sym->getCOFFSymbol().isSectionDefinition())
           v.push_back(sym);
+    }
   return v;
 }
 
@@ -86,8 +87,18 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   }
   // TODO: Create own function for writing symbol list
   for (auto &sym : getSymbols()) {
-    if (sym->getRVA() != 0 && sym->isLive()) {
-      incrementalLinkFile->definedSymbols[sym->getName()] = sym->getRVA();
+    if (sym->getRVA() == 0 || !sym->isLive()) {
+      continue;
+    }
+    auto &s = incrementalLinkFile->definedSymbols[sym->getName()];
+    s.definitionAddress = sym->getRVA();
+    s.fileDefinedIn = sym->getFile()->getName();
+    if (s.filesUsedIn.size() <= 1)
+      continue;
+    for (auto &used : s.filesUsedIn) {
+      if (used != s.fileDefinedIn)
+        incrementalLinkFile->objFiles[s.fileDefinedIn].dependentFiles.insert(
+            used);
     }
   }
 }

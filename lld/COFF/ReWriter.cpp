@@ -22,6 +22,9 @@ using namespace lld::coff;
 static Timer patchTimer("Binary Patching", Timer::root());
 std::unique_ptr<FileOutputBuffer> binary;
 
+std::vector<ObjFile *> changedFiles;
+std::set<std::string> dependentFileNames;
+
 void abortIncrementalLink() {
   outs() << "Incremental link aborted, starting clean link...\n";
   binary->discard();
@@ -32,6 +35,25 @@ void abortIncrementalLink() {
   for (auto &a : incrementalLinkFile->arguments)
     args.push_back(&a[0]);
   driver->link(ArrayRef<char *>(args));
+}
+
+void assignAddresses(ObjFile *file) {
+  std::map<std::string, uint32_t> rvas;
+  for (auto &s : incrementalLinkFile->objFiles[file->getName()].sections) {
+    rvas[s.first] = s.second.virtualAddress;
+  }
+  for (Chunk *c : file->getChunks()) {
+    auto *sc = dyn_cast<SectionChunk>(c);
+    sc->setRVA(rvas[sc->getSectionName()]);
+    rvas[sc->getSectionName()] +=
+        alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+  }
+}
+
+void markDependentFiles(ObjFile *file) {
+  auto &f = incrementalLinkFile->objFiles[file->getName()];
+  for (auto &dep : f.dependentFiles)
+    dependentFileNames.insert(dep);
 }
 
 void rewriteTextSection(ObjFile *file) {
@@ -69,15 +91,13 @@ void rewriteTextSection(ObjFile *file) {
       uint64_t s = 0;
       if (definedSym != nullptr) {
         // The target of the relocation
-        s = incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
-                .sections[definedSym->getChunk()->getSectionName()]
-                .virtualAddress +
-            definedSym->getRVA(); //  only returns offset within the same chunk
+        s = definedSym->getRVA();
       }
       // Fallback to symbol table if we either have no information
       // about the chunk or the symbol
       if (definedSym == nullptr || s == 0 || definedSym->getRVA() == 0) {
-        s = incrementalLinkFile->definedSymbols[sym->getName()];
+        s = incrementalLinkFile->definedSymbols[sym->getName()]
+                .definitionAddress;
       }
       uint8_t *off = buf + rel.VirtualAddress;
 
@@ -137,8 +157,9 @@ void rewriteDataSection(ObjFile *file) {
 }
 
 void coff::rewriteFile(coff::ObjFile *file) {
-  rewriteTextSection(file);
-  rewriteDataSection(file);
+  markDependentFiles(file);
+  assignAddresses(file);
+  changedFiles.push_back(file);
 }
 
 void coff::doNothing() {}
@@ -151,6 +172,15 @@ void coff::rewriteResult() {
   while (!rewriteQueue.empty() && !incrementalLinkFile->rewriteAborted) {
     rewriteQueue.front()();
     rewriteQueue.pop_front();
+  }
+
+  for (auto &f : changedFiles) {
+    rewriteTextSection(f);
+    rewriteDataSection(f);
+  }
+
+  for (auto &f : dependentFileNames) {
+    //TODO: Reapply relocations
   }
 
   if (incrementalLinkFile->rewriteAborted) {
