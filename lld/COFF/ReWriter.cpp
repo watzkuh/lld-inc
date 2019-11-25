@@ -56,10 +56,6 @@ void markDependentFiles(ObjFile *file) {
     dependentFileNames.insert(dep);
 }
 
-// It's probably nicer to only reapply the updated relocations for dependent
-// files Problems for the moment: Apply Rel adds instead of sets the target
-// address. Symbol is not defined when rewriting text section, so we do not have
-// the new address
 void applyRelocations(const std::string &fileName) {
   outs() << "Applying relocations for file " << fileName << "\n";
   auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[".text"];
@@ -75,6 +71,7 @@ void applyRelocations(const std::string &fileName) {
           incrementalLinkFile->definedSymbols[sym.first].definitionAddress;
       for (const auto &rel : sym.second.relocations) {
         uint8_t *off = buf + rel.virtualAddress;
+        memset(off, 0x0, 4); // Delete the old address
         uint64_t p = chunkStart + rel.virtualAddress;
         SectionChunk sc;
         outs() << off << " " << s << " " << p << "\n";
@@ -136,8 +133,6 @@ void rewriteTextSection(ObjFile *file) {
       if (definedSym != nullptr) {
         // The target of the relocation
         s = definedSym->getRVA();
-        incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
-            s;
       }
       // Fallback to symbol table if we either have no information
       // about the chunk or the symbol
@@ -170,12 +165,23 @@ void rewriteTextSection(ObjFile *file) {
     contribSize += paddedSize;
     buf += paddedSize;
   }
+
   if (secInfo.size != contribSize) {
     outs() << "New text section is not the same size \n";
     outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
     abortIncrementalLink();
     return;
   }
+
+  // Update symbol table entries
+  for (const auto &sym : file->getSymbols()) {
+    auto *definedSym = dyn_cast_or_null<Defined>(sym);
+    if (definedSym) {
+      incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
+          definedSym->getRVA();
+    }
+  }
+
 }
 
 void rewriteDataSection(ObjFile *file) {
@@ -226,7 +232,7 @@ void coff::rewriteResult() {
   }
 
   for (auto &f : dependentFileNames) {
-    // applyRelocations(f);
+    applyRelocations(f);
   }
 
   if (incrementalLinkFile->rewriteAborted) {
