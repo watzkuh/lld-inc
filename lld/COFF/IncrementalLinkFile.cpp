@@ -74,10 +74,33 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       if (!sc || sc->getSectionName() != secName || !sc->getSize())
         continue;
       StringRef const name = sc->file->getName();
+      if (!incrementalLinkFile->input.count(
+              name)) // TODO: Kind of hacky way, maybe create hashmap of input->
+        // exists or not
+        continue;
+
       auto &sec = incrementalLinkFile->objFiles[name].sections[secName];
-      IncrementalLinkFile::ChunkInfo chunkInfo = {
-          sc->getRVA(),
-          alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment)};
+
+      IncrementalLinkFile::ChunkInfo chunkInfo;
+      chunkInfo.virtualAddress = sc->getRVA();
+      chunkInfo.size =
+          alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+
+      for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
+        const coff_relocation &rel = sc->getRelocs()[j];
+        auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
+        auto *definedSym = dyn_cast_or_null<Defined>(sym);
+        if (definedSym) {
+          IncrementalLinkFile::SymbolInfo symbolInfo;
+          symbolInfo.definitionAddress = definedSym->getRVA();
+          IncrementalLinkFile::RelocationInfo relInfo{rel.VirtualAddress,
+                                                      rel.Type};
+          if (!chunkInfo.symbols.count(definedSym->getName()))
+            chunkInfo.symbols[definedSym->getName()] = symbolInfo;
+          chunkInfo.symbols[definedSym->getName()].relocations.push_back(
+              relInfo);
+        }
+      }
       sec.chunks.push_back(chunkInfo);
       // The contribution of one object file to one of the sections of the
       // output file can consist of n OutputChunks. However, they seem to
@@ -99,8 +122,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       continue;
     for (auto &used : s.filesUsedIn) {
       if (used != sym->getFile()->getName())
-        incrementalLinkFile->objFiles[sym->getFile()->getName()].dependentFiles.insert(
-            used);
+        incrementalLinkFile->objFiles[sym->getFile()->getName()]
+            .dependentFiles.insert(used);
     }
   }
 }

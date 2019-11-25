@@ -56,6 +56,50 @@ void markDependentFiles(ObjFile *file) {
     dependentFileNames.insert(dep);
 }
 
+// It's probably nicer to only reapply the updated relocations for dependent
+// files Problems for the moment: Apply Rel adds instead of sets the target
+// address. Symbol is not defined when rewriting text section, so we do not have
+// the new address
+void applyRelocations(const std::string &fileName) {
+  outs() << "Applying relocations for file " << fileName << "\n";
+  auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[".text"];
+  auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
+  auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
+                outputTextSection.virtualAddress;
+  uint8_t *buf = binary->getBufferStart() + offset;
+  OutputSection *os = nullptr;
+  for (const auto &c : secInfo.chunks) {
+    uint32_t chunkStart = c.virtualAddress;
+    for (const auto &sym : c.symbols) {
+      uint64_t s =
+          incrementalLinkFile->definedSymbols[sym.first].definitionAddress;
+      for (const auto &rel : sym.second.relocations) {
+        uint8_t *off = buf + rel.virtualAddress;
+        uint64_t p = chunkStart + rel.virtualAddress;
+        SectionChunk sc;
+        outs() << off << " " << s << " " << p << "\n";
+        switch (config->machine) {
+        case AMD64:
+          sc.applyRelX64(off, rel.type, os, s, p);
+          break;
+        case I386:
+          sc.applyRelX86(off, rel.type, os, s, p);
+          break;
+        case ARMNT:
+          sc.applyRelARM(off, rel.type, os, s, p);
+          break;
+        case ARM64:
+          sc.applyRelARM64(off, rel.type, os, s, p);
+          break;
+        default:
+          llvm_unreachable("unknown machine type");
+        }
+      }
+    }
+    buf += c.size;
+  }
+}
+
 void rewriteTextSection(ObjFile *file) {
   outs() << "Rewriting .text section for file " << file->getName() << "\n";
 
@@ -92,10 +136,12 @@ void rewriteTextSection(ObjFile *file) {
       if (definedSym != nullptr) {
         // The target of the relocation
         s = definedSym->getRVA();
+        incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
+            s;
       }
       // Fallback to symbol table if we either have no information
       // about the chunk or the symbol
-      if (definedSym == nullptr || s == 0 || definedSym->getRVA() == 0) {
+      if (definedSym == nullptr || s == 0) {
         s = incrementalLinkFile->definedSymbols[sym->getName()]
                 .definitionAddress;
       }
@@ -180,7 +226,7 @@ void coff::rewriteResult() {
   }
 
   for (auto &f : dependentFileNames) {
-    //TODO: Reapply relocations
+    // applyRelocations(f);
   }
 
   if (incrementalLinkFile->rewriteAborted) {
