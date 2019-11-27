@@ -373,7 +373,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
               symbols[sym.name] = symbolInfo;
             }
             lld::coff::IncrementalLinkFile::ChunkInfo chunkInfo{
-                c.virtualAddress, c.virtualAddress, symbols};
+                c.virtualAddress, c.size, symbols};
             sectionData.chunks.push_back(chunkInfo);
           }
           obj.sections[sec.name] = sectionData;
