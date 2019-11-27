@@ -174,28 +174,34 @@ void rewriteTextSection(ObjFile *file) {
   }
 }
 
-void rewriteDataSection(ObjFile *file) {
-  outs() << "Rewriting .data section for file " << file->getName() << "\n";
-  auto &secInfo =
-      incrementalLinkFile->objFiles[file->getName()].sections[".data"];
-  auto &outputDataSection = incrementalLinkFile->outputSections[".data"];
-  auto offset = outputDataSection.rawAddress + secInfo.virtualAddress -
-                outputDataSection.virtualAddress;
+void rewriteDataSections(ObjFile *file) {
+  // Assumption for the moment: Only one section per file for .data/.rdata
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
-    if (sc->getSectionName() != ".data" || sc->getSize() == 0) {
+    const auto &secName = sc->getSectionName();
+    if ((secName != ".data" && secName != ".rdata") || sc->getSize() == 0) {
       continue;
     }
+    outs() << "Rewriting " << secName << " section for file " << file->getName()
+           << "\n";
+
+    auto &secInfo =
+        incrementalLinkFile->objFiles[file->getName()].sections[secName];
+    auto &outputDataSection = incrementalLinkFile->outputSections[secName];
+    auto offset = outputDataSection.rawAddress + secInfo.virtualAddress -
+                  outputDataSection.virtualAddress;
     auto newSize = alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+
     if (secInfo.size != newSize) {
       outs() << "New data section is not the same size \n";
       outs() << "New: " << newSize << "\tOld: " << secInfo.size << "\n";
       abortIncrementalLink();
       return;
     }
+
     c->writeTo(binary->getBufferStart() + offset);
+    outs() << "Patched " << secInfo.size << " bytes \n";
   }
-  outs() << "Patched " << secInfo.size << " bytes \n";
 }
 
 void coff::rewriteFile(coff::ObjFile *file) {
@@ -218,7 +224,7 @@ void coff::rewriteResult() {
 
   for (auto &f : changedFiles) {
     rewriteTextSection(f);
-    rewriteDataSection(f);
+    rewriteDataSections(f);
   }
 
   for (auto &f : dependentFileNames) {
