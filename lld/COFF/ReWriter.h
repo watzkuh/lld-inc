@@ -9,7 +9,7 @@ using namespace llvm;
 namespace lld {
 namespace coff {
 
-void rewriteFile(ObjFile *file);
+void markForReWrite(ObjFile *file);
 
 void doNothing();
 

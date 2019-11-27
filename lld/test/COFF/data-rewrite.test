@@ -15,8 +15,8 @@ CHECK: No incremental
 INC: Attempting incremental link
 INC-NOT: function.obj has changed
 INC-NEXT: extern-data.obj has changed
-INC: Rewriting .text section
 INC: Rewriting .data section
+INC: Rewriting .text section
 
 # RUN: llvm-readobj --sections --section-data %t.dir/inc.exe > %t.dir/incremental-link
 # RUN: not diff %t.dir/clean-link %t.dir/incremental-link | FileCheck --check-prefix=DIFF %s

@@ -12,6 +12,6 @@ CHECK: No incremental
 # RUN:   %t.dir/extern-data.obj %t.dir/function.obj | FileCheck --check-prefix=INC %s
 
 INC: Attempting incremental link
-INC: New data section is not the same size
+INC: New .data section is not the same size
 INC-NEXT: New: 384        Old: 64
 INC-NEXT: Incremental link aborted

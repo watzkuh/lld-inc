@@ -113,25 +113,23 @@ void updateSymbolTable(ObjFile *file) {
   }
 }
 
-void rewriteTextSection(ObjFile *file) {
-  outs() << "Rewriting .text section for file " << file->getName() << "\n";
+void rewriteTextSection(const std::vector<SectionChunk *> &chunks,
+                        StringRef fileName) {
+  StringRef secName = ".text";
+  outs() << "Rewriting .text section for file " << fileName << "\n";
 
-  auto &secInfo =
-      incrementalLinkFile->objFiles[file->getName()].sections[".text"];
-  auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
+  auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[secName];
+  auto &outputTextSection = incrementalLinkFile->outputSections[secName];
   auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
                 outputTextSection.virtualAddress;
 
   uint8_t *buf = binary->getBufferStart() + offset;
-  uint32_t chunkStart = incrementalLinkFile->objFiles[file->getName()]
-                            .sections[".text"]
-                            .virtualAddress;
+  uint32_t chunkStart =
+      incrementalLinkFile->objFiles[fileName].sections[secName].virtualAddress;
   uint32_t contribSize = 0;
 
-  for (Chunk *c : file->getChunks()) {
-    auto *sc = dyn_cast<SectionChunk>(c);
-
-    if (sc->getSectionName() != ".text" || sc->getSize() == 0) {
+  for (SectionChunk *sc : chunks) {
+    if (sc->getSize() == 0) {
       continue;
     }
     const size_t paddedSize =
@@ -143,7 +141,7 @@ void rewriteTextSection(ObjFile *file) {
 
     for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
       const coff_relocation &rel = sc->getRelocs()[j];
-      auto *sym = file->getSymbol(rel.SymbolTableIndex);
+      auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
       auto *definedSym = dyn_cast_or_null<Defined>(sym);
       uint64_t s = 0;
       if (definedSym != nullptr) {
@@ -175,37 +173,46 @@ void rewriteTextSection(ObjFile *file) {
   }
 }
 
-void rewriteDataSections(ObjFile *file) {
+void rewriteDataSection(SectionChunk *sc, StringRef fileName,
+                        StringRef secName) {
   // Assumption for the moment: Only one section per file for .data/.rdata
-  for (Chunk *c : file->getChunks()) {
-    auto *sc = dyn_cast<SectionChunk>(c);
-    const auto &secName = sc->getSectionName();
-    if ((secName != ".data" && secName != ".rdata") || sc->getSize() == 0) {
-      continue;
-    }
-    outs() << "Rewriting " << secName << " section for file " << file->getName()
-           << "\n";
 
-    auto &secInfo =
-        incrementalLinkFile->objFiles[file->getName()].sections[secName];
-    auto &outputDataSection = incrementalLinkFile->outputSections[secName];
-    auto offset = outputDataSection.rawAddress + secInfo.virtualAddress -
-                  outputDataSection.virtualAddress;
-    auto newSize = alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+  outs() << "Rewriting " << secName << " section for file " << fileName << "\n";
 
-    if (secInfo.size != newSize) {
-      outs() << "New data section is not the same size \n";
-      outs() << "New: " << newSize << "\tOld: " << secInfo.size << "\n";
-      abortIncrementalLink();
-      return;
-    }
+  auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[secName];
+  auto &outputDataSection = incrementalLinkFile->outputSections[secName];
+  auto offset = outputDataSection.rawAddress + secInfo.virtualAddress -
+                outputDataSection.virtualAddress;
+  auto newSize = alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
 
-    c->writeTo(binary->getBufferStart() + offset);
-    outs() << "Patched " << secInfo.size << " bytes \n";
+  if (secInfo.size != newSize) {
+    outs() << "New " << secName << " section is not the same size \n";
+    outs() << "New: " << newSize << "\tOld: " << secInfo.size << "\n";
+    abortIncrementalLink();
+    return;
   }
+
+  sc->writeTo(binary->getBufferStart() + offset);
+  outs() << "Patched " << secInfo.size << " bytes \n";
 }
 
-void coff::rewriteFile(coff::ObjFile *file) {
+void rewriteFile(ObjFile *file) {
+  std::vector<SectionChunk *> textChunks;
+  const StringRef fileName = file->getName();
+  for (Chunk *c : file->getChunks()) {
+    auto *sc = dyn_cast<SectionChunk>(c);
+    StringRef secName = sc->getSectionName();
+    if (secName == ".text")
+      textChunks.push_back(sc);
+    else if (secName == ".data" || secName == ".rdata") {
+      rewriteDataSection(sc, fileName, secName);
+    }
+  }
+  rewriteTextSection(textChunks, fileName);
+  updateSymbolTable(file);
+}
+
+void coff::markForReWrite(coff::ObjFile *file) {
   markDependentFiles(file);
   assignAddresses(file);
   changedFiles.push_back(file);
@@ -223,15 +230,11 @@ void coff::rewriteResult() {
     rewriteQueue.pop_front();
   }
 
-  for (auto &f : changedFiles) {
-    rewriteTextSection(f);
-    rewriteDataSections(f);
-    updateSymbolTable(f);
-  }
+  for (auto &f : changedFiles)
+    rewriteFile(f);
 
-  for (auto &f : dependentFileNames) {
+  for (auto &f : dependentFileNames)
     reapplyRelocations(f);
-  }
 
   if (incrementalLinkFile->rewriteAborted) {
     t.stop();
