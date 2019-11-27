@@ -103,6 +103,16 @@ void reapplyRelocations(const std::string &fileName) {
   }
 }
 
+void updateSymbolTable(ObjFile *file) {
+  for (const auto &sym : file->getSymbols()) {
+    auto *definedSym = dyn_cast_or_null<Defined>(sym);
+    if (definedSym) {
+      incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
+          definedSym->getRVA();
+    }
+  }
+}
+
 void rewriteTextSection(ObjFile *file) {
   outs() << "Rewriting .text section for file " << file->getName() << "\n";
 
@@ -163,15 +173,6 @@ void rewriteTextSection(ObjFile *file) {
     abortIncrementalLink();
     return;
   }
-
-  // Update symbol table entries
-  for (const auto &sym : file->getSymbols()) {
-    auto *definedSym = dyn_cast_or_null<Defined>(sym);
-    if (definedSym) {
-      incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
-          definedSym->getRVA();
-    }
-  }
 }
 
 void rewriteDataSections(ObjFile *file) {
@@ -225,6 +226,7 @@ void coff::rewriteResult() {
   for (auto &f : changedFiles) {
     rewriteTextSection(f);
     rewriteDataSections(f);
+    updateSymbolTable(f);
   }
 
   for (auto &f : dependentFileNames) {
