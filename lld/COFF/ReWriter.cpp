@@ -140,8 +140,11 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 
   auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[secName];
   auto &outputSectionInfo = incrementalLinkFile->outputSections[secName];
-  auto offset = outputSectionInfo.rawAddress + secInfo.virtualAddress -
-                outputSectionInfo.virtualAddress;
+  auto offset =
+      outputSectionInfo.rawAddress +
+      (secInfo.virtualAddress < outputSectionInfo.virtualAddress
+           ? 0
+           : secInfo.virtualAddress - outputSectionInfo.virtualAddress);
 
   uint8_t *buf = binary->getBufferStart() + offset;
   uint32_t contribSize = 0;
