@@ -56,14 +56,34 @@ void markDependentFiles(ObjFile *file) {
     dependentFileNames.insert(dep);
 }
 
-void applyRelocations(const std::string &fileName) {
+void applyRelocation(SectionChunk sc, uint8_t *off, support::ulittle16_t type,
+                     uint64_t s, uint64_t p) {
+  OutputSection *os = nullptr; // not that interesting at the moment TODO:
+  switch (config->machine) {
+  case AMD64:
+    sc.applyRelX64(off, type, os, s, p);
+    break;
+  case I386:
+    sc.applyRelX86(off, type, os, s, p);
+    break;
+  case ARMNT:
+    sc.applyRelARM(off, type, os, s, p);
+    break;
+  case ARM64:
+    sc.applyRelARM64(off, type, os, s, p);
+    break;
+  default:
+    llvm_unreachable("unknown machine type");
+  }
+}
+
+void reapplyRelocations(const std::string &fileName) {
   outs() << "Applying relocations for file " << fileName << "\n";
   auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[".text"];
   auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
   auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
                 outputTextSection.virtualAddress;
   uint8_t *buf = binary->getBufferStart() + offset;
-  OutputSection *os = nullptr;
   for (const auto &c : secInfo.chunks) {
     uint32_t chunkStart = c.virtualAddress;
     for (const auto &sym : c.symbols) {
@@ -71,26 +91,12 @@ void applyRelocations(const std::string &fileName) {
           incrementalLinkFile->definedSymbols[sym.first].definitionAddress;
       for (const auto &rel : sym.second.relocations) {
         uint8_t *off = buf + rel.virtualAddress;
-        memset(off, 0x0, 4); // Delete the old address
+        memset(off, 0x0,
+               4); // Delete the old address TODO: 16/64 bit relocation
         uint64_t p = chunkStart + rel.virtualAddress;
         SectionChunk sc;
         outs() << off << " " << s << " " << p << "\n";
-        switch (config->machine) {
-        case AMD64:
-          sc.applyRelX64(off, rel.type, os, s, p);
-          break;
-        case I386:
-          sc.applyRelX86(off, rel.type, os, s, p);
-          break;
-        case ARMNT:
-          sc.applyRelARM(off, rel.type, os, s, p);
-          break;
-        case ARM64:
-          sc.applyRelARM64(off, rel.type, os, s, p);
-          break;
-        default:
-          llvm_unreachable("unknown machine type");
-        }
+        applyRelocation(sc, off, rel.type, s, p);
       }
     }
     buf += c.size;
@@ -144,23 +150,8 @@ void rewriteTextSection(ObjFile *file) {
 
       // Compute the RVA of the relocation for relative relocations.
       uint64_t p = chunkStart + contribSize + rel.VirtualAddress;
-      OutputSection *os = nullptr; // not that interesting at the moment TODO:
-      switch (config->machine) {
-      case AMD64:
-        sc->applyRelX64(off, rel.Type, os, s, p);
-        break;
-      case I386:
-        sc->applyRelX86(off, rel.Type, os, s, p);
-        break;
-      case ARMNT:
-        sc->applyRelARM(off, rel.Type, os, s, p);
-        break;
-      case ARM64:
-        sc->applyRelARM64(off, rel.Type, os, s, p);
-        break;
-      default:
-        llvm_unreachable("unknown machine type");
-      }
+
+      applyRelocation(*sc, off, rel.Type, s, p);
     }
     contribSize += paddedSize;
     buf += paddedSize;
@@ -181,7 +172,6 @@ void rewriteTextSection(ObjFile *file) {
           definedSym->getRVA();
     }
   }
-
 }
 
 void rewriteDataSection(ObjFile *file) {
@@ -232,7 +222,7 @@ void coff::rewriteResult() {
   }
 
   for (auto &f : dependentFileNames) {
-    applyRelocations(f);
+    reapplyRelocations(f);
   }
 
   if (incrementalLinkFile->rewriteAborted) {
