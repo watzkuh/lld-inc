@@ -95,11 +95,77 @@ void reapplyRelocations(const std::string &fileName) {
                4); // Delete the old address TODO: 16/64 bit relocation
         uint64_t p = chunkStart + rel.virtualAddress;
         SectionChunk sc;
-        outs() << off << " " << s << " " << p << "\n";
         applyRelocation(sc, off, rel.type, s, p);
       }
     }
     buf += c.size;
+  }
+}
+
+void rewriteTextSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
+
+  memcpy(buf, sc->getContents().data(), sc->getSize());
+
+  for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
+    const coff_relocation &rel = sc->getRelocs()[j];
+    auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
+    auto *definedSym = dyn_cast_or_null<Defined>(sym);
+    uint64_t s = 0;
+    if (definedSym != nullptr) {
+      // The target of the relocation
+      s = definedSym->getRVA();
+    }
+    // Fallback to symbol table if we either have no information
+    // about the chunk or the symbol
+    if (definedSym == nullptr || s == 0) {
+      s = incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress;
+    }
+    uint8_t *off = buf + rel.VirtualAddress;
+
+    // Compute the RVA of the relocation for relative relocations.
+    uint64_t p = chunkStart + rel.VirtualAddress;
+
+    applyRelocation(*sc, off, rel.Type, s, p);
+  }
+}
+
+void rewriteSection(const std::vector<SectionChunk *> &chunks,
+                    StringRef fileName, StringRef secName) {
+
+  // All currently supported sections
+  if (secName != ".text" && secName != ".data" && secName != ".rdata")
+    return;
+
+  outs() << "Rewriting " << secName << " section for file " << fileName << "\n";
+
+  auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[secName];
+  auto &outputSectionInfo = incrementalLinkFile->outputSections[secName];
+  auto offset = outputSectionInfo.rawAddress + secInfo.virtualAddress -
+                outputSectionInfo.virtualAddress;
+
+  uint8_t *buf = binary->getBufferStart() + offset;
+  uint32_t contribSize = 0;
+
+  for (SectionChunk *sc : chunks) {
+    const size_t paddedSize =
+        alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+    if (secName == ".text") {
+      memset(buf, 0xCC, paddedSize); // TODO: Think about if we have to do that
+                                     // for other sections as well
+      rewriteTextSection(sc, buf, (secInfo.virtualAddress + contribSize));
+    } else if (secName == ".data" || secName == ".rdata") {
+      sc->writeTo(buf);
+    }
+
+    contribSize += paddedSize;
+    buf += paddedSize;
+  }
+
+  if (secInfo.size != contribSize) {
+    outs() << "New " << secName << " section is not the same size \n";
+    outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
+    incrementalLinkFile->rewriteAborted = true;
+    return;
   }
 }
 
@@ -113,102 +179,15 @@ void updateSymbolTable(ObjFile *file) {
   }
 }
 
-void rewriteTextSection(const std::vector<SectionChunk *> &chunks,
-                        StringRef fileName) {
-  StringRef secName = ".text";
-  outs() << "Rewriting .text section for file " << fileName << "\n";
-
-  auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[secName];
-  auto &outputTextSection = incrementalLinkFile->outputSections[secName];
-  auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
-                outputTextSection.virtualAddress;
-
-  uint8_t *buf = binary->getBufferStart() + offset;
-  uint32_t chunkStart =
-      incrementalLinkFile->objFiles[fileName].sections[secName].virtualAddress;
-  uint32_t contribSize = 0;
-
-  for (SectionChunk *sc : chunks) {
-    if (sc->getSize() == 0) {
-      continue;
-    }
-    const size_t paddedSize =
-        alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
-
-    memset(buf, 0xCC, paddedSize);
-    memcpy(buf, sc->getContents().data(), sc->getSize());
-    outs() << "Patched " << paddedSize << " bytes \n";
-
-    for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
-      const coff_relocation &rel = sc->getRelocs()[j];
-      auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
-      auto *definedSym = dyn_cast_or_null<Defined>(sym);
-      uint64_t s = 0;
-      if (definedSym != nullptr) {
-        // The target of the relocation
-        s = definedSym->getRVA();
-      }
-      // Fallback to symbol table if we either have no information
-      // about the chunk or the symbol
-      if (definedSym == nullptr || s == 0) {
-        s = incrementalLinkFile->definedSymbols[sym->getName()]
-                .definitionAddress;
-      }
-      uint8_t *off = buf + rel.VirtualAddress;
-
-      // Compute the RVA of the relocation for relative relocations.
-      uint64_t p = chunkStart + contribSize + rel.VirtualAddress;
-
-      applyRelocation(*sc, off, rel.Type, s, p);
-    }
-    contribSize += paddedSize;
-    buf += paddedSize;
-  }
-
-  if (secInfo.size != contribSize) {
-    outs() << "New text section is not the same size \n";
-    outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
-    abortIncrementalLink();
-    return;
-  }
-}
-
-void rewriteDataSection(SectionChunk *sc, StringRef fileName,
-                        StringRef secName) {
-  // Assumption for the moment: Only one section per file for .data/.rdata
-
-  outs() << "Rewriting " << secName << " section for file " << fileName << "\n";
-
-  auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[secName];
-  auto &outputDataSection = incrementalLinkFile->outputSections[secName];
-  auto offset = outputDataSection.rawAddress + secInfo.virtualAddress -
-                outputDataSection.virtualAddress;
-  auto newSize = alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
-
-  if (secInfo.size != newSize) {
-    outs() << "New " << secName << " section is not the same size \n";
-    outs() << "New: " << newSize << "\tOld: " << secInfo.size << "\n";
-    abortIncrementalLink();
-    return;
-  }
-
-  sc->writeTo(binary->getBufferStart() + offset);
-  outs() << "Patched " << secInfo.size << " bytes \n";
-}
-
 void rewriteFile(ObjFile *file) {
-  std::vector<SectionChunk *> textChunks;
-  const StringRef fileName = file->getName();
+  std::map<StringRef, std::vector<SectionChunk *>> chunks;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
-    StringRef secName = sc->getSectionName();
-    if (secName == ".text")
-      textChunks.push_back(sc);
-    else if (secName == ".data" || secName == ".rdata") {
-      rewriteDataSection(sc, fileName, secName);
-    }
+    chunks[sc->getSectionName()].push_back(sc);
   }
-  rewriteTextSection(textChunks, fileName);
+  for (auto &sec : chunks) {
+    rewriteSection(sec.second, file->getName(), sec.first);
+  }
   updateSymbolTable(file);
 }
 
@@ -230,16 +209,17 @@ void coff::rewriteResult() {
     rewriteQueue.pop_front();
   }
 
-  for (auto &f : changedFiles)
+  for (auto &f : changedFiles) {
     rewriteFile(f);
+    if (incrementalLinkFile->rewriteAborted) {
+      t.stop();
+      abortIncrementalLink();
+      return;
+    }
+  }
 
   for (auto &f : dependentFileNames)
     reapplyRelocations(f);
-
-  if (incrementalLinkFile->rewriteAborted) {
-    t.stop();
-    return;
-  }
 
   StringRef binaryFileData(
       reinterpret_cast<const char *>(binary->getBufferStart()),
