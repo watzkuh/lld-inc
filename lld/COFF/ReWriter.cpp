@@ -23,7 +23,7 @@ static Timer patchTimer("Binary Patching", Timer::root());
 std::unique_ptr<FileOutputBuffer> binary;
 
 std::vector<ObjFile *> changedFiles;
-std::set<std::string> dependentFileNames;
+std::set<StringRef> dependentFileNames;
 
 void abortIncrementalLink() {
   outs() << "Incremental link aborted, starting clean link...\n";
@@ -38,7 +38,7 @@ void abortIncrementalLink() {
 }
 
 void assignAddresses(ObjFile *file) {
-  std::map<std::string, uint32_t> rvas;
+  std::map<StringRef, uint32_t> rvas;
   for (auto &s : incrementalLinkFile->objFiles[file->getName()].sections) {
     rvas[s.first] = s.second.virtualAddress;
   }
@@ -77,7 +77,7 @@ void applyRelocation(SectionChunk sc, uint8_t *off, support::ulittle16_t type,
   }
 }
 
-void reapplyRelocations(const std::string &fileName) {
+void reapplyRelocations(const StringRef &fileName) {
   outs() << "Applying relocations for file " << fileName << "\n";
   auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[".text"];
   auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
