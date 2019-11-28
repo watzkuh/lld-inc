@@ -153,10 +153,10 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     const size_t paddedSize =
         alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
     if (secName == ".text") {
-      memset(buf, 0xCC, paddedSize); // TODO: Think about if we have to do that
-                                     // for other sections as well
+      memset(buf, 0xCC, paddedSize);
       rewriteTextSection(sc, buf, (secInfo.virtualAddress + contribSize));
     } else if (secName == ".data" || secName == ".rdata") {
+      memset(buf, 0x0, paddedSize);
       sc->writeTo(buf);
     }
 
