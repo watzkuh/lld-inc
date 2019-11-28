@@ -175,7 +175,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 void updateSymbolTable(ObjFile *file) {
   for (const auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
-    if (definedSym) {
+    if (definedSym && definedSym->getRVA() != 0) {
       incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
           definedSym->getRVA();
     }
