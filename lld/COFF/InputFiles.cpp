@@ -116,7 +116,7 @@ ArchiveFile::ArchiveFile(MemoryBufferRef m) : InputFile(ArchiveKind, m) {}
 void ArchiveFile::parse() {
   // Parse a MemoryBufferRef as an archive file.
   file = CHECK(Archive::create(mb), this);
-  if (config->incrementalLink) {
+  if (config->incrementalLink && !incrementalLinkFile->rewritePossible) {
     incrementalLinkFile->objFiles[file->getFileName()].hash =
         xxHash64(file->getData());
   }
@@ -202,7 +202,7 @@ void ObjFile::parse() {
   std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
 
   if (auto *obj = dyn_cast<COFFObjectFile>(bin.get())) {
-    if (config->incrementalLink) {
+    if (config->incrementalLink && !incrementalLinkFile->rewritePossible) {
       incrementalLinkFile->objFiles[bin->getFileName()].hash =
           xxHash64(bin->getData());
     }
