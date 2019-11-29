@@ -17,7 +17,7 @@ namespace coff {
 struct IncrementalLinkFile {
 
   struct RelocationInfo {
-    llvm::support::ulittle32_t virtualAddress;
+    support::ulittle32_t virtualAddress;
     support::ulittle16_t type;
   };
 
@@ -30,7 +30,7 @@ struct IncrementalLinkFile {
   struct ChunkInfo {
     uint32_t virtualAddress;
     size_t size;
-    std::map<std::string, SymbolInfo> symbols;
+    StringMap<SymbolInfo> symbols;
   };
 
   struct SectionInfo {
@@ -48,16 +48,16 @@ struct IncrementalLinkFile {
   struct ObjectFile {
     uint64_t hash;
     std::set<std::string> dependentFiles;
-    std::map<std::string, SectionInfo> sections;
+    StringMap<SectionInfo> sections;
   };
 
 public:
   IncrementalLinkFile() = default;
   IncrementalLinkFile(std::vector<std::string> args,
-                      std::map<std::string, ObjectFile> obj, std::string of,
+                      StringMap<ObjectFile> obj, std::string of,
                       uint64_t oh,
-                      std::map<std::string, OutputSectionInfo> outSections,
-                      std::map<std::string, SymbolInfo> defSyms)
+                      StringMap<OutputSectionInfo> outSections,
+                      StringMap<SymbolInfo> defSyms)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
         outputSections(std::move(outSections)),
@@ -65,12 +65,12 @@ public:
 
   std::vector<std::string> arguments;
   std::set<std::string> input;
-  std::map<std::string, ObjectFile> objFiles;
+  StringMap<ObjectFile> objFiles;
   std::string outputFile;
   uint64_t outputHash;
 
-  std::map<std::string, OutputSectionInfo> outputSections;
-  std::map<std::string, SymbolInfo> definedSymbols;
+  StringMap<OutputSectionInfo> outputSections;
+  StringMap<SymbolInfo> definedSymbols;
   bool rewritePossible = false;
   bool rewriteAborted = false;
   size_t paddedAlignment = 64;
@@ -82,7 +82,7 @@ public:
 extern IncrementalLinkFile *incrementalLinkFile;
 
 class OutputSection;
-void writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections);
+void writeIlfSections(ArrayRef<OutputSection *> outputSections);
 
 bool initializeIlf(ArrayRef<const char *> argsArr, std::string possibleOutput);
 
@@ -114,7 +114,7 @@ template <> struct yaml::MappingTraits<NormalizedOutputSectionMap> {
 };
 
 template <>
-struct llvm::yaml::SequenceTraits<std::vector<NormalizedOutputSectionMap>> {
+struct yaml::SequenceTraits<std::vector<NormalizedOutputSectionMap>> {
   static size_t size(IO &io, std::vector<NormalizedOutputSectionMap> &seq) {
     return seq.size();
   }
@@ -134,7 +134,7 @@ template <> struct yaml::MappingTraits<IncrementalLinkFile::RelocationInfo> {
 };
 
 template <>
-struct llvm::yaml::SequenceTraits<
+struct yaml::SequenceTraits<
     std::vector<IncrementalLinkFile::RelocationInfo>> {
   static size_t size(IO &io,
                      std::vector<IncrementalLinkFile::RelocationInfo> &seq) {
@@ -174,7 +174,7 @@ struct NormalizedSymbolMap {
 };
 
 template <>
-struct llvm::yaml::SequenceTraits<std::vector<NormalizedSymbolMap>> {
+struct yaml::SequenceTraits<std::vector<NormalizedSymbolMap>> {
   static size_t size(IO &io, std::vector<NormalizedSymbolMap> &seq) {
     return seq.size();
   }
@@ -190,7 +190,7 @@ template <> struct yaml::MappingTraits<NormalizedSymbolMap> {
   static void mapping(IO &io, NormalizedSymbolMap &symbol) {
     io.mapRequired("name", symbol.name);
     io.mapRequired("address", symbol.symInfo.definitionAddress);
-    io.mapOptional("relocations",symbol.symInfo.relocations);
+    io.mapOptional("relocations", symbol.symInfo.relocations);
   }
 };
 
@@ -213,7 +213,7 @@ template <> struct yaml::MappingTraits<NormalizedChunkInfo> {
 };
 
 template <>
-struct llvm::yaml::SequenceTraits<std::vector<NormalizedChunkInfo>> {
+struct yaml::SequenceTraits<std::vector<NormalizedChunkInfo>> {
   static size_t size(IO &io, std::vector<NormalizedChunkInfo> &seq) {
     return seq.size();
   }
@@ -237,7 +237,7 @@ struct NormalizedSectionMap {
 };
 
 template <>
-struct llvm::yaml::SequenceTraits<std::vector<NormalizedSectionMap>> {
+struct yaml::SequenceTraits<std::vector<NormalizedSectionMap>> {
   static size_t size(IO &io, std::vector<NormalizedSectionMap> &seq) {
     return seq.size();
   }
@@ -270,7 +270,7 @@ struct NormalizedFileMap {
   std::vector<NormalizedSectionMap> sections;
 };
 
-template <> struct llvm::yaml::SequenceTraits<std::vector<NormalizedFileMap>> {
+template <> struct yaml::SequenceTraits<std::vector<NormalizedFileMap>> {
   static size_t size(IO &io, std::vector<NormalizedFileMap> &seq) {
     return seq.size();
   }
@@ -302,7 +302,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
       outputFile = ilf.outputFile;
       outputHash = ilf.outputHash;
       for (const auto &s : ilf.outputSections) {
-        NormalizedOutputSectionMap outSection(s.first, s.second.rawAddress,
+        NormalizedOutputSectionMap outSection(s.getKey(), s.second.rawAddress,
                                               s.second.virtualAddress,
                                               s.second.size);
         outputSections.push_back(outSection);
@@ -316,13 +316,13 @@ template <> struct MappingTraits<IncrementalLinkFile> {
             for (const auto &sym : c.symbols) {
               NormalizedSymbolInfo symbolInfo(sym.second.definitionAddress,
                                               sym.second.relocations);
-              NormalizedSymbolMap normalizedSymbolMap(sym.first, symbolInfo);
+              NormalizedSymbolMap normalizedSymbolMap(sym.getKey(), symbolInfo);
               symbols.push_back(normalizedSymbolMap);
             }
             NormalizedChunkInfo chunkInfo(c.virtualAddress, c.size, symbols);
             chunks.push_back(chunkInfo);
           }
-          NormalizedSectionMap sectionMap(sec.first, sec.second.virtualAddress,
+          NormalizedSectionMap sectionMap(sec.getKey(), sec.second.virtualAddress,
                                           sec.second.size, chunks);
           sections.push_back(sectionMap);
         }
@@ -330,22 +330,22 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         std::vector<std::string> dependentFiles;
         for (auto &dep : f.second.dependentFiles)
           dependentFiles.push_back(dep);
-        NormalizedFileMap fileMap(f.first, f.second.hash, dependentFiles,
+        NormalizedFileMap fileMap(f.getKey(), f.second.hash, dependentFiles,
                                   sections);
         files.push_back(fileMap);
       }
       for (const auto &s : ilf.definedSymbols) {
         NormalizedSymbolInfo symInfo{s.second.definitionAddress,
                                      s.second.relocations};
-        NormalizedSymbolMap symMap{s.first, symInfo};
+        NormalizedSymbolMap symMap{s.getKey(), symInfo};
         definedSymbols.push_back(symMap);
       }
     }
 
     IncrementalLinkFile denormalize(IO &) {
-      std::map<std::string, lld::coff::IncrementalLinkFile::ObjectFile>
+      StringMap<lld::coff::IncrementalLinkFile::ObjectFile>
           objFiles;
-      std::map<std::string, lld::coff::IncrementalLinkFile::OutputSectionInfo>
+      StringMap<lld::coff::IncrementalLinkFile::OutputSectionInfo>
           outSections;
       for (auto &s : outputSections) {
         lld::coff::IncrementalLinkFile::OutputSectionInfo sec{
@@ -364,7 +364,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           sectionData.size = sec.size;
           sectionData.virtualAddress = sec.virtualAddress;
           for (auto &c : sec.chunks) {
-            std::map<std::string, lld::coff::IncrementalLinkFile::SymbolInfo>
+            StringMap<lld::coff::IncrementalLinkFile::SymbolInfo>
                 symbols;
             for (auto &sym : c.symbols) {
               lld::coff::IncrementalLinkFile::SymbolInfo symbolInfo;
@@ -380,8 +380,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         }
         objFiles[f.name] = obj;
       }
-      std::map<std::string, lld::coff::IncrementalLinkFile::SymbolInfo>
-          definedSymbols;
+      StringMap<lld::coff::IncrementalLinkFile::SymbolInfo> definedSymbols;
       for (auto &s : this->definedSymbols) {
         lld::coff::IncrementalLinkFile::SymbolInfo symInfo;
         symInfo.definitionAddress = s.symInfo.definitionAddress;

@@ -40,7 +40,7 @@ void abortIncrementalLink() {
 void assignAddresses(ObjFile *file) {
   std::map<StringRef, uint32_t> rvas;
   for (auto &s : incrementalLinkFile->objFiles[file->getName()].sections) {
-    rvas[s.first] = s.second.virtualAddress;
+    rvas[s.getKey()] = s.second.virtualAddress;
   }
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
@@ -88,7 +88,7 @@ void reapplyRelocations(const StringRef &fileName) {
     uint32_t chunkStart = c.virtualAddress;
     for (const auto &sym : c.symbols) {
       uint64_t s =
-          incrementalLinkFile->definedSymbols[sym.first].definitionAddress;
+          incrementalLinkFile->definedSymbols[sym.getKey()].definitionAddress;
       for (const auto &rel : sym.second.relocations) {
         uint8_t *off = buf + rel.virtualAddress;
         memset(off, 0x0,
