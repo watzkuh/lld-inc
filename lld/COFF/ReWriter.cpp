@@ -165,7 +165,8 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   }
 
   if (secInfo.size != contribSize) {
-    outs() << "New " << secName << " section is not the same size \n";
+    outs() << "New " << secName << " section in " << fileName
+           << " is not the same size \n";
     outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
     incrementalLinkFile->rewriteAborted = true;
     return;

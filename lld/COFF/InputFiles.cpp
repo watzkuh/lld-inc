@@ -116,7 +116,10 @@ ArchiveFile::ArchiveFile(MemoryBufferRef m) : InputFile(ArchiveKind, m) {}
 void ArchiveFile::parse() {
   // Parse a MemoryBufferRef as an archive file.
   file = CHECK(Archive::create(mb), this);
-
+  if (config->incrementalLink) {
+    incrementalLinkFile->objFiles[file->getFileName()].hash =
+        xxHash64(file->getData());
+  }
   // Read the symbol table to construct Lazy objects.
   for (const Archive::Symbol &sym : file->symbols())
     symtab->addLazyArchive(this, sym);
