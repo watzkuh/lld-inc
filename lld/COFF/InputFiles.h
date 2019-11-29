@@ -74,7 +74,7 @@ public:
   StringRef getName() const { return mb.getBufferIdentifier(); }
 
   // Used for incremental linking
-  virtual bool hasChanged() = 0;
+  bool hasChanged();
 
   // Reads a file (the constructor doesn't do that).
   virtual void parse() = 0;
@@ -104,7 +104,6 @@ class ArchiveFile : public InputFile {
 public:
   explicit ArchiveFile(MemoryBufferRef m);
   static bool classof(const InputFile *f) { return f->kind() == ArchiveKind; }
-  bool hasChanged() override;
   void parse() override;
 
   // Enqueues an archive member load for the given symbol. If we've already
@@ -124,7 +123,6 @@ public:
   static bool classof(const InputFile *f) {
     return f->kind() == LazyObjectKind;
   }
-  bool hasChanged() override;
   // Makes this object file part of the link.
   void fetch();
   // Adds the symbols in this file to the symbol table as LazyObject symbols.
@@ -141,7 +139,6 @@ public:
   explicit ObjFile(MemoryBufferRef m, std::vector<Symbol *> &&symbols)
       : InputFile(ObjectKind, m), symbols(std::move(symbols)) {}
   static bool classof(const InputFile *f) { return f->kind() == ObjectKind; }
-  bool hasChanged() override;
   void parse() override;
   MachineTypes getMachineType() override;
   ArrayRef<Chunk *> getChunks() { return chunks; }
@@ -313,7 +310,6 @@ public:
   explicit ImportFile(MemoryBufferRef m) : InputFile(ImportKind, m) {}
 
   static bool classof(const InputFile *f) { return f->kind() == ImportKind; }
-  bool hasChanged() override;
 
   static std::vector<ImportFile *> instances;
 
@@ -351,7 +347,6 @@ public:
                        std::vector<Symbol *> &&symbols);
   ~BitcodeFile();
   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
-  bool hasChanged() override;
   ArrayRef<Symbol *> getSymbols() { return symbols; }
   MachineTypes getMachineType() override;
   static std::vector<BitcodeFile *> instances;

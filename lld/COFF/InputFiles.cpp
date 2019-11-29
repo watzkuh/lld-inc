@@ -97,9 +97,21 @@ static bool ignoredSymbolName(StringRef name) {
   return name == "@feat.00" || name == "@comp.id";
 }
 
-ArchiveFile::ArchiveFile(MemoryBufferRef m) : InputFile(ArchiveKind, m) {}
+bool InputFile::hasChanged() {
+  // TODO: Maybe use timestamp (file system and/or read from COFF header for better
+  // performance)
+  std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
 
-bool ArchiveFile::hasChanged() { return false; }
+  u_int64_t hash = xxHash64(bin->getData());
+  std::string name = bin->getFileName();
+  if (incrementalLinkFile->objFiles[name].hash != hash) {
+    incrementalLinkFile->objFiles[name].hash = hash;
+    return true;
+  }
+  return false;
+}
+
+ArchiveFile::ArchiveFile(MemoryBufferRef m) : InputFile(ArchiveKind, m) {}
 
 void ArchiveFile::parse() {
   // Parse a MemoryBufferRef as an archive file.
@@ -151,7 +163,7 @@ void LazyObjFile::fetch() {
   mb = {};
   symtab->addFile(file);
 }
-bool LazyObjFile::hasChanged() { return false; }
+
 void LazyObjFile::parse() {
   if (isBitcode(this->mb)) {
     // Bitcode file.
@@ -179,24 +191,6 @@ void LazyObjFile::parse() {
       continue;
     symtab->addLazyObject(this, name);
     i += coffSym.getNumberOfAuxSymbols();
-  }
-}
-
-bool ObjFile::hasChanged() {
-  // TODO: Maybe use timestamp (file system or read from COFF header for better
-  // performance)
-  std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
-
-  if (dyn_cast<COFFObjectFile>(bin.get())) {
-    u_int64_t hash = xxHash64(bin->getData());
-    std::string name = bin->getFileName();
-    if (incrementalLinkFile->objFiles[name].hash != hash) {
-      incrementalLinkFile->objFiles[name].hash = hash;
-      return true;
-    }
-    return false;
-  } else {
-    fatal(toString(this) + " is not a COFF file");
   }
 }
 
@@ -861,8 +855,6 @@ static StringRef ltrim1(StringRef s, const char *chars) {
   return s;
 }
 
-bool ImportFile::hasChanged() { return false; }
-
 void ImportFile::parse() {
   const char *buf = mb.getBufferStart();
   const auto *hdr = reinterpret_cast<const coff_import_header *>(buf);
@@ -941,11 +933,6 @@ BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
 }
 
 BitcodeFile::~BitcodeFile() = default;
-
-bool BitcodeFile::hasChanged() {
-  fatal("Incremental linking not compatible with linking");
-  return false;
-}
 
 void BitcodeFile::parse() {
   std::vector<std::pair<Symbol *, bool>> comdat(obj->getComdatTable().size());
