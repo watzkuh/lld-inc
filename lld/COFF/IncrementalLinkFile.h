@@ -4,6 +4,7 @@
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
+#include <llvm/ADT/DenseSet.h>
 #include <map>
 #include <set>
 #include <string>
@@ -23,7 +24,7 @@ struct IncrementalLinkFile {
 
   struct SymbolInfo {
     uint64_t definitionAddress;
-    std::set<std::string> filesUsedIn;
+    DenseSet<StringRef> filesUsedIn;
     std::vector<RelocationInfo> relocations;
   };
 
@@ -53,9 +54,8 @@ struct IncrementalLinkFile {
 
 public:
   IncrementalLinkFile() = default;
-  IncrementalLinkFile(std::vector<std::string> args,
-                      StringMap<ObjectFile> obj, std::string of,
-                      uint64_t oh,
+  IncrementalLinkFile(std::vector<std::string> args, StringMap<ObjectFile> obj,
+                      std::string of, uint64_t oh,
                       StringMap<OutputSectionInfo> outSections,
                       StringMap<SymbolInfo> defSyms)
       : arguments(std::move((args))), objFiles(std::move(obj)),
@@ -64,7 +64,7 @@ public:
         definedSymbols(std::move(defSyms)) {}
 
   std::vector<std::string> arguments;
-  std::set<std::string> input;
+  DenseSet<StringRef> input;
   StringMap<ObjectFile> objFiles;
   std::string outputFile;
   uint64_t outputHash;
@@ -134,8 +134,7 @@ template <> struct yaml::MappingTraits<IncrementalLinkFile::RelocationInfo> {
 };
 
 template <>
-struct yaml::SequenceTraits<
-    std::vector<IncrementalLinkFile::RelocationInfo>> {
+struct yaml::SequenceTraits<std::vector<IncrementalLinkFile::RelocationInfo>> {
   static size_t size(IO &io,
                      std::vector<IncrementalLinkFile::RelocationInfo> &seq) {
     return seq.size();
@@ -173,8 +172,7 @@ struct NormalizedSymbolMap {
   NormalizedSymbolInfo symInfo;
 };
 
-template <>
-struct yaml::SequenceTraits<std::vector<NormalizedSymbolMap>> {
+template <> struct yaml::SequenceTraits<std::vector<NormalizedSymbolMap>> {
   static size_t size(IO &io, std::vector<NormalizedSymbolMap> &seq) {
     return seq.size();
   }
@@ -212,8 +210,7 @@ template <> struct yaml::MappingTraits<NormalizedChunkInfo> {
   }
 };
 
-template <>
-struct yaml::SequenceTraits<std::vector<NormalizedChunkInfo>> {
+template <> struct yaml::SequenceTraits<std::vector<NormalizedChunkInfo>> {
   static size_t size(IO &io, std::vector<NormalizedChunkInfo> &seq) {
     return seq.size();
   }
@@ -236,8 +233,7 @@ struct NormalizedSectionMap {
   std::vector<NormalizedChunkInfo> chunks;
 };
 
-template <>
-struct yaml::SequenceTraits<std::vector<NormalizedSectionMap>> {
+template <> struct yaml::SequenceTraits<std::vector<NormalizedSectionMap>> {
   static size_t size(IO &io, std::vector<NormalizedSectionMap> &seq) {
     return seq.size();
   }
@@ -322,8 +318,8 @@ template <> struct MappingTraits<IncrementalLinkFile> {
             NormalizedChunkInfo chunkInfo(c.virtualAddress, c.size, symbols);
             chunks.push_back(chunkInfo);
           }
-          NormalizedSectionMap sectionMap(sec.getKey(), sec.second.virtualAddress,
-                                          sec.second.size, chunks);
+          NormalizedSectionMap sectionMap(
+              sec.getKey(), sec.second.virtualAddress, sec.second.size, chunks);
           sections.push_back(sectionMap);
         }
 
@@ -343,10 +339,8 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     }
 
     IncrementalLinkFile denormalize(IO &) {
-      StringMap<lld::coff::IncrementalLinkFile::ObjectFile>
-          objFiles;
-      StringMap<lld::coff::IncrementalLinkFile::OutputSectionInfo>
-          outSections;
+      StringMap<lld::coff::IncrementalLinkFile::ObjectFile> objFiles;
+      StringMap<lld::coff::IncrementalLinkFile::OutputSectionInfo> outSections;
       for (auto &s : outputSections) {
         lld::coff::IncrementalLinkFile::OutputSectionInfo sec{
             s.rawAddress, s.virtualAddress, s.size};
@@ -364,8 +358,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           sectionData.size = sec.size;
           sectionData.virtualAddress = sec.virtualAddress;
           for (auto &c : sec.chunks) {
-            StringMap<lld::coff::IncrementalLinkFile::SymbolInfo>
-                symbols;
+            StringMap<lld::coff::IncrementalLinkFile::SymbolInfo> symbols;
             for (auto &sym : c.symbols) {
               lld::coff::IncrementalLinkFile::SymbolInfo symbolInfo;
               symbolInfo.definitionAddress = sym.symInfo.definitionAddress;
