@@ -1277,8 +1277,8 @@ void Writer::assignAddresses() {
         if (auto *sc = dyn_cast<SectionChunk>(c)) {
           if (padNext)
             c->setAlignment(incrementalLinkFile->paddedAlignment);
-          padNext = incrementalLinkFile->input.find(sc->file->getName()) !=
-                        incrementalLinkFile->input.end() &&
+          padNext = incrementalLinkFile->rewritableFileNames.count(
+                        sc->file->getName()) &&
                     (sc->getSectionName() == ".text" ||
                      sc->getSectionName() == ".data" ||
                      sc->getSectionName() == ".rdata");

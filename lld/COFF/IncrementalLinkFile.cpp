@@ -74,7 +74,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       if (!sc || sc->getSectionName() != secName || !sc->getSize())
         continue;
       StringRef const name = sc->file->getName();
-      if (!incrementalLinkFile->input.count(name))
+      if (!incrementalLinkFile->rewritableFileNames.count(name))
         continue;
 
       auto &sec = incrementalLinkFile->objFiles[name].sections[secName];

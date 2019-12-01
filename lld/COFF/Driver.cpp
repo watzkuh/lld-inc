@@ -288,6 +288,10 @@ void LinkerDriver::addArchiveBuffer(MemoryBufferRef mb, StringRef symName,
   }
 
   obj->parentName = parentName;
+
+  if (incrementalLinkFile->input.count(parentName))
+    incrementalLinkFile->rewritableFileNames.insert(obj->getName());
+
   symtab->addFile(obj);
   log("Loaded " + toString(obj) + " for " + symName);
 }
@@ -1685,6 +1689,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
         enqueuePath(*path, true, inLib);
         if (config->incrementalLink)
           incrementalLinkFile->input.insert(*path);
+          incrementalLinkFile->rewritableFileNames.insert(*path);
       }
       break;
     case OPT_INPUT:
@@ -1692,6 +1697,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
         enqueuePath(*path, isWholeArchive(*path), inLib);
         if (config->incrementalLink)
           incrementalLinkFile->input.insert(*path);
+          incrementalLinkFile->rewritableFileNames.insert(*path);
       }
       break;
     default:

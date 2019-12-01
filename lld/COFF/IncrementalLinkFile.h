@@ -46,7 +46,7 @@ struct IncrementalLinkFile {
     size_t size;
   };
 
-  struct ObjectFile {
+  struct ObjectFileInfo {
     uint64_t hash;
     std::set<std::string> dependentFiles;
     StringMap<SectionInfo> sections;
@@ -54,7 +54,7 @@ struct IncrementalLinkFile {
 
 public:
   IncrementalLinkFile() = default;
-  IncrementalLinkFile(std::vector<std::string> args, StringMap<ObjectFile> obj,
+  IncrementalLinkFile(std::vector<std::string> args, StringMap<ObjectFileInfo> obj,
                       std::string of, uint64_t oh,
                       StringMap<OutputSectionInfo> outSections,
                       StringMap<SymbolInfo> defSyms)
@@ -65,7 +65,9 @@ public:
 
   std::vector<std::string> arguments;
   DenseSet<StringRef> input;
-  StringMap<ObjectFile> objFiles;
+  // input objects/archives + objects extracted from archives in input
+  DenseSet<StringRef> rewritableFileNames;
+  StringMap<ObjectFileInfo> objFiles;
   std::string outputFile;
   uint64_t outputHash;
 
@@ -339,7 +341,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     }
 
     IncrementalLinkFile denormalize(IO &) {
-      StringMap<lld::coff::IncrementalLinkFile::ObjectFile> objFiles;
+      StringMap<lld::coff::IncrementalLinkFile::ObjectFileInfo> objFiles;
       StringMap<lld::coff::IncrementalLinkFile::OutputSectionInfo> outSections;
       for (auto &s : outputSections) {
         lld::coff::IncrementalLinkFile::OutputSectionInfo sec{
@@ -347,7 +349,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         outSections[s.name] = sec;
       }
       for (auto &f : files) {
-        lld::coff::IncrementalLinkFile::ObjectFile obj;
+        lld::coff::IncrementalLinkFile::ObjectFileInfo obj;
         obj.hash = f.hashValue;
         std::set<std::string> dependentFiles;
         for (auto &dep : f.dependentFiles)
