@@ -77,7 +77,13 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       if (!incrementalLinkFile->rewritableFileNames.count(name))
         continue;
 
-      auto &sec = incrementalLinkFile->objFiles[name].sections[secName];
+      // Important! We want to save the section type as its defined in the COFF
+      // header, not in the OutputSection object as Writer.cpp merges different
+      // sections types into one output section. We do not do this when linking
+      // incrementally, so we have to remember the location based on its
+      // original section type.
+      auto &sec =
+          incrementalLinkFile->objFiles[name].sections[sc->header->Name];
 
       IncrementalLinkFile::ChunkInfo chunkInfo;
       chunkInfo.virtualAddress = sc->getRVA();
