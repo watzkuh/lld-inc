@@ -132,14 +132,26 @@ void rewriteTextSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
 void rewriteSection(const std::vector<SectionChunk *> &chunks,
                     StringRef fileName, StringRef secName) {
 
-  // All currently supported sections
-  if (secName != ".text" && secName != ".data" && secName != ".rdata")
+  // All currently supported sections for incremental links
+  if (secName != ".text" && secName != ".data" && secName != ".rdata" &&
+      secName != ".xdata") {
+    outs() << "Ignored: " << secName << " section\n";
     return;
+  }
 
   outs() << "Rewriting " << secName << " section for file " << fileName << "\n";
 
+  StringRef outSecName(secName);
+  for (auto &p : config->merge) {
+    if (secName == p.first) {
+      outSecName = p.second;
+      break;
+    }
+  }
+
   auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[secName];
-  auto &outputSectionInfo = incrementalLinkFile->outputSections[secName];
+  auto &outputSectionInfo = incrementalLinkFile->outputSections[outSecName];
+
   auto offset =
       outputSectionInfo.rawAddress +
       (secInfo.virtualAddress < outputSectionInfo.virtualAddress
@@ -155,7 +167,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     if (secName == ".text") {
       memset(buf, 0xCC, paddedSize);
       rewriteTextSection(sc, buf, (secInfo.virtualAddress + contribSize));
-    } else if (secName == ".data" || secName == ".rdata") {
+    } else {
       memset(buf, 0x0, paddedSize);
       sc->writeTo(buf);
     }

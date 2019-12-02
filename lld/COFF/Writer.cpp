@@ -1271,17 +1271,20 @@ void Writer::assignAddresses() {
         (sec->header.Characteristics & IMAGE_SCN_MEM_EXECUTE);
     uint32_t padding = isCodeSection ? config->functionPadMin : 0;
 
+    // Pad first rewritable chunk + 1
     bool padNext = false;
     for (Chunk *c : sec->chunks) {
       if (config->incrementalLink) {
         if (auto *sc = dyn_cast<SectionChunk>(c)) {
-          if (padNext)
+          bool shouldPad = incrementalLinkFile->rewritableFileNames.count(
+                               sc->file->getName()) &&
+                           (sc->getSectionName() == ".text" ||
+                            sc->getSectionName() == ".data" ||
+                            sc->getSectionName() == ".xdata" ||
+                            sc->getSectionName() == ".rdata");
+          if (padNext || shouldPad)
             c->setAlignment(incrementalLinkFile->paddedAlignment);
-          padNext = incrementalLinkFile->rewritableFileNames.count(
-                        sc->file->getName()) &&
-                    (sc->getSectionName() == ".text" ||
-                     sc->getSectionName() == ".data" ||
-                     sc->getSectionName() == ".rdata");
+          padNext = shouldPad;
         }
       }
       if (padding && c->isHotPatchable())
