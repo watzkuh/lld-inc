@@ -101,8 +101,8 @@ struct NormalizedOutputSectionMap {
                              size_t s)
       : name(std::move(n)), rawAddress(raw), virtualAddress(rva), size(s) {}
   std::string name;
-  uint64_t rawAddress;
-  uint64_t virtualAddress;
+  yaml::Hex64 rawAddress;
+  yaml::Hex64 virtualAddress;
   size_t size;
 };
 
@@ -155,7 +155,7 @@ struct NormalizedSymbolInfo {
   NormalizedSymbolInfo(uint64_t d,
                        std::vector<IncrementalLinkFile::RelocationInfo> rels)
       : definitionAddress(d), relocations(std::move(rels)) {}
-  uint64_t definitionAddress;
+  yaml::Hex64 definitionAddress;
   std::vector<IncrementalLinkFile::RelocationInfo> relocations;
 };
 
@@ -199,7 +199,7 @@ struct NormalizedChunkInfo {
   NormalizedChunkInfo(uint32_t a, size_t s,
                       std::vector<NormalizedSymbolMap> sym)
       : virtualAddress(a), size(s), symbols(std::move(sym)) {}
-  uint32_t virtualAddress;
+  yaml::Hex32 virtualAddress;
   size_t size;
   std::vector<NormalizedSymbolMap> symbols;
 };
@@ -230,7 +230,7 @@ struct NormalizedSectionMap {
                        std::vector<NormalizedChunkInfo> c)
       : name(std::move(n)), virtualAddress(a), size(s), chunks(std::move(c)) {}
   std::string name;
-  uint32_t virtualAddress;
+  yaml::Hex32 virtualAddress;
   size_t size;
   std::vector<NormalizedChunkInfo> chunks;
 };
