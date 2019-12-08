@@ -24,6 +24,7 @@ std::unique_ptr<FileOutputBuffer> binary;
 
 std::vector<ObjFile *> changedFiles;
 std::set<StringRef> dependentFileNames;
+llvm::StringMap<std::pair<uint64_t, uint64_t>> updatedSymbols;
 
 void abortIncrementalLink() {
   outs() << "Incremental link aborted, starting clean link...\n";
@@ -87,14 +88,32 @@ void reapplyRelocations(const StringRef &fileName) {
   for (const auto &c : secInfo.chunks) {
     uint32_t chunkStart = c.virtualAddress;
     for (const auto &sym : c.symbols) {
-      uint64_t s =
-          incrementalLinkFile->definedSymbols[sym.getKey()].definitionAddress;
+      auto it = updatedSymbols.find(sym.first());
+      if (it == updatedSymbols.end()) {
+        continue;
+      } else {
+        outs() << sym.first() << " changed; old: " << it->second.first <<
+        "new: " << it->second.second << "\n";
+      }
+      uint64_t s = it->second.second;
+      uint64_t invertS = -it->second.first;
       for (const auto &rel : sym.second.relocations) {
         uint8_t *off = buf + rel.virtualAddress;
-        memset(off, 0x0,
-               4); // Delete the old address TODO: 16/64 bit relocation
         uint64_t p = chunkStart + rel.virtualAddress;
+        uint8_t typeOff = 0;
+        // Only AMD64 support at the moment
+        switch(rel.type) {
+        case COFF::IMAGE_REL_AMD64_REL32:    typeOff = 4; break;
+        case COFF::IMAGE_REL_AMD64_REL32_1:  typeOff = 5; break;
+        case COFF::IMAGE_REL_AMD64_REL32_2:  typeOff = 6; break;
+        case COFF::IMAGE_REL_AMD64_REL32_3:  typeOff = 7; break;
+        case COFF::IMAGE_REL_AMD64_REL32_4:  typeOff = 8; break;
+        case COFF::IMAGE_REL_AMD64_REL32_5:  typeOff = 9; break;
+        }
         SectionChunk sc;
+        // First, undo the original relocation
+        applyRelocation(sc, off, rel.type, invertS + 2 * (p + typeOff), p);
+
         applyRelocation(sc, off, rel.type, s, p);
       }
     }
@@ -189,8 +208,14 @@ void updateSymbolTable(ObjFile *file) {
   for (const auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
     if (definedSym && definedSym->getRVA() != 0) {
-      incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
-          definedSym->getRVA();
+      auto &oldSym = incrementalLinkFile->definedSymbols[sym->getName()];
+      if (oldSym.definitionAddress != definedSym->getRVA() &&
+          oldSym.fileDefinedIn == file->getName()) {
+        updatedSymbols[sym->getName()] =
+            std::make_pair(oldSym.definitionAddress, definedSym->getRVA());
+        incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
+            definedSym->getRVA();
+      }
     }
   }
 }
@@ -198,8 +223,8 @@ void updateSymbolTable(ObjFile *file) {
 void rewriteFile(ObjFile *file) {
   std::map<StringRef, std::vector<SectionChunk *>> chunks;
   for (Chunk *c : file->getChunks()) {
-    auto *sc = dyn_cast<SectionChunk>(c);
-    chunks[sc->getSectionName()].push_back(sc);
+    if (auto *sc = dyn_cast<SectionChunk>(c))
+      chunks[sc->getSectionName()].push_back(sc);
   }
   for (auto &sec : chunks) {
     rewriteSection(sec.second, file->getName(), sec.first);
