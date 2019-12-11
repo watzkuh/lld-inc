@@ -362,7 +362,7 @@ void ObjFile::readAssociativeDefinition(COFFSymbolRef sym,
   } else {
     if (config->incrementalLink) {
       incrementalLinkFile->objFiles[this->getName()]
-          .discardedSections[def->CheckSum] = true;
+          .discardedSections[sectionNumber] = true;
     }
     sparseChunks[sectionNumber] = nullptr;
   }
@@ -695,7 +695,7 @@ Optional<Symbol *> ObjFile::createDefined(
     } else {
       if (config->incrementalLink) {
         incrementalLinkFile->objFiles[this->getName()]
-            .discardedSections[def->CheckSum] = true;
+            .discardedSections[sectionNumber] = true;
       }
       sparseChunks[sectionNumber] = nullptr;
     }

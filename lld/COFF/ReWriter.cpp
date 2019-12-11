@@ -39,6 +39,16 @@ void abortIncrementalLink() {
   driver->link(ArrayRef<char *>(args));
 }
 
+bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
+  if (sc->isCOMDAT()) {
+    if (incrementalLinkFile->objFiles[fileName].discardedSections.count(
+            sc->getSectionNumber())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void assignAddresses(ObjFile *file) {
   std::map<StringRef, uint32_t> rvas;
   for (auto &s : incrementalLinkFile->objFiles[file->getName()].sections) {
@@ -46,6 +56,10 @@ void assignAddresses(ObjFile *file) {
   }
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
+
+    if (isDiscardedCOMDAT(sc, file->getName()))
+      continue;
+
     sc->setRVA(rvas[sc->getSectionName()]);
     rvas[sc->getSectionName()] +=
         alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
@@ -130,9 +144,9 @@ void rewriteTextSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
     const coff_relocation &rel = sc->getRelocs()[j];
     auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
+    // The target of the relocation
     uint64_t s = 0;
     if (definedSym != nullptr) {
-      // The target of the relocation
       s = definedSym->getRVA();
     }
     // Fallback to symbol table if we either have no information
@@ -181,6 +195,9 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   uint32_t contribSize = 0;
 
   for (SectionChunk *sc : chunks) {
+    if (sc->getSize() == 0 || isDiscardedCOMDAT(sc, fileName))
+      continue;
+
     const size_t paddedSize =
         alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
     if (secName == ".text") {
