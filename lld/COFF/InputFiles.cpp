@@ -360,6 +360,10 @@ void ObjFile::readAssociativeDefinition(COFFSymbolRef sym,
       parent->addAssociative(c);
     }
   } else {
+    if (config->incrementalLink) {
+      incrementalLinkFile->objFiles[this->getName()]
+          .discardedSections.push_back(def->CheckSum);
+    }
     sparseChunks[sectionNumber] = nullptr;
   }
 }
