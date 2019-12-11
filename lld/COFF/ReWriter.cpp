@@ -25,6 +25,7 @@ std::unique_ptr<FileOutputBuffer> binary;
 std::vector<ObjFile *> changedFiles;
 std::set<StringRef> dependentFileNames;
 llvm::StringMap<std::pair<uint64_t, uint64_t>> updatedSymbols;
+SmallDenseSet<StringRef> sectionNames = {".text", ".data", ".rdata", ".xdata"};
 
 void abortIncrementalLink() {
   outs() << "Incremental link aborted, starting clean link...\n";
@@ -152,8 +153,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
                     StringRef fileName, StringRef secName) {
 
   // All currently supported sections for incremental links
-  if (secName != ".text" && secName != ".data" && secName != ".rdata" &&
-      secName != ".xdata") {
+  if (sectionNames.count(secName) == 0) {
     outs() << "Ignored: " << secName << " section\n";
     return;
   }
@@ -207,15 +207,16 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 void updateSymbolTable(ObjFile *file) {
   for (const auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
-    if (definedSym && definedSym->getRVA() != 0) {
-      auto &oldSym = incrementalLinkFile->definedSymbols[sym->getName()];
-      if (oldSym.definitionAddress != definedSym->getRVA() &&
-          oldSym.fileDefinedIn == file->getName()) {
-        updatedSymbols[sym->getName()] =
-            std::make_pair(oldSym.definitionAddress, definedSym->getRVA());
-        incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
-            definedSym->getRVA();
-      }
+    if (!definedSym || definedSym->getRVA() == 0 || sectionNames.count(sym->getName()))
+      continue;
+
+    auto &oldSym = incrementalLinkFile->definedSymbols[sym->getName()];
+    if (oldSym.definitionAddress != definedSym->getRVA() &&
+        oldSym.fileDefinedIn == file->getName()) {
+      updatedSymbols[sym->getName()] =
+          std::make_pair(oldSym.definitionAddress, definedSym->getRVA());
+      incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
+          definedSym->getRVA();
     }
   }
 }
