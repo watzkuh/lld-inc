@@ -24,11 +24,13 @@ struct IncrementalLinkFile {
 
   struct SymbolInfo {
     uint64_t definitionAddress;
+    std::string fileDefinedIn;
     DenseSet<StringRef> filesUsedIn;
     std::vector<RelocationInfo> relocations;
   };
 
   struct ChunkInfo {
+    uint32_t checksum;
     uint32_t virtualAddress;
     size_t size;
     StringMap<SymbolInfo> symbols;
@@ -152,18 +154,12 @@ struct yaml::SequenceTraits<std::vector<IncrementalLinkFile::RelocationInfo>> {
 
 struct NormalizedSymbolInfo {
   NormalizedSymbolInfo() {}
-  NormalizedSymbolInfo(uint64_t d,
+  NormalizedSymbolInfo(std::string f, uint64_t d,
                        std::vector<IncrementalLinkFile::RelocationInfo> rels)
-      : definitionAddress(d), relocations(std::move(rels)) {}
+      : fileDefinedIn(f), definitionAddress(d), relocations(std::move(rels)) {}
+  std::string fileDefinedIn;
   yaml::Hex64 definitionAddress;
   std::vector<IncrementalLinkFile::RelocationInfo> relocations;
-};
-
-template <> struct yaml::MappingTraits<NormalizedSymbolInfo> {
-  static void mapping(IO &io, NormalizedSymbolInfo &sym) {
-    io.mapRequired("address", sym.definitionAddress);
-    io.mapRequired("relocations", sym.relocations);
-  }
 };
 
 struct NormalizedSymbolMap {
@@ -187,18 +183,20 @@ template <> struct yaml::SequenceTraits<std::vector<NormalizedSymbolMap>> {
 };
 
 template <> struct yaml::MappingTraits<NormalizedSymbolMap> {
-  static void mapping(IO &io, NormalizedSymbolMap &symbol) {
-    io.mapRequired("name", symbol.name);
-    io.mapRequired("address", symbol.symInfo.definitionAddress);
-    io.mapOptional("relocations", symbol.symInfo.relocations);
+  static void mapping(IO &io, NormalizedSymbolMap &sym) {
+    io.mapRequired("name", sym.name);
+    io.mapRequired("address", sym.symInfo.definitionAddress);
+    io.mapOptional("relocations", sym.symInfo.relocations);
+    io.mapOptional("defined-in", sym.symInfo.fileDefinedIn);
   }
 };
 
 struct NormalizedChunkInfo {
   NormalizedChunkInfo() {}
-  NormalizedChunkInfo(uint32_t a, size_t s,
+  NormalizedChunkInfo(uint32_t c, uint32_t a, size_t s,
                       std::vector<NormalizedSymbolMap> sym)
-      : virtualAddress(a), size(s), symbols(std::move(sym)) {}
+      : checksum(c), virtualAddress(a), size(s), symbols(std::move(sym)) {}
+  uint32_t checksum;
   yaml::Hex32 virtualAddress;
   size_t size;
   std::vector<NormalizedSymbolMap> symbols;
@@ -206,6 +204,7 @@ struct NormalizedChunkInfo {
 
 template <> struct yaml::MappingTraits<NormalizedChunkInfo> {
   static void mapping(IO &io, NormalizedChunkInfo &c) {
+    io.mapRequired("checksum", c.checksum);
     io.mapRequired("address", c.virtualAddress);
     io.mapRequired("size", c.size);
     io.mapOptional("symbols", c.symbols);
@@ -312,12 +311,14 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           for (const auto &c : sec.second.chunks) {
             std::vector<NormalizedSymbolMap> symbols;
             for (const auto &sym : c.symbols) {
-              NormalizedSymbolInfo symbolInfo(sym.second.definitionAddress,
+              NormalizedSymbolInfo symbolInfo(sym.second.fileDefinedIn,
+                                              sym.second.definitionAddress,
                                               sym.second.relocations);
               NormalizedSymbolMap normalizedSymbolMap(sym.getKey(), symbolInfo);
               symbols.push_back(normalizedSymbolMap);
             }
-            NormalizedChunkInfo chunkInfo(c.virtualAddress, c.size, symbols);
+            NormalizedChunkInfo chunkInfo(c.checksum, c.virtualAddress, c.size,
+                                          symbols);
             chunks.push_back(chunkInfo);
           }
           NormalizedSectionMap sectionMap(
@@ -333,7 +334,8 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         files.push_back(fileMap);
       }
       for (const auto &s : ilf.definedSymbols) {
-        NormalizedSymbolInfo symInfo{s.second.definitionAddress,
+        NormalizedSymbolInfo symInfo{s.second.fileDefinedIn,
+                                     s.second.definitionAddress,
                                      s.second.relocations};
         NormalizedSymbolMap symMap{s.getKey(), symInfo};
         definedSymbols.push_back(symMap);
@@ -368,7 +370,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
               symbols[sym.name] = symbolInfo;
             }
             lld::coff::IncrementalLinkFile::ChunkInfo chunkInfo{
-                c.virtualAddress, c.size, symbols};
+                c.checksum, c.virtualAddress, c.size, symbols};
             sectionData.chunks.push_back(chunkInfo);
           }
           obj.sections[sec.name] = sectionData;
@@ -378,6 +380,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
       StringMap<lld::coff::IncrementalLinkFile::SymbolInfo> definedSymbols;
       for (auto &s : this->definedSymbols) {
         lld::coff::IncrementalLinkFile::SymbolInfo symInfo;
+        symInfo.fileDefinedIn = s.symInfo.fileDefinedIn;
         symInfo.definitionAddress = s.symInfo.definitionAddress;
         definedSymbols[s.name] = symInfo;
       }

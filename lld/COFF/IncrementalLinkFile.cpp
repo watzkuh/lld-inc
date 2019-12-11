@@ -86,6 +86,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
           incrementalLinkFile->objFiles[name].sections[sc->header->Name];
 
       IncrementalLinkFile::ChunkInfo chunkInfo;
+      chunkInfo.checksum = sc->checksum;
       chunkInfo.virtualAddress = sc->getRVA();
       chunkInfo.size =
           alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
@@ -124,6 +125,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       continue;
     }
     auto &s = incrementalLinkFile->definedSymbols[sym->getName()];
+    if (!sym->getFile()->getName().empty())
+      s.fileDefinedIn = sym->getFile()->getName();
     s.definitionAddress = sym->getRVA();
     if (s.filesUsedIn.size() <= 1)
       continue;
