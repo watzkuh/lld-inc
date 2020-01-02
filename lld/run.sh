@@ -1,10 +1,9 @@
 set -e
 if [ "$1" = "debug" ]; then
-  cd /home/kai/master/llvm-project/out/debug
+   ninja -C ../out/debug -j 2000 lld
 else
-  cd /home/kai/master/llvm-project/out/release
+   ninja -C ../out/release -j 2000 lld
 fi
-ninja lld
 if [ "$1" = "test" ]; then
   /home/kai/master/llvm-project/out/release/bin/llvm-lit /home/kai/master/llvm-project/lld/test/COFF -s -vv
 fi

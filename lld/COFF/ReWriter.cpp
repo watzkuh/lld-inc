@@ -40,14 +40,28 @@ void abortIncrementalLink() {
 }
 
 bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
-  if (sc->isCOMDAT()) {
-    if (incrementalLinkFile->objFiles[fileName].discardedSections.count(
-            sc->getSectionNumber())) {
+  if (!sc || !sc->isCOMDAT()) {
+    return false;
+  }
+  for (auto i : sc->symbols()) {
+    auto sym = incrementalLinkFile->definedSymbols[i->getName()];
+    if (sym.fileDefinedIn.empty() || !i->getFile() ||
+        sym.fileDefinedIn == i->getFile()->getName()) {
+      incrementalLinkFile->objFiles[fileName].discardedSections.erase(
+          sc->getSectionNumber());
+      outs() << sym.fileDefinedIn << " if " << i->getName()
+             << sc->getSectionName() << "\n";
+      return false;
+    } else {
+      outs() << sym.fileDefinedIn << " else " << i->getName()
+             << sc->getSectionName() << "\n";
       return true;
     }
   }
-  return false;
+  return incrementalLinkFile->objFiles[fileName].discardedSections.count(
+      sc->getSectionNumber());
 }
+
 
 void assignAddresses(ObjFile *file) {
   std::map<StringRef, uint32_t> rvas;
@@ -107,8 +121,8 @@ void reapplyRelocations(const StringRef &fileName) {
       if (it == updatedSymbols.end()) {
         continue;
       } else {
-        outs() << sym.first() << " changed; old: " << it->second.first <<
-        "new: " << it->second.second << "\n";
+        outs() << sym.first() << " changed; old: " << it->second.first
+               << "new: " << it->second.second << "\n";
       }
       uint64_t s = it->second.second;
       uint64_t invertS = -it->second.first;
@@ -136,10 +150,17 @@ void reapplyRelocations(const StringRef &fileName) {
   }
 }
 
-void rewriteTextSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
-
+IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc, uint8_t *buf,
+                        uint32_t chunkStart, size_t paddedSize) {
+  memset(buf, 0xCC, paddedSize);
   memcpy(buf, sc->getContents().data(), sc->getSize());
 
+  IncrementalLinkFile::ChunkInfo chunkInfo;
+  chunkInfo.checksum = sc->checksum;
+  chunkInfo.virtualAddress = sc->getRVA();
+  chunkInfo.size = paddedSize;
+
+  StringMap<IncrementalLinkFile::SymbolInfo> symbols;
   for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
     const coff_relocation &rel = sc->getRelocs()[j];
     auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
@@ -160,7 +181,15 @@ void rewriteTextSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
     uint64_t p = chunkStart + rel.VirtualAddress;
 
     applyRelocation(*sc, off, rel.Type, s, p);
+
+    IncrementalLinkFile::SymbolInfo symbolInfo;
+    symbolInfo.definitionAddress = s;
+    IncrementalLinkFile::RelocationInfo relInfo{rel.VirtualAddress, rel.Type};
+    if (!chunkInfo.symbols.count(sym->getName()))
+      chunkInfo.symbols[sym->getName()] = symbolInfo;
+    chunkInfo.symbols[sym->getName()].relocations.push_back(relInfo);
   }
+  return chunkInfo;
 }
 
 void rewriteSection(const std::vector<SectionChunk *> &chunks,
@@ -174,6 +203,11 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 
   outs() << "Rewriting " << secName << " section for file " << fileName << "\n";
 
+  auto secIt = incrementalLinkFile->objFiles[fileName].sections.find(secName);
+  if (secIt == incrementalLinkFile->objFiles[fileName].sections.end())
+    return;
+  auto &secInfo = secIt->second;
+
   StringRef outSecName(secName);
   for (auto &p : config->merge) {
     if (secName == p.first) {
@@ -182,7 +216,6 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     }
   }
 
-  auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[secName];
   auto &outputSectionInfo = incrementalLinkFile->outputSections[outSecName];
 
   auto offset =
@@ -193,6 +226,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 
   uint8_t *buf = binary->getBufferStart() + offset;
   uint32_t contribSize = 0;
+  uint32_t num = 0;
 
   for (SectionChunk *sc : chunks) {
     if (sc->getSize() == 0 || isDiscardedCOMDAT(sc, fileName))
@@ -200,17 +234,31 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 
     const size_t paddedSize =
         alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+    IncrementalLinkFile::ChunkInfo chunkInfo;
     if (secName == ".text") {
-      memset(buf, 0xCC, paddedSize);
-      rewriteTextSection(sc, buf, (secInfo.virtualAddress + contribSize));
+      chunkInfo = rewriteTextSection(
+          sc, buf, (secInfo.virtualAddress + contribSize), paddedSize);
     } else {
       memset(buf, 0x0, paddedSize);
-      sc->writeTo(buf);
+      memcpy(buf, sc->getContents().data(), sc->getSize());
+      chunkInfo.checksum = sc->checksum;
+      chunkInfo.size = paddedSize;
+      chunkInfo.virtualAddress = sc->getRVA();
     }
 
+    if (secInfo.chunks.size() > num)
+      secInfo.chunks[num] = chunkInfo;
+    else
+      secInfo.chunks.push_back(chunkInfo);
+
     contribSize += paddedSize;
+    num++;
     buf += paddedSize;
   }
+
+  // if (num != secInfo.chunks.size()) {
+    outs() << num << " new section vs old " << secInfo.chunks.size() << "\n";
+ // }
 
   if (secInfo.size != contribSize) {
     outs() << "New " << secName << " section in " << fileName
@@ -224,7 +272,8 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 void updateSymbolTable(ObjFile *file) {
   for (const auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
-    if (!definedSym || definedSym->getRVA() == 0 || sectionNames.count(sym->getName()))
+    if (!definedSym || definedSym->getRVA() == 0 ||
+        sectionNames.count(sym->getName()))
       continue;
 
     auto &oldSym = incrementalLinkFile->definedSymbols[sym->getName()];
@@ -241,8 +290,8 @@ void updateSymbolTable(ObjFile *file) {
 void rewriteFile(ObjFile *file) {
   std::map<StringRef, std::vector<SectionChunk *>> chunks;
   for (Chunk *c : file->getChunks()) {
-    if (auto *sc = dyn_cast<SectionChunk>(c))
-      chunks[sc->getSectionName()].push_back(sc);
+    auto *sc = dyn_cast<SectionChunk>(c);
+    chunks[sc->getSectionName()].push_back(sc);
   }
   for (auto &sec : chunks) {
     rewriteSection(sec.second, file->getName(), sec.first);
@@ -293,3 +342,4 @@ void coff::rewriteResult() {
 void coff::enqueueTask(std::function<void()> task) {
   rewriteQueue.push_back(std::move(task));
 }
+
