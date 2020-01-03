@@ -96,6 +96,10 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
         for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
           const coff_relocation &rel = sc->getRelocs()[j];
           auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
+          // Non external symbol can be resolved by only parsing the file they
+          // are defined in, so we do not have to save them
+          if (!sym->isExternal)
+            continue;
           auto *definedSym = dyn_cast_or_null<Defined>(sym);
           if (definedSym) {
             IncrementalLinkFile::SymbolInfo symbolInfo;
@@ -121,7 +125,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   }
   // TODO: Create own function for writing symbol list
   for (auto &sym : getSymbols()) {
-    if (sym->getRVA() == 0 || !sym->isLive()) {
+    if (sym->getRVA() == 0 || !sym->isLive() || !sym->isExternal) {
       continue;
     }
     auto &s = incrementalLinkFile->definedSymbols[sym->getName()];

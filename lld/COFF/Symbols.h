@@ -93,9 +93,11 @@ protected:
         nameData(n.empty() ? nullptr : n.data()) {}
 
   const unsigned symbolKind : 8;
-  unsigned isExternal : 1;
 
 public:
+
+  unsigned isExternal : 1;
+
   // This bit is used by the \c DefinedRegular subclass.
   unsigned isCOMDAT : 1;
 
