@@ -300,8 +300,7 @@ void updateSymbolTable(ObjFile *file) {
   StringMap<bool> newSyms;
   for (auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
-    if (!definedSym || definedSym->getRVA() == 0 || !definedSym->isLive() ||
-        !definedSym->isExternal)
+    if (!definedSym || !definedSym->isLive() || !definedSym->isExternal)
       continue;
     newSyms[definedSym->getName()] = true;
     auto it = oldSyms.find(definedSym->getName());
@@ -315,6 +314,7 @@ void updateSymbolTable(ObjFile *file) {
       symInfo.definitionAddress = definedSym->getRVA();
       symInfo.fileDefinedIn = file->getName();
       oldSyms[definedSym->getName()] = symInfo;
+      lld::outs() << "ADDED: " << sym->getName() << "\n";
     } else {
       if (it->second.definitionAddress != definedSym->getRVA()) {
         updatedSymbols[definedSym->getName()] =
@@ -324,7 +324,6 @@ void updateSymbolTable(ObjFile *file) {
     }
   }
   for (auto &sym : oldSyms) {
-    lld::outs() << sym.first() << "\n";
     if (sym.second.definitionAddress == 0)
       continue;
     if (!newSyms[sym.first()]) {
