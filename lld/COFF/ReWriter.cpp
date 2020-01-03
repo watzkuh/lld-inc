@@ -44,24 +44,24 @@ bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
     return false;
   }
   for (auto i : sc->symbols()) {
-    auto sym = incrementalLinkFile->definedSymbols[i->getName()];
+    auto sym = incrementalLinkFile->objFiles[sc->file->getName()]
+                   .definedSymbols[i->getName()];
     if (sym.fileDefinedIn.empty() || !i->getFile() ||
         sym.fileDefinedIn == i->getFile()->getName()) {
       incrementalLinkFile->objFiles[fileName].discardedSections.erase(
           sc->getSectionNumber());
       lld::outs() << sym.fileDefinedIn << " if " << i->getName()
-             << sc->getSectionName() << "\n";
+                  << sc->getSectionName() << "\n";
       return false;
     } else {
       lld::outs() << sym.fileDefinedIn << " else " << i->getName()
-             << sc->getSectionName() << "\n";
+                  << sc->getSectionName() << "\n";
       return true;
     }
   }
   return incrementalLinkFile->objFiles[fileName].discardedSections.count(
       sc->getSectionNumber());
 }
-
 
 void assignAddresses(ObjFile *file) {
   std::map<StringRef, uint32_t> rvas;
@@ -122,7 +122,7 @@ void reapplyRelocations(const StringRef &fileName) {
         continue;
       } else {
         lld::outs() << sym.first() << " changed; old: " << it->second.first
-               << "new: " << it->second.second << "\n";
+                    << "new: " << it->second.second << "\n";
       }
       uint64_t s = it->second.second;
       uint64_t invertS = -it->second.first;
@@ -131,13 +131,25 @@ void reapplyRelocations(const StringRef &fileName) {
         uint64_t p = chunkStart + rel.virtualAddress;
         uint8_t typeOff = 0;
         // Only AMD64 support at the moment
-        switch(rel.type) {
-        case COFF::IMAGE_REL_AMD64_REL32:    typeOff = 4; break;
-        case COFF::IMAGE_REL_AMD64_REL32_1:  typeOff = 5; break;
-        case COFF::IMAGE_REL_AMD64_REL32_2:  typeOff = 6; break;
-        case COFF::IMAGE_REL_AMD64_REL32_3:  typeOff = 7; break;
-        case COFF::IMAGE_REL_AMD64_REL32_4:  typeOff = 8; break;
-        case COFF::IMAGE_REL_AMD64_REL32_5:  typeOff = 9; break;
+        switch (rel.type) {
+        case COFF::IMAGE_REL_AMD64_REL32:
+          typeOff = 4;
+          break;
+        case COFF::IMAGE_REL_AMD64_REL32_1:
+          typeOff = 5;
+          break;
+        case COFF::IMAGE_REL_AMD64_REL32_2:
+          typeOff = 6;
+          break;
+        case COFF::IMAGE_REL_AMD64_REL32_3:
+          typeOff = 7;
+          break;
+        case COFF::IMAGE_REL_AMD64_REL32_4:
+          typeOff = 8;
+          break;
+        case COFF::IMAGE_REL_AMD64_REL32_5:
+          typeOff = 9;
+          break;
         }
         SectionChunk sc;
         // First, undo the original relocation
@@ -150,8 +162,10 @@ void reapplyRelocations(const StringRef &fileName) {
   }
 }
 
-IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc, uint8_t *buf,
-                        uint32_t chunkStart, size_t paddedSize) {
+IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
+                                                  uint8_t *buf,
+                                                  uint32_t chunkStart,
+                                                  size_t paddedSize) {
   memset(buf, 0xCC, paddedSize);
   memcpy(buf, sc->getContents().data(), sc->getSize());
 
@@ -173,7 +187,9 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc, uint8_t *buf
     // Fallback to symbol table if we either have no information
     // about the chunk or the symbol
     if (definedSym == nullptr || s == 0) {
-      s = incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress;
+      s = incrementalLinkFile->objFiles[sc->file->getName()]
+              .definedSymbols[sym->getName()]
+              .definitionAddress;
     }
     uint8_t *off = buf + rel.VirtualAddress;
 
@@ -201,7 +217,8 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     return;
   }
 
-  lld::outs() << "Rewriting " << secName << " section for file " << fileName << "\n";
+  lld::outs() << "Rewriting " << secName << " section for file " << fileName
+              << "\n";
 
   auto secIt = incrementalLinkFile->objFiles[fileName].sections.find(secName);
   if (secIt == incrementalLinkFile->objFiles[fileName].sections.end())
@@ -257,12 +274,12 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   }
 
   // if (num != secInfo.chunks.size()) {
-    lld::outs() << num << " new section vs old " << secInfo.chunks.size() << "\n";
- // }
+  lld::outs() << num << " new section vs old " << secInfo.chunks.size() << "\n";
+  // }
 
   if (secInfo.size != contribSize) {
     lld::outs() << "New " << secName << " section in " << fileName
-           << " is not the same size \n";
+                << " is not the same size \n";
     lld::outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
     incrementalLinkFile->rewriteAborted = true;
     return;
@@ -270,7 +287,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 }
 
 void updateSymbolTable(ObjFile *file) {
-  for (const auto &sym : file->getSymbols()) {
+  /*for (const auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
     if (!definedSym || definedSym->getRVA() == 0 ||
         sectionNames.count(sym->getName()))
@@ -284,7 +301,7 @@ void updateSymbolTable(ObjFile *file) {
       incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
           definedSym->getRVA();
     }
-  }
+  }*/
 }
 
 void rewriteFile(ObjFile *file) {
@@ -326,7 +343,6 @@ void coff::rewriteResult() {
 
   for (auto &f : dependentFileNames)
     reapplyRelocations(f);
-
   StringRef binaryFileData(
       reinterpret_cast<const char *>(binary->getBufferStart()),
       binary->getBufferSize());

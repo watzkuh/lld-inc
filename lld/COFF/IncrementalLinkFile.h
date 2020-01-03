@@ -53,6 +53,7 @@ struct IncrementalLinkFile {
     std::set<std::string> dependentFiles;
     StringMap<SectionInfo> sections;
     DenseMap<uint32_t, bool> discardedSections;
+    StringMap<SymbolInfo> definedSymbols;
   };
 
 public:
@@ -63,8 +64,7 @@ public:
                       StringMap<SymbolInfo> defSyms)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
-        outputSections(std::move(outSections)),
-        definedSymbols(std::move(defSyms)) {}
+        outputSections(std::move(outSections)) {}
 
   std::vector<std::string> arguments;
   DenseSet<StringRef> input;
@@ -75,7 +75,7 @@ public:
   uint64_t outputHash;
 
   StringMap<OutputSectionInfo> outputSections;
-  StringMap<SymbolInfo> definedSymbols;
+
   bool rewritePossible = false;
   bool rewriteAborted = false;
   size_t paddedAlignment = 64;
@@ -188,7 +188,6 @@ template <> struct yaml::MappingTraits<NormalizedSymbolMap> {
     io.mapRequired("name", sym.name);
     io.mapRequired("address", sym.symInfo.definitionAddress);
     io.mapOptional("relocations", sym.symInfo.relocations);
-    io.mapOptional("defined-in", sym.symInfo.fileDefinedIn);
   }
 };
 
@@ -260,14 +259,17 @@ struct NormalizedFileMap {
   NormalizedFileMap() {}
   NormalizedFileMap(std::string n, uint64_t h, std::vector<std::string> files,
                     std::vector<NormalizedSectionMap> s,
-                    std::vector<uint32_t> discard)
+                    std::vector<uint32_t> discard,
+                    std::vector<NormalizedSymbolMap> syms)
       : name(std::move(n)), hashValue(h), dependentFiles(std::move(files)),
-        sections(std::move(s)), discardedSections(std::move(discard)) {}
+        sections(std::move(s)), discardedSections(std::move(discard)),
+        definedSymbols(std::move(syms)) {}
   std::string name;
   uint64_t hashValue;
   std::vector<std::string> dependentFiles;
   std::vector<NormalizedSectionMap> sections;
   std::vector<uint32_t> discardedSections;
+  std::vector<NormalizedSymbolMap> definedSymbols;
 };
 
 template <> struct yaml::SequenceTraits<std::vector<NormalizedFileMap>> {
@@ -289,6 +291,7 @@ template <> struct yaml::MappingTraits<NormalizedFileMap> {
     io.mapOptional("dependent-files", file.dependentFiles);
     io.mapOptional("sections", file.sections);
     io.mapOptional("discarded-sections", file.discardedSections);
+    io.mapOptional("defined-symbols", file.definedSymbols);
   }
 };
 
@@ -333,19 +336,21 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         std::vector<std::string> dependentFiles;
         for (auto &dep : f.second.dependentFiles)
           dependentFiles.push_back(dep);
-        std::vector<uint32_t >discardedSections;
+        std::vector<uint32_t> discardedSections;
         for (auto &dis : f.second.discardedSections)
           discardedSections.push_back(dis.first);
+
+        std::vector<NormalizedSymbolMap> definedSymbols;
+        for (const auto &s : f.second.definedSymbols) {
+          NormalizedSymbolInfo symInfo{s.second.fileDefinedIn,
+                                       s.second.definitionAddress,
+                                       s.second.relocations};
+          NormalizedSymbolMap symMap{s.getKey(), symInfo};
+          definedSymbols.push_back(symMap);
+        }
         NormalizedFileMap fileMap(f.getKey(), f.second.hash, dependentFiles,
-                                  sections, discardedSections);
+                                  sections, discardedSections, definedSymbols);
         files.push_back(fileMap);
-      }
-      for (const auto &s : ilf.definedSymbols) {
-        NormalizedSymbolInfo symInfo{s.second.fileDefinedIn,
-                                     s.second.definitionAddress,
-                                     s.second.relocations};
-        NormalizedSymbolMap symMap{s.getKey(), symInfo};
-        definedSymbols.push_back(symMap);
       }
     }
 
@@ -385,14 +390,14 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         for (auto &dis : f.discardedSections)
           obj.discardedSections[dis] = true;
         objFiles[f.name] = obj;
+        for (auto &s : f.definedSymbols) {
+          lld::coff::IncrementalLinkFile::SymbolInfo symInfo;
+          symInfo.fileDefinedIn = s.symInfo.fileDefinedIn;
+          symInfo.definitionAddress = s.symInfo.definitionAddress;
+          obj.definedSymbols[s.name] = symInfo;
+        }
       }
       StringMap<lld::coff::IncrementalLinkFile::SymbolInfo> definedSymbols;
-      for (auto &s : this->definedSymbols) {
-        lld::coff::IncrementalLinkFile::SymbolInfo symInfo;
-        symInfo.fileDefinedIn = s.symInfo.fileDefinedIn;
-        symInfo.definitionAddress = s.symInfo.definitionAddress;
-        definedSymbols[s.name] = symInfo;
-      }
 
       return IncrementalLinkFile(arguments, objFiles, outputFile, outputHash,
                                  outSections, definedSymbols);
@@ -404,7 +409,6 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     std::string outputFile;
     uint64_t outputHash;
     std::vector<NormalizedOutputSectionMap> outputSections;
-    std::vector<NormalizedSymbolMap> definedSymbols;
   };
 
   static void mapping(IO &io, IncrementalLinkFile &ilf) {
@@ -415,7 +419,6 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     io.mapRequired("output-file", keys->outputFile);
     io.mapRequired("output-hash", keys->outputHash);
     io.mapRequired("output-sections", keys->outputSections);
-    io.mapOptional("defined-symbols", keys->definedSymbols);
   }
 };
 

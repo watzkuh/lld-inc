@@ -128,7 +128,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     if (sym->getRVA() == 0 || !sym->isLive() || !sym->isExternal) {
       continue;
     }
-    auto &s = incrementalLinkFile->definedSymbols[sym->getName()];
+    auto &s = incrementalLinkFile->objFiles[sym->file->getName()]
+                  .definedSymbols[sym->getName()];
     if (!sym->getFile()->getName().empty())
       s.fileDefinedIn = sym->getFile()->getName();
     s.definitionAddress = sym->getRVA();
