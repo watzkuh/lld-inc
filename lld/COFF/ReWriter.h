@@ -12,8 +12,6 @@ namespace coff {
 
 void markForReWrite(ObjFile *file);
 
-void doNothing();
-
 static std::list<std::function<void()>> rewriteQueue;
 void enqueueTask(std::function<void()> task);
 

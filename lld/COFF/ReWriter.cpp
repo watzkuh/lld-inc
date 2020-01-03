@@ -305,8 +305,6 @@ void coff::markForReWrite(coff::ObjFile *file) {
   changedFiles.push_back(file);
 }
 
-void coff::doNothing() {}
-
 void coff::rewriteResult() {
   ScopedTimer t(patchTimer);
   binary = CHECK(FileOutputBuffer::create(incrementalLinkFile->outputFile, -1,
@@ -342,4 +340,3 @@ void coff::rewriteResult() {
 void coff::enqueueTask(std::function<void()> task) {
   rewriteQueue.push_back(std::move(task));
 }
-
