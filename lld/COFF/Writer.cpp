@@ -643,6 +643,9 @@ void Writer::run() {
     writeIlfSections(outputSections);
 
   t3.stop();
+  lld::outs() << "Writing ilk \n";
+  if (config->incrementalLink)
+    writeIlfSections(outputSections);
   if (errorCount())
     return;
 

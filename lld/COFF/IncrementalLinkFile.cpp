@@ -135,6 +135,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     s.definitionAddress = sym->getRVA();
     if (s.filesUsedIn.size() <= 1)
       continue;
+    // TODO: This way of getting file dependencies is too inefficient
     for (auto &used : s.filesUsedIn) {
       if (used != sym->getFile()->getName())
         incrementalLinkFile->objFiles[sym->getFile()->getName()]

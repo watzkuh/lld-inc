@@ -174,7 +174,6 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
   chunkInfo.virtualAddress = sc->getRVA();
   chunkInfo.size = paddedSize;
 
-  StringMap<IncrementalLinkFile::SymbolInfo> symbols;
   for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
     const coff_relocation &rel = sc->getRelocs()[j];
     auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
@@ -286,22 +285,54 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   }
 }
 
-void updateSymbolTable(ObjFile *file) {
-  /*for (const auto &sym : file->getSymbols()) {
-    auto *definedSym = dyn_cast_or_null<Defined>(sym);
-    if (!definedSym || definedSym->getRVA() == 0 ||
-        sectionNames.count(sym->getName()))
-      continue;
-
-    auto &oldSym = incrementalLinkFile->definedSymbols[sym->getName()];
-    if (oldSym.definitionAddress != definedSym->getRVA() &&
-        oldSym.fileDefinedIn == file->getName()) {
-      updatedSymbols[sym->getName()] =
-          std::make_pair(oldSym.definitionAddress, definedSym->getRVA());
-      incrementalLinkFile->definedSymbols[sym->getName()].definitionAddress =
-          definedSym->getRVA();
+bool isDuplicate(StringRef symbol) {
+  for (auto &file : incrementalLinkFile->objFiles) {
+    for (auto &sym : file.second.definedSymbols) {
+      if (symbol == sym.first())
+        return true;
     }
-  }*/
+  }
+  return false;
+}
+
+void updateSymbolTable(ObjFile *file) {
+  auto &oldSyms = incrementalLinkFile->objFiles[file->getName()].definedSymbols;
+  StringMap<bool> newSyms;
+  for (auto &sym : file->getSymbols()) {
+    auto *definedSym = dyn_cast_or_null<Defined>(sym);
+    if (!definedSym || definedSym->getRVA() == 0 || !definedSym->isLive() ||
+        !definedSym->isExternal)
+      continue;
+    newSyms[definedSym->getName()] = true;
+    auto it = oldSyms.find(definedSym->getName());
+    if (it == oldSyms.end()) {
+      // New symbol was introduced, check if it already exists in another file
+      if (isDuplicate(definedSym->getName()))
+        incrementalLinkFile->rewriteAborted = true;
+      updatedSymbols[definedSym->getName()] =
+          std::make_pair(0, definedSym->getRVA());
+      IncrementalLinkFile::SymbolInfo symInfo;
+      symInfo.definitionAddress = definedSym->getRVA();
+      symInfo.fileDefinedIn = file->getName();
+      oldSyms[definedSym->getName()] = symInfo;
+    } else {
+      if (it->second.definitionAddress != definedSym->getRVA()) {
+        updatedSymbols[definedSym->getName()] =
+            std::make_pair(it->second.definitionAddress, definedSym->getRVA());
+        oldSyms[it->first()].definitionAddress = definedSym->getRVA();
+      }
+    }
+  }
+  for (auto &sym : oldSyms) {
+    lld::outs() << sym.first() << "\n";
+    if (sym.second.definitionAddress == 0)
+      continue;
+    if (!newSyms[sym.first()]) {
+      // Symbol was removed, should fail it was used by another file
+      lld::outs() << "MISSING: " << sym.first() << "\n";
+      incrementalLinkFile->rewriteAborted = true;
+    }
+  }
 }
 
 void rewriteFile(ObjFile *file) {
@@ -313,7 +344,6 @@ void rewriteFile(ObjFile *file) {
   for (auto &sec : chunks) {
     rewriteSection(sec.second, file->getName(), sec.first);
   }
-  updateSymbolTable(file);
 }
 
 void coff::markForReWrite(coff::ObjFile *file) {
@@ -331,7 +361,14 @@ void coff::rewriteResult() {
     rewriteQueue.front()();
     rewriteQueue.pop_front();
   }
-
+  for (auto &f : changedFiles) {
+    updateSymbolTable(f);
+    if (incrementalLinkFile->rewriteAborted) {
+      t.stop();
+      abortIncrementalLink();
+      return;
+    }
+  }
   for (auto &f : changedFiles) {
     rewriteFile(f);
     if (incrementalLinkFile->rewriteAborted) {

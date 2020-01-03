@@ -60,8 +60,7 @@ public:
   IncrementalLinkFile() = default;
   IncrementalLinkFile(std::vector<std::string> args,
                       StringMap<ObjectFileInfo> obj, std::string of,
-                      uint64_t oh, StringMap<OutputSectionInfo> outSections,
-                      StringMap<SymbolInfo> defSyms)
+                      uint64_t oh, StringMap<OutputSectionInfo> outSections)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
         outputSections(std::move(outSections)) {}
@@ -341,7 +340,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           discardedSections.push_back(dis.first);
 
         std::vector<NormalizedSymbolMap> definedSymbols;
-        for (const auto &s : f.second.definedSymbols) {
+        for (auto &s : f.second.definedSymbols) {
           NormalizedSymbolInfo symInfo{s.second.fileDefinedIn,
                                        s.second.definitionAddress,
                                        s.second.relocations};
@@ -389,18 +388,17 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         }
         for (auto &dis : f.discardedSections)
           obj.discardedSections[dis] = true;
-        objFiles[f.name] = obj;
         for (auto &s : f.definedSymbols) {
           lld::coff::IncrementalLinkFile::SymbolInfo symInfo;
           symInfo.fileDefinedIn = s.symInfo.fileDefinedIn;
           symInfo.definitionAddress = s.symInfo.definitionAddress;
           obj.definedSymbols[s.name] = symInfo;
         }
+        objFiles[f.name] = obj;
       }
-      StringMap<lld::coff::IncrementalLinkFile::SymbolInfo> definedSymbols;
 
       return IncrementalLinkFile(arguments, objFiles, outputFile, outputHash,
-                                 outSections, definedSymbols);
+                                 outSections);
     }
 
     std::vector<NormalizedFileMap> files;
