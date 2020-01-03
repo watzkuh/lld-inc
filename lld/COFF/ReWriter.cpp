@@ -28,7 +28,7 @@ llvm::StringMap<std::pair<uint64_t, uint64_t>> updatedSymbols;
 SmallDenseSet<StringRef> sectionNames = {".text", ".data", ".rdata", ".xdata"};
 
 void abortIncrementalLink() {
-  outs() << "Incremental link aborted, starting clean link...\n";
+  lld::outs() << "Incremental link aborted, starting clean link...\n";
   binary->discard();
   symtab->clear();
   incrementalLinkFile->rewriteAborted = true;
@@ -49,11 +49,11 @@ bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
         sym.fileDefinedIn == i->getFile()->getName()) {
       incrementalLinkFile->objFiles[fileName].discardedSections.erase(
           sc->getSectionNumber());
-      outs() << sym.fileDefinedIn << " if " << i->getName()
+      lld::outs() << sym.fileDefinedIn << " if " << i->getName()
              << sc->getSectionName() << "\n";
       return false;
     } else {
-      outs() << sym.fileDefinedIn << " else " << i->getName()
+      lld::outs() << sym.fileDefinedIn << " else " << i->getName()
              << sc->getSectionName() << "\n";
       return true;
     }
@@ -108,7 +108,7 @@ void applyRelocation(SectionChunk sc, uint8_t *off, support::ulittle16_t type,
 }
 
 void reapplyRelocations(const StringRef &fileName) {
-  outs() << "Applying relocations for file " << fileName << "\n";
+  lld::outs() << "Applying relocations for file " << fileName << "\n";
   auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[".text"];
   auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
   auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
@@ -121,7 +121,7 @@ void reapplyRelocations(const StringRef &fileName) {
       if (it == updatedSymbols.end()) {
         continue;
       } else {
-        outs() << sym.first() << " changed; old: " << it->second.first
+        lld::outs() << sym.first() << " changed; old: " << it->second.first
                << "new: " << it->second.second << "\n";
       }
       uint64_t s = it->second.second;
@@ -197,11 +197,11 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 
   // All currently supported sections for incremental links
   if (sectionNames.count(secName) == 0) {
-    outs() << "Ignored: " << secName << " section\n";
+    lld::outs() << "Ignored: " << secName << " section\n";
     return;
   }
 
-  outs() << "Rewriting " << secName << " section for file " << fileName << "\n";
+  lld::outs() << "Rewriting " << secName << " section for file " << fileName << "\n";
 
   auto secIt = incrementalLinkFile->objFiles[fileName].sections.find(secName);
   if (secIt == incrementalLinkFile->objFiles[fileName].sections.end())
@@ -257,13 +257,13 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   }
 
   // if (num != secInfo.chunks.size()) {
-    outs() << num << " new section vs old " << secInfo.chunks.size() << "\n";
+    lld::outs() << num << " new section vs old " << secInfo.chunks.size() << "\n";
  // }
 
   if (secInfo.size != contribSize) {
-    outs() << "New " << secName << " section in " << fileName
+    lld::outs() << "New " << secName << " section in " << fileName
            << " is not the same size \n";
-    outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
+    lld::outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
     incrementalLinkFile->rewriteAborted = true;
     return;
   }

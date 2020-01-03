@@ -3,6 +3,7 @@
 #define LLD_REWRITER_H
 
 #include "InputFiles.h"
+#include "llvm/Option/ArgList.h"
 
 using namespace llvm;
 
