@@ -171,7 +171,6 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
   memcpy(buf, sc->getContents().data(), sc->getSize());
 
   IncrementalLinkFile::ChunkInfo chunkInfo;
-  chunkInfo.checksum = sc->checksum;
   chunkInfo.virtualAddress = sc->getRVA();
   chunkInfo.size = paddedSize;
 
@@ -258,7 +257,6 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     } else {
       memset(buf, 0x0, paddedSize);
       memcpy(buf, sc->getContents().data(), sc->getSize());
-      chunkInfo.checksum = sc->checksum;
       chunkInfo.size = paddedSize;
       chunkInfo.virtualAddress = sc->getRVA();
     }

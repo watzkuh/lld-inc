@@ -30,7 +30,6 @@ struct IncrementalLinkFile {
   };
 
   struct ChunkInfo {
-    uint32_t checksum;
     uint32_t virtualAddress;
     size_t size;
     StringMap<SymbolInfo> symbols;
@@ -192,10 +191,9 @@ template <> struct yaml::MappingTraits<NormalizedSymbolMap> {
 
 struct NormalizedChunkInfo {
   NormalizedChunkInfo() {}
-  NormalizedChunkInfo(uint32_t c, uint32_t a, size_t s,
+  NormalizedChunkInfo(uint32_t a, size_t s,
                       std::vector<NormalizedSymbolMap> sym)
-      : checksum(c), virtualAddress(a), size(s), symbols(std::move(sym)) {}
-  uint32_t checksum;
+      : virtualAddress(a), size(s), symbols(std::move(sym)) {}
   yaml::Hex32 virtualAddress;
   size_t size;
   std::vector<NormalizedSymbolMap> symbols;
@@ -203,7 +201,6 @@ struct NormalizedChunkInfo {
 
 template <> struct yaml::MappingTraits<NormalizedChunkInfo> {
   static void mapping(IO &io, NormalizedChunkInfo &c) {
-    io.mapRequired("checksum", c.checksum);
     io.mapRequired("address", c.virtualAddress);
     io.mapRequired("size", c.size);
     io.mapOptional("symbols", c.symbols);
@@ -323,8 +320,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
               NormalizedSymbolMap normalizedSymbolMap(sym.getKey(), symbolInfo);
               symbols.push_back(normalizedSymbolMap);
             }
-            NormalizedChunkInfo chunkInfo(c.checksum, c.virtualAddress, c.size,
-                                          symbols);
+            NormalizedChunkInfo chunkInfo(c.virtualAddress, c.size, symbols);
             chunks.push_back(chunkInfo);
           }
           NormalizedSectionMap sectionMap(
@@ -381,7 +377,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
               symbols[sym.name] = symbolInfo;
             }
             lld::coff::IncrementalLinkFile::ChunkInfo chunkInfo{
-                c.checksum, c.virtualAddress, c.size, symbols};
+                c.virtualAddress, c.size, symbols};
             sectionData.chunks.push_back(chunkInfo);
           }
           obj.sections[sec.name] = sectionData;

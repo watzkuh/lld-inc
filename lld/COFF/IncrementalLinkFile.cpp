@@ -92,7 +92,6 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
           incrementalLinkFile->objFiles[fileName].sections[sc->header->Name];
 
       IncrementalLinkFile::ChunkInfo chunkInfo;
-      chunkInfo.checksum = sc->checksum;
       chunkInfo.virtualAddress = sc->getRVA();
       chunkInfo.size =
           alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
