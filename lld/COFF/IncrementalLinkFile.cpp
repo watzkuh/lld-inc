@@ -4,10 +4,14 @@
 #include "Symbols.h"
 #include "Writer.h"
 #include "lld/Common/ErrorHandler.h"
+#include <lld/Common/Timer.h>
 #include <llvm/Support/xxhash.h>
 
 using namespace lld;
 using namespace lld::coff;
+
+static Timer sectionWriter("Writing Output Sections", Timer::root());
+static Timer symbolWriter("Writing Symbols", Timer::root());
 
 // Copied from MapFile.cpp
 // Returns a list of all symbols that we want to print out.
@@ -64,6 +68,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   if (!config->incrementalLink)
     return;
 
+  ScopedTimer t1(sectionWriter);
+
   for (OutputSection *sec : outputSections) {
     StringRef const secName = sec->name;
     IncrementalLinkFile::OutputSectionInfo outputSectionInfo{
@@ -73,8 +79,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       auto *sc = dyn_cast<SectionChunk>(c);
       if (!sc || !sc->getSize())
         continue;
-      StringRef const name = sc->file->getName();
-      if (!incrementalLinkFile->rewritableFileNames.count(name))
+      StringRef const fileName = sc->file->getName();
+      if (!incrementalLinkFile->rewritableFileNames.count(fileName))
         continue;
 
       // Important! We want to save the section type as its defined in the COFF
@@ -83,7 +89,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       // incrementally, so we have to remember the location based on its
       // original section type.
       auto &sec =
-          incrementalLinkFile->objFiles[name].sections[sc->header->Name];
+          incrementalLinkFile->objFiles[fileName].sections[sc->header->Name];
 
       IncrementalLinkFile::ChunkInfo chunkInfo;
       chunkInfo.checksum = sc->checksum;
@@ -96,12 +102,17 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
         for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
           const coff_relocation &rel = sc->getRelocs()[j];
           auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
-          // Non external symbol can be resolved by only parsing the file they
-          // are defined in, so we do not have to save them
-          if (!sym->isExternal)
-            continue;
           auto *definedSym = dyn_cast_or_null<Defined>(sym);
           if (definedSym) {
+            // Non external symbol can be resolved by only parsing the file they
+            // are defined in, so we do not have to save them
+            if (!definedSym->getFile() || !definedSym->isExternal ||
+                !definedSym->isLive())
+              continue;
+            if (definedSym->getFile()->getName() != fileName) {
+              incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
+                  .dependentFiles.insert(fileName);
+            }
             IncrementalLinkFile::SymbolInfo symbolInfo;
             symbolInfo.definitionAddress = definedSym->getRVA();
             IncrementalLinkFile::RelocationInfo relInfo{rel.VirtualAddress,
@@ -123,7 +134,10 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       sec.size += alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
     }
   }
+  t1.stop();
+
   // TODO: Create own function for writing symbol list
+  ScopedTimer t(symbolWriter);
   for (auto &sym : getSymbols()) {
     if (sym->getRVA() == 0 || !sym->isLive() || !sym->isExternal) {
       continue;
@@ -133,15 +147,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     if (!sym->getFile()->getName().empty())
       s.fileDefinedIn = sym->getFile()->getName();
     s.definitionAddress = sym->getRVA();
-    if (s.filesUsedIn.size() <= 1)
-      continue;
-    // TODO: This way of getting file dependencies is too inefficient
-    for (auto &used : s.filesUsedIn) {
-      if (used != sym->getFile()->getName())
-        incrementalLinkFile->objFiles[sym->getFile()->getName()]
-            .dependentFiles.insert(used);
-    }
   }
+  t.stop();
 }
 
 std::string IncrementalLinkFile::getFileName() {

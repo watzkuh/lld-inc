@@ -482,12 +482,6 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef name) {
 
 std::pair<Symbol *, bool> SymbolTable::insert(StringRef name, InputFile *file) {
   std::pair<Symbol *, bool> result = insert(name);
-  if (file && config->incrementalLink &&
-      incrementalLinkFile->rewritableFileNames.count(file->getName())) {
-    incrementalLinkFile->objFiles[file->getName()]
-        .definedSymbols[name]
-        .filesUsedIn.insert(file->getName());
-  }
   if (!file || !isa<BitcodeFile>(file))
     result.first->isUsedInRegularObj = true;
   return result;
