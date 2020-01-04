@@ -32,6 +32,7 @@ void abortIncrementalLink() {
   binary->discard();
   symtab->clear();
   incrementalLinkFile->rewriteAborted = true;
+  incrementalLinkFile->outputHash = 0;
   driver->clearVisitedFiles();
   std::vector<char *> args;
   for (auto &a : incrementalLinkFile->arguments)
