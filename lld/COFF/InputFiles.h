@@ -93,6 +93,8 @@ public:
 protected:
   InputFile(Kind k, MemoryBufferRef m) : mb(m), fileKind(k) {}
 
+  uint64_t getModificationTime();
+
   StringRef directives;
 
 private:

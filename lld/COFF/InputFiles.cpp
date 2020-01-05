@@ -35,7 +35,6 @@
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/xxhash.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cstring>
 #include <system_error>
@@ -97,15 +96,26 @@ static bool ignoredSymbolName(StringRef name) {
   return name == "@feat.00" || name == "@comp.id";
 }
 
-bool InputFile::hasChanged() {
-  // TODO: Maybe use timestamp (file system and/or read from COFF header for better
-  // performance)
-  std::unique_ptr<Binary> bin = CHECK(createBinary(mb), this);
+uint64_t InputFile::getModificationTime() {
+  uint64_t modTime = 0;
+  llvm::sys::fs::file_status stat;
+  if (!llvm::sys::fs::status(mb.getBufferIdentifier(), stat)) {
+    if (llvm::sys::fs::exists(stat))
+      modTime = stat.getLastModificationTime().time_since_epoch().count();
+  } else {
+    if (!llvm::sys::fs::status(parentName, stat))
+      if (llvm::sys::fs::exists(stat))
+        modTime = stat.getLastModificationTime().time_since_epoch().count();
+  }
+  return modTime;
+}
 
-  u_int64_t hash = xxHash64(bin->getData());
-  std::string name = bin->getFileName();
-  if (incrementalLinkFile->objFiles[name].hash != hash) {
-    incrementalLinkFile->objFiles[name].hash = hash;
+bool InputFile::hasChanged() {
+  StringRef fileName = mb.getBufferIdentifier();
+  uint64_t modTime = getModificationTime();
+
+  if (incrementalLinkFile->objFiles[fileName].modTime != modTime) {
+    incrementalLinkFile->objFiles[fileName].modTime = modTime;
     return true;
   }
   return false;
@@ -117,8 +127,8 @@ void ArchiveFile::parse() {
   // Parse a MemoryBufferRef as an archive file.
   file = CHECK(Archive::create(mb), this);
   if (config->incrementalLink && !incrementalLinkFile->rewritePossible) {
-    incrementalLinkFile->objFiles[file->getFileName()].hash =
-        xxHash64(file->getData());
+    incrementalLinkFile->objFiles[file->getFileName()].modTime =
+        getModificationTime();
   }
   // Read the symbol table to construct Lazy objects.
   for (const Archive::Symbol &sym : file->symbols())
@@ -203,8 +213,8 @@ void ObjFile::parse() {
 
   if (auto *obj = dyn_cast<COFFObjectFile>(bin.get())) {
     if (config->incrementalLink && !incrementalLinkFile->rewritePossible) {
-      incrementalLinkFile->objFiles[bin->getFileName()].hash =
-          xxHash64(bin->getData());
+      incrementalLinkFile->objFiles[bin->getFileName()].modTime =
+          getModificationTime();
     }
     bin.release();
     coffObj.reset(obj);

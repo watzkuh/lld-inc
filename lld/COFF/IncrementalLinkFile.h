@@ -48,7 +48,7 @@ struct IncrementalLinkFile {
   };
 
   struct ObjectFileInfo {
-    uint64_t hash;
+    uint64_t modTime;
     std::set<std::string> dependentFiles;
     StringMap<SectionInfo> sections;
     DenseMap<uint32_t, bool> discardedSections;
@@ -253,15 +253,15 @@ template <> struct yaml::MappingTraits<NormalizedSectionMap> {
 
 struct NormalizedFileMap {
   NormalizedFileMap() {}
-  NormalizedFileMap(std::string n, uint64_t h, std::vector<std::string> files,
+  NormalizedFileMap(std::string n, uint64_t t, std::vector<std::string> files,
                     std::vector<NormalizedSectionMap> s,
                     std::vector<uint32_t> discard,
                     std::vector<NormalizedSymbolMap> syms)
-      : name(std::move(n)), hashValue(h), dependentFiles(std::move(files)),
+      : name(std::move(n)), modTime(t), dependentFiles(std::move(files)),
         sections(std::move(s)), discardedSections(std::move(discard)),
         definedSymbols(std::move(syms)) {}
   std::string name;
-  uint64_t hashValue;
+  uint64_t modTime;
   std::vector<std::string> dependentFiles;
   std::vector<NormalizedSectionMap> sections;
   std::vector<uint32_t> discardedSections;
@@ -283,7 +283,7 @@ template <> struct yaml::SequenceTraits<std::vector<NormalizedFileMap>> {
 template <> struct yaml::MappingTraits<NormalizedFileMap> {
   static void mapping(IO &io, NormalizedFileMap &file) {
     io.mapRequired("name", file.name);
-    io.mapRequired("hash", file.hashValue);
+    io.mapRequired("last-modified", file.modTime);
     io.mapOptional("dependent-files", file.dependentFiles);
     io.mapOptional("sections", file.sections);
     io.mapOptional("discarded-sections", file.discardedSections);
@@ -343,7 +343,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           NormalizedSymbolMap symMap{s.getKey(), symInfo};
           definedSymbols.push_back(symMap);
         }
-        NormalizedFileMap fileMap(f.getKey(), f.second.hash, dependentFiles,
+        NormalizedFileMap fileMap(f.getKey(), f.second.modTime, dependentFiles,
                                   sections, discardedSections, definedSymbols);
         files.push_back(fileMap);
       }
@@ -359,7 +359,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
       }
       for (auto &f : files) {
         lld::coff::IncrementalLinkFile::ObjectFileInfo obj;
-        obj.hash = f.hashValue;
+        obj.modTime = f.modTime;
         std::set<std::string> dependentFiles;
         for (auto &dep : f.dependentFiles)
           dependentFiles.insert(dep);
