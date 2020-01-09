@@ -69,7 +69,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     return;
 
   ScopedTimer t1(sectionWriter);
-
+  lld::outs() << "Writing ilk \n";
   for (OutputSection *sec : outputSections) {
     StringRef const secName = sec->name;
     IncrementalLinkFile::OutputSectionInfo outputSectionInfo{
@@ -114,9 +114,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
             }
             IncrementalLinkFile::RelocationInfo relInfo{rel.VirtualAddress,
                                                         rel.Type};
-            if (!chunkInfo.symbols.count(definedSym->getName()))
-            chunkInfo.symbols[definedSym->getName()].relocations.push_back(
-                relInfo);
+            chunkInfo.symbols[definedSym->getName()].push_back(relInfo);
           }
         }
       }
@@ -138,9 +136,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     if (sym->getRVA() == 0 || !sym->isLive() || !sym->isExternal) {
       continue;
     }
-    auto &s = incrementalLinkFile->objFiles[sym->file->getName()]
-                  .definedSymbols[sym->getName()];
-    s.definitionAddress = sym->getRVA();
+    incrementalLinkFile->objFiles[sym->file->getName()]
+        .definedSymbols[sym->getName()] = sym->getRVA();
   }
   t.stop();
 }

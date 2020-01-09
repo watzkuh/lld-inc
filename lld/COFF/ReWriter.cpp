@@ -44,7 +44,7 @@ bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
   if (!sc || !sc->isCOMDAT()) {
     return false;
   }
-  //TODO: Adapt this two new symbol per file safe logic
+  // TODO: Adapt this two new symbol per file safe logic
   /*for (auto i : sc->symbols()) {
     auto sym = incrementalLinkFile->objFiles[sc->file->getName()]
                    .definedSymbols[i->getName()];
@@ -128,7 +128,7 @@ void reapplyRelocations(const StringRef &fileName) {
       }
       uint64_t s = it->second.second;
       uint64_t invertS = -it->second.first;
-      for (const auto &rel : sym.second.relocations) {
+      for (const auto &rel : sym.second) {
         uint8_t *off = buf + rel.virtualAddress;
         uint64_t p = chunkStart + rel.virtualAddress;
         uint8_t typeOff = 0;
@@ -188,8 +188,7 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
     // about the chunk or the symbol
     if (definedSym == nullptr || s == 0) {
       s = incrementalLinkFile->objFiles[sc->file->getName()]
-              .definedSymbols[sym->getName()]
-              .definitionAddress;
+              .definedSymbols[sym->getName()];
     }
     uint8_t *off = buf + rel.VirtualAddress;
 
@@ -198,12 +197,8 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
 
     applyRelocation(*sc, off, rel.Type, s, p);
 
-    IncrementalLinkFile::SymbolInfo symbolInfo;
-    symbolInfo.definitionAddress = s;
     IncrementalLinkFile::RelocationInfo relInfo{rel.VirtualAddress, rel.Type};
-    if (!chunkInfo.symbols.count(sym->getName()))
-      chunkInfo.symbols[sym->getName()] = symbolInfo;
-    chunkInfo.symbols[sym->getName()].relocations.push_back(relInfo);
+    chunkInfo.symbols[sym->getName()].push_back(relInfo);
   }
   return chunkInfo;
 }
@@ -245,6 +240,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   uint32_t contribSize = 0;
   uint32_t num = 0;
 
+  std::vector<IncrementalLinkFile::ChunkInfo> newChunks;
   for (SectionChunk *sc : chunks) {
     if (sc->getSize() == 0 || isDiscardedCOMDAT(sc, fileName))
       continue;
@@ -261,17 +257,12 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
       chunkInfo.size = paddedSize;
       chunkInfo.virtualAddress = sc->getRVA();
     }
-
-    if (secInfo.chunks.size() > num)
-      secInfo.chunks[num] = chunkInfo;
-    else
-      secInfo.chunks.push_back(chunkInfo);
-
+    newChunks.push_back(chunkInfo);
     contribSize += paddedSize;
     num++;
     buf += paddedSize;
   }
-
+  secInfo.chunks = newChunks;
   // if (num != secInfo.chunks.size()) {
   lld::outs() << num << " new section vs old " << secInfo.chunks.size() << "\n";
   // }
@@ -310,20 +301,18 @@ void updateSymbolTable(ObjFile *file) {
         incrementalLinkFile->rewriteAborted = true;
       updatedSymbols[definedSym->getName()] =
           std::make_pair(0, definedSym->getRVA());
-      IncrementalLinkFile::SymbolInfo symInfo;
-      symInfo.definitionAddress = definedSym->getRVA();
-      oldSyms[definedSym->getName()] = symInfo;
+      oldSyms[definedSym->getName()] = definedSym->getRVA();
       lld::outs() << "ADDED: " << sym->getName() << "\n";
     } else {
-      if (it->second.definitionAddress != definedSym->getRVA()) {
+      if (it->second != definedSym->getRVA()) {
         updatedSymbols[definedSym->getName()] =
-            std::make_pair(it->second.definitionAddress, definedSym->getRVA());
-        oldSyms[it->first()].definitionAddress = definedSym->getRVA();
+            std::make_pair(it->second, definedSym->getRVA());
+        oldSyms[it->first()] = definedSym->getRVA();
       }
     }
   }
   for (auto &sym : oldSyms) {
-    if (sym.second.definitionAddress == 0)
+    if (sym.second == 0)
       continue;
     if (!newSyms[sym.first()]) {
       // Symbol was removed, should fail it was used by another file

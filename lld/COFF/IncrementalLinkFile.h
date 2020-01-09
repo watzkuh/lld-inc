@@ -22,15 +22,10 @@ struct IncrementalLinkFile {
     support::ulittle16_t type;
   };
 
-  struct SymbolInfo {
-    uint64_t definitionAddress;
-    std::vector<RelocationInfo> relocations;
-  };
-
   struct ChunkInfo {
     uint32_t virtualAddress;
     size_t size;
-    StringMap<SymbolInfo> symbols;
+    StringMap<std::vector<RelocationInfo>> symbols;
   };
 
   struct SectionInfo {
@@ -49,7 +44,7 @@ struct IncrementalLinkFile {
     uint64_t modTime;
     std::set<std::string> dependentFiles;
     StringMap<SectionInfo> sections;
-    StringMap<SymbolInfo> definedSymbols;
+    StringMap<uint64_t> definedSymbols;
   };
 
 public:
@@ -115,10 +110,17 @@ template <> struct yaml::MappingTraits<NormalizedOutputSectionMap> {
   }
 };
 
-LLVM_YAML_IS_SEQUENCE_VECTOR(IncrementalLinkFile::RelocationInfo)
+struct NormalizedRelocationInfo {
+  std::string symbolName;
+  support::ulittle32_t virtualAddress;
+  support::ulittle16_t type;
+};
 
-template <> struct yaml::MappingTraits<IncrementalLinkFile::RelocationInfo> {
-  static void mapping(IO &io, IncrementalLinkFile::RelocationInfo &rel) {
+LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedRelocationInfo)
+
+template <> struct yaml::MappingTraits<NormalizedRelocationInfo> {
+  static void mapping(IO &io, NormalizedRelocationInfo &rel) {
+    io.mapRequired("symbol-name", rel.symbolName);
     io.mapRequired("address", rel.virtualAddress);
     io.mapRequired("type", rel.type);
   }
@@ -126,13 +128,10 @@ template <> struct yaml::MappingTraits<IncrementalLinkFile::RelocationInfo> {
 
 struct NormalizedSymbolInfo {
   NormalizedSymbolInfo() {}
-  NormalizedSymbolInfo(std::string n, std::string f, uint64_t d,
-                       std::vector<IncrementalLinkFile::RelocationInfo> rels)
-      : name(std::move(n)), definitionAddress(d),
-        relocations(std::move(rels)) {}
+  NormalizedSymbolInfo(std::string n, uint64_t d)
+      : name(std::move(n)), definitionAddress(d) {}
   std::string name;
-  uint64_t definitionAddress;
-  std::vector<IncrementalLinkFile::RelocationInfo> relocations;
+  yaml::Hex64 definitionAddress;
 };
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedSymbolInfo)
@@ -140,19 +139,18 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedSymbolInfo)
 template <> struct yaml::MappingTraits<NormalizedSymbolInfo> {
   static void mapping(IO &io, NormalizedSymbolInfo &sym) {
     io.mapRequired("name", sym.name);
-    io.mapOptional("address", sym.definitionAddress);
-    io.mapOptional("relocations", sym.relocations);
+    io.mapRequired("address", sym.definitionAddress);
   }
 };
 
 struct NormalizedChunkInfo {
   NormalizedChunkInfo() {}
   NormalizedChunkInfo(uint32_t a, size_t s,
-                      std::vector<NormalizedSymbolInfo> sym)
-      : virtualAddress(a), size(s), symbols(std::move(sym)) {}
+                      std::vector<NormalizedRelocationInfo> rels)
+      : virtualAddress(a), size(s), relocations(std::move(rels)) {}
   yaml::Hex32 virtualAddress;
   size_t size;
-  std::vector<NormalizedSymbolInfo> symbols;
+  std::vector<NormalizedRelocationInfo> relocations;
 };
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedChunkInfo);
@@ -161,7 +159,7 @@ template <> struct yaml::MappingTraits<NormalizedChunkInfo> {
   static void mapping(IO &io, NormalizedChunkInfo &c) {
     io.mapRequired("address", c.virtualAddress);
     io.mapRequired("size", c.size);
-    io.mapOptional("symbols", c.symbols);
+    io.mapOptional("relocations", c.relocations);
   }
 };
 
@@ -234,12 +232,13 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         for (const auto &sec : f.second.sections) {
           std::vector<NormalizedChunkInfo> chunks;
           for (const auto &c : sec.second.chunks) {
-            std::vector<NormalizedSymbolInfo> symbols;
+            std::vector<NormalizedRelocationInfo> symbols;
             for (const auto &sym : c.symbols) {
-              NormalizedSymbolInfo symInfo;
-              symInfo.name = sym.first();
-              symInfo.relocations = sym.second.relocations;
-              symbols.push_back(symInfo);
+              for (const auto &rel : sym.second) {
+                NormalizedRelocationInfo relocationInfo{
+                    sym.first(), rel.virtualAddress, rel.type};
+                symbols.push_back(relocationInfo);
+              }
             }
             NormalizedChunkInfo chunkInfo(c.virtualAddress, c.size, symbols);
             chunks.push_back(chunkInfo);
@@ -255,9 +254,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
 
         std::vector<NormalizedSymbolInfo> definedSymbols;
         for (auto &s : f.second.definedSymbols) {
-          NormalizedSymbolInfo symInfo;
-          symInfo.name = s.first();
-          symInfo.definitionAddress = s.second.definitionAddress;
+          NormalizedSymbolInfo symInfo{s.first(), s.second};
           definedSymbols.push_back(symInfo);
         }
         NormalizedFileMap fileMap(f.getKey(), f.second.modTime, dependentFiles,
@@ -286,9 +283,11 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           sectionData.size = sec.size;
           sectionData.virtualAddress = sec.virtualAddress;
           for (auto &c : sec.chunks) {
-            StringMap<lld::coff::IncrementalLinkFile::SymbolInfo> symbols;
-            for (auto &sym : c.symbols) {
-              symbols[sym.name].relocations = sym.relocations;
+            StringMap<std::vector<IncrementalLinkFile::RelocationInfo>> symbols;
+            for (auto &rel : c.relocations) {
+              IncrementalLinkFile::RelocationInfo relInfo{rel.virtualAddress,
+                                                          rel.type};
+              symbols[rel.symbolName].push_back(relInfo);
             }
             lld::coff::IncrementalLinkFile::ChunkInfo chunkInfo{
                 c.virtualAddress, c.size, symbols};
@@ -297,7 +296,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           obj.sections[sec.name] = sectionData;
         }
         for (auto &s : f.definedSymbols) {
-          obj.definedSymbols[s.name].definitionAddress = s.definitionAddress;
+          obj.definedSymbols[s.name] = s.definitionAddress;
         }
         objFiles[f.name] = obj;
       }
