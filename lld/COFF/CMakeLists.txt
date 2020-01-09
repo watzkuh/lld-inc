@@ -20,6 +20,7 @@ add_lld_library(lldCOFF
   MapFile.cpp
   MarkLive.cpp
   MinGW.cpp
+  NormalizedIlf.cpp
   PDB.cpp
   ReWriter.cpp
   SymbolTable.cpp

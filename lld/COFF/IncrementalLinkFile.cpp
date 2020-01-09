@@ -4,6 +4,7 @@
 #include "Symbols.h"
 #include "Writer.h"
 #include "lld/Common/ErrorHandler.h"
+#include "llvm/Support/raw_ostream.h"
 #include <lld/Common/Timer.h>
 #include <llvm/Support/xxhash.h>
 
@@ -147,6 +148,11 @@ std::string IncrementalLinkFile::getFileName() {
 }
 
 void IncrementalLinkFile::writeToDisk() {
+  uint64_t nr = 0;
+  for (auto &a : incrementalLinkFile->objFiles) {
+    nr += a.second.definedSymbols.size();
+  }
+  outs() << "Nr of symbols: " << nr << "\n";
   std::error_code code;
   raw_fd_ostream out(IncrementalLinkFile::getFileName(), code);
   llvm::yaml::Output yout(out);
