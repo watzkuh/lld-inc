@@ -107,6 +107,8 @@ struct NormalizedOutputSectionMap {
   size_t size;
 };
 
+LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedOutputSectionMap)
+
 template <> struct yaml::MappingTraits<NormalizedOutputSectionMap> {
   static void mapping(IO &io, NormalizedOutputSectionMap &sec) {
     io.mapRequired("name", sec.name);
@@ -116,38 +118,12 @@ template <> struct yaml::MappingTraits<NormalizedOutputSectionMap> {
   }
 };
 
-template <>
-struct yaml::SequenceTraits<std::vector<NormalizedOutputSectionMap>> {
-  static size_t size(IO &io, std::vector<NormalizedOutputSectionMap> &seq) {
-    return seq.size();
-  }
-  static NormalizedOutputSectionMap &
-  element(IO &io, std::vector<NormalizedOutputSectionMap> &seq, size_t index) {
-    if (index >= seq.size())
-      seq.resize(index + 1);
-    return seq[index];
-  }
-};
+LLVM_YAML_IS_SEQUENCE_VECTOR(IncrementalLinkFile::RelocationInfo)
 
 template <> struct yaml::MappingTraits<IncrementalLinkFile::RelocationInfo> {
   static void mapping(IO &io, IncrementalLinkFile::RelocationInfo &rel) {
     io.mapRequired("address", rel.virtualAddress);
     io.mapRequired("type", rel.type);
-  }
-};
-
-template <>
-struct yaml::SequenceTraits<std::vector<IncrementalLinkFile::RelocationInfo>> {
-  static size_t size(IO &io,
-                     std::vector<IncrementalLinkFile::RelocationInfo> &seq) {
-    return seq.size();
-  }
-  static IncrementalLinkFile::RelocationInfo &
-  element(IO &io, std::vector<IncrementalLinkFile::RelocationInfo> &seq,
-          size_t index) {
-    if (index >= seq.size())
-      seq.resize(index + 1);
-    return seq[index];
   }
 };
 
@@ -169,17 +145,7 @@ struct NormalizedSymbolMap {
   NormalizedSymbolInfo symInfo;
 };
 
-template <> struct yaml::SequenceTraits<std::vector<NormalizedSymbolMap>> {
-  static size_t size(IO &io, std::vector<NormalizedSymbolMap> &seq) {
-    return seq.size();
-  }
-  static NormalizedSymbolMap &
-  element(IO &io, std::vector<NormalizedSymbolMap> &seq, size_t index) {
-    if (index >= seq.size())
-      seq.resize(index + 1);
-    return seq[index];
-  }
-};
+LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedSymbolMap)
 
 template <> struct yaml::MappingTraits<NormalizedSymbolMap> {
   static void mapping(IO &io, NormalizedSymbolMap &sym) {
@@ -199,23 +165,13 @@ struct NormalizedChunkInfo {
   std::vector<NormalizedSymbolMap> symbols;
 };
 
+LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedChunkInfo);
+
 template <> struct yaml::MappingTraits<NormalizedChunkInfo> {
   static void mapping(IO &io, NormalizedChunkInfo &c) {
     io.mapRequired("address", c.virtualAddress);
     io.mapRequired("size", c.size);
     io.mapOptional("symbols", c.symbols);
-  }
-};
-
-template <> struct yaml::SequenceTraits<std::vector<NormalizedChunkInfo>> {
-  static size_t size(IO &io, std::vector<NormalizedChunkInfo> &seq) {
-    return seq.size();
-  }
-  static NormalizedChunkInfo &
-  element(IO &io, std::vector<NormalizedChunkInfo> &seq, size_t index) {
-    if (index >= seq.size())
-      seq.resize(index + 1);
-    return seq[index];
   }
 };
 
@@ -230,17 +186,7 @@ struct NormalizedSectionMap {
   std::vector<NormalizedChunkInfo> chunks;
 };
 
-template <> struct yaml::SequenceTraits<std::vector<NormalizedSectionMap>> {
-  static size_t size(IO &io, std::vector<NormalizedSectionMap> &seq) {
-    return seq.size();
-  }
-  static NormalizedSectionMap &
-  element(IO &io, std::vector<NormalizedSectionMap> &seq, size_t index) {
-    if (index >= seq.size())
-      seq.resize(index + 1);
-    return seq[index];
-  }
-};
+LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedSectionMap)
 
 template <> struct yaml::MappingTraits<NormalizedSectionMap> {
   static void mapping(IO &io, NormalizedSectionMap &sec) {
@@ -268,17 +214,7 @@ struct NormalizedFileMap {
   std::vector<NormalizedSymbolMap> definedSymbols;
 };
 
-template <> struct yaml::SequenceTraits<std::vector<NormalizedFileMap>> {
-  static size_t size(IO &io, std::vector<NormalizedFileMap> &seq) {
-    return seq.size();
-  }
-  static NormalizedFileMap &element(IO &io, std::vector<NormalizedFileMap> &seq,
-                                    size_t index) {
-    if (index >= seq.size())
-      seq.resize(index + 1);
-    return seq[index];
-  }
-};
+LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedFileMap)
 
 template <> struct yaml::MappingTraits<NormalizedFileMap> {
   static void mapping(IO &io, NormalizedFileMap &file) {
