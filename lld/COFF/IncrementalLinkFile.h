@@ -49,7 +49,6 @@ struct IncrementalLinkFile {
     uint64_t modTime;
     std::set<std::string> dependentFiles;
     StringMap<SectionInfo> sections;
-    DenseMap<uint32_t, bool> discardedSections;
     StringMap<SymbolInfo> definedSymbols;
   };
 
@@ -192,16 +191,13 @@ struct NormalizedFileMap {
   NormalizedFileMap() {}
   NormalizedFileMap(std::string n, uint64_t t, std::vector<std::string> files,
                     std::vector<NormalizedSectionMap> s,
-                    std::vector<uint32_t> discard,
                     std::vector<NormalizedSymbolInfo> syms)
       : name(std::move(n)), modTime(t), dependentFiles(std::move(files)),
-        sections(std::move(s)), discardedSections(std::move(discard)),
-        definedSymbols(std::move(syms)) {}
+        sections(std::move(s)), definedSymbols(std::move(syms)) {}
   std::string name;
   uint64_t modTime;
   std::vector<std::string> dependentFiles;
   std::vector<NormalizedSectionMap> sections;
-  std::vector<uint32_t> discardedSections;
   std::vector<NormalizedSymbolInfo> definedSymbols;
 };
 
@@ -213,7 +209,6 @@ template <> struct yaml::MappingTraits<NormalizedFileMap> {
     io.mapRequired("last-modified", file.modTime);
     io.mapOptional("dependent-files", file.dependentFiles);
     io.mapOptional("sections", file.sections);
-    io.mapOptional("discarded-sections", file.discardedSections);
     io.mapOptional("defined-symbols", file.definedSymbols);
   }
 };
@@ -257,9 +252,6 @@ template <> struct MappingTraits<IncrementalLinkFile> {
         std::vector<std::string> dependentFiles;
         for (auto &dep : f.second.dependentFiles)
           dependentFiles.push_back(dep);
-        std::vector<uint32_t> discardedSections;
-        for (auto &dis : f.second.discardedSections)
-          discardedSections.push_back(dis.first);
 
         std::vector<NormalizedSymbolInfo> definedSymbols;
         for (auto &s : f.second.definedSymbols) {
@@ -269,7 +261,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           definedSymbols.push_back(symInfo);
         }
         NormalizedFileMap fileMap(f.getKey(), f.second.modTime, dependentFiles,
-                                  sections, discardedSections, definedSymbols);
+                                  sections, definedSymbols);
         files.push_back(fileMap);
       }
     }
@@ -304,8 +296,6 @@ template <> struct MappingTraits<IncrementalLinkFile> {
           }
           obj.sections[sec.name] = sectionData;
         }
-        for (auto &dis : f.discardedSections)
-          obj.discardedSections[dis] = true;
         for (auto &s : f.definedSymbols) {
           obj.definedSymbols[s.name].definitionAddress = s.definitionAddress;
         }
