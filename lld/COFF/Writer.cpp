@@ -643,7 +643,6 @@ void Writer::run() {
     writeIlfSections(outputSections);
 
   t3.stop();
-  lld::outs() << "Writing ilk \n";
   if (config->incrementalLink)
     writeIlfSections(outputSections);
   if (errorCount())
@@ -652,6 +651,7 @@ void Writer::run() {
   ScopedTimer t2(diskCommitTimer);
   if (auto e = buffer->commit())
     fatal("failed to write the output file: " + toString(std::move(e)));
+  t2.stop();
 }
 
 static StringRef getOutputSectionName(StringRef name) {

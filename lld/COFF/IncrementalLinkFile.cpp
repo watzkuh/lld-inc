@@ -112,12 +112,9 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
               incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
                   .dependentFiles.insert(fileName);
             }
-            IncrementalLinkFile::SymbolInfo symbolInfo;
-            symbolInfo.definitionAddress = definedSym->getRVA();
             IncrementalLinkFile::RelocationInfo relInfo{rel.VirtualAddress,
                                                         rel.Type};
             if (!chunkInfo.symbols.count(definedSym->getName()))
-              chunkInfo.symbols[definedSym->getName()] = symbolInfo;
             chunkInfo.symbols[definedSym->getName()].relocations.push_back(
                 relInfo);
           }
@@ -143,8 +140,6 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     }
     auto &s = incrementalLinkFile->objFiles[sym->file->getName()]
                   .definedSymbols[sym->getName()];
-    if (!sym->getFile()->getName().empty())
-      s.fileDefinedIn = sym->getFile()->getName();
     s.definitionAddress = sym->getRVA();
   }
   t.stop();

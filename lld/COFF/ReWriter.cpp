@@ -44,7 +44,8 @@ bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
   if (!sc || !sc->isCOMDAT()) {
     return false;
   }
-  for (auto i : sc->symbols()) {
+  //TODO: Adapt this two new symbol per file safe logic
+  /*for (auto i : sc->symbols()) {
     auto sym = incrementalLinkFile->objFiles[sc->file->getName()]
                    .definedSymbols[i->getName()];
     if (sym.fileDefinedIn.empty() || !i->getFile() ||
@@ -61,7 +62,7 @@ bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
     }
   }
   return incrementalLinkFile->objFiles[fileName].discardedSections.count(
-      sc->getSectionNumber());
+      sc->getSectionNumber());*/
 }
 
 void assignAddresses(ObjFile *file) {
@@ -311,7 +312,6 @@ void updateSymbolTable(ObjFile *file) {
           std::make_pair(0, definedSym->getRVA());
       IncrementalLinkFile::SymbolInfo symInfo;
       symInfo.definitionAddress = definedSym->getRVA();
-      symInfo.fileDefinedIn = file->getName();
       oldSyms[definedSym->getName()] = symInfo;
       lld::outs() << "ADDED: " << sym->getName() << "\n";
     } else {
