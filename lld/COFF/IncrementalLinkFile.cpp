@@ -109,7 +109,9 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
             if (!definedSym->getFile() || !definedSym->isExternal ||
                 !definedSym->isLive())
               continue;
-            if (definedSym->getFile()->getName() != fileName) {
+            if (definedSym->getFile()->getName() != fileName &&
+                incrementalLinkFile->input.count(
+                    definedSym->getFile()->getName())) {
               incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
                   .dependentFiles.insert(fileName);
             }
