@@ -1,0 +1,20 @@
+# Like incremental-reorder.test, but we undo the change again and check if we get initial
+# result again
+# RUN: rm -rf %t.dir
+# RUN: mkdir %t.dir
+# RUN: yaml2obj %p/Inputs/extern-reorder.yaml > %t.dir/main.obj
+# RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > %t.dir/reorder.obj
+# RUN: lld-link /out:%t.dir/inc.exe /nodefaultlib /opt:noref /entry:main \
+# RUN:  /incrementallink %t.dir/main.obj %t.dir/reorder.obj
+# RUN: llvm-readobj --sections --section-data %t.dir/inc.exe > %t.dir/clean-link
+#
+# RUN: yaml2obj %p/Inputs/ipsum-lorem-reorder.yaml > %t.dir/reorder.obj
+# RUN: lld-link /out:%t.dir/inc.exe /nodefaultlib /opt:noref /entry:main \
+# RUN:  /incrementallink %t.dir/main.obj %t.dir/reorder.obj
+#
+# RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > %t.dir/reorder.obj
+# RUN: lld-link /out:%t.dir/inc.exe /nodefaultlib /opt:noref /entry:main \
+# RUN:  /incrementallink %t.dir/main.obj %t.dir/reorder.obj
+# RUN: llvm-readobj --sections --section-data %t.dir/inc.exe > %t.dir/incremental-link
+# RUN: diff %t.dir/incremental-link %t.dir/clean-link
+
