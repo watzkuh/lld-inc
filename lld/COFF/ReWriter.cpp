@@ -123,7 +123,8 @@ void reapplyRelocations(const StringRef &fileName) {
       if (it == updatedSymbols.end()) {
         continue;
       } else {
-        lld::outs() << sym.first() << " changed; old: " << it->second.first
+        lld::outs() << sym.first()
+                    << " changed address; old: " << it->second.first
                     << "new: " << it->second.second << "\n";
       }
       uint64_t s = it->second.second;
@@ -187,8 +188,7 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
     // Fallback to symbol table if we either have no information
     // about the chunk or the symbol
     if (definedSym == nullptr || s == 0) {
-      s = incrementalLinkFile->objFiles[sc->file->getName()]
-              .definedSymbols[sym->getName()];
+      s = incrementalLinkFile->globalSymbols[sym->getName()];
     }
     uint8_t *off = buf + rel.VirtualAddress;
 
@@ -315,7 +315,7 @@ void updateSymbolTable(ObjFile *file) {
     if (sym.second == 0)
       continue;
     if (!newSyms[sym.first()]) {
-      // Symbol was removed, should fail it was used by another file
+      // TODO: Symbol was removed, should fail it was used by another file
       lld::outs() << "MISSING: " << sym.first() << "\n";
       incrementalLinkFile->rewriteAborted = true;
     }

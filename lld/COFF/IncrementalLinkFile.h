@@ -6,6 +6,7 @@
 #include <llvm/ADT/DenseSet.h>
 #include <set>
 #include <string>
+#include <utility>
 
 using namespace llvm;
 
@@ -48,10 +49,12 @@ public:
   IncrementalLinkFile() = default;
   IncrementalLinkFile(std::vector<std::string> args,
                       StringMap<ObjectFileInfo> obj, std::string of,
-                      uint64_t oh, StringMap<OutputSectionInfo> outSections)
+                      uint64_t oh, StringMap<OutputSectionInfo> outSections,
+                      StringMap<uint64_t> syms)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
-        outputSections(std::move(outSections)) {}
+        outputSections(std::move(outSections)), globalSymbols(std::move(syms)) {
+  }
 
   std::vector<std::string> arguments;
   DenseSet<StringRef> input;
@@ -62,6 +65,7 @@ public:
   uint64_t outputHash{};
 
   StringMap<OutputSectionInfo> outputSections;
+  StringMap<uint64_t> globalSymbols;
 
   bool rewritePossible = false;
   bool rewriteAborted = false;

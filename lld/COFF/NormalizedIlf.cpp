@@ -113,6 +113,7 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
         s.rawAddress, s.virtualAddress, s.size};
     outSections[s.name] = sec;
   }
+  StringMap<uint64_t> globalSymbols;
   for (auto &f : files) {
     lld::coff::IncrementalLinkFile::ObjectFileInfo obj;
     obj.modTime = f.modTime;
@@ -139,10 +140,11 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
     }
     for (auto &s : f.definedSymbols) {
       obj.definedSymbols[s.name] = s.definitionAddress;
+      globalSymbols[s.name] = s.definitionAddress;
     }
     objFiles[f.name] = obj;
   }
 
   return IncrementalLinkFile(arguments, objFiles, outputFile, outputHash,
-                             outSections);
+                             outSections, globalSymbols);
 }
