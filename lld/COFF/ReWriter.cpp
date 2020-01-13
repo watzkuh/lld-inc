@@ -68,7 +68,7 @@ bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
 void assignAddresses(ObjFile *file) {
   std::map<StringRef, uint32_t> rvas;
   for (auto &s : incrementalLinkFile->objFiles[file->getName()].sections) {
-    rvas[s.getKey()] = s.second.virtualAddress;
+    rvas[s.first] = s.second.virtualAddress;
   }
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
@@ -119,11 +119,11 @@ void reapplyRelocations(const StringRef &fileName) {
   for (const auto &c : secInfo.chunks) {
     uint32_t chunkStart = c.virtualAddress;
     for (const auto &sym : c.symbols) {
-      auto it = updatedSymbols.find(sym.first());
+      auto it = updatedSymbols.find(sym.first);
       if (it == updatedSymbols.end()) {
         continue;
       } else {
-        lld::outs() << sym.first()
+        lld::outs() << sym.first
                     << " changed address; old: " << it->second.first
                     << "new: " << it->second.second << "\n";
       }
@@ -156,9 +156,9 @@ void reapplyRelocations(const StringRef &fileName) {
         }
         SectionChunk sc;
         // First, undo the original relocation
-        applyRelocation(sc, off, rel.type, invertS + 2 * (p + typeOff), p);
+        applyRelocation(sc, off, (support::ulittle16_t)rel.type, invertS + 2 * (p + typeOff), p);
 
-        applyRelocation(sc, off, rel.type, s, p);
+        applyRelocation(sc, off, (support::ulittle16_t) rel.type, s, p);
       }
     }
     buf += c.size;
@@ -279,7 +279,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 bool isDuplicate(StringRef symbol) {
   for (auto &file : incrementalLinkFile->objFiles) {
     for (auto &sym : file.second.definedSymbols) {
-      if (symbol == sym.first())
+      if (symbol == sym.first)
         return true;
     }
   }
@@ -307,16 +307,16 @@ void updateSymbolTable(ObjFile *file) {
       if (it->second != definedSym->getRVA()) {
         updatedSymbols[definedSym->getName()] =
             std::make_pair(it->second, definedSym->getRVA());
-        oldSyms[it->first()] = definedSym->getRVA();
+        oldSyms[it->first] = definedSym->getRVA();
       }
     }
   }
   for (auto &sym : oldSyms) {
     if (sym.second == 0)
       continue;
-    if (!newSyms[sym.first()]) {
+    if (!newSyms[sym.first]) {
       // TODO: Symbol was removed, should fail it was used by another file
-      lld::outs() << "MISSING: " << sym.first() << "\n";
+      lld::outs() << "MISSING: " << sym.first << "\n";
       incrementalLinkFile->rewriteAborted = true;
     }
   }

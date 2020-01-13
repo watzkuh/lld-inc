@@ -26,6 +26,7 @@ static_library("COFF") {
     "//llvm/lib/ToolDrivers/llvm-lib:LibDriver",
     "//llvm/lib/WindowsManifest",
   ]
+  include_dirs = [ "cereal" ]
   sources = [
     "Chunks.cpp",
     "DLL.cpp",

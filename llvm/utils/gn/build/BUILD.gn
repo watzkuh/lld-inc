@@ -210,17 +210,11 @@ config("compiler_defaults") {
 }
 
 config("no_exceptions") {
-  if (host_os != "win") {
-    cflags_cc = [ "-fno-exceptions" ]
-  }
+
 }
 
 config("no_rtti") {
-  if (current_os == "win") {
-    cflags_cc = [ "/GR-" ]
-  } else {
-    cflags_cc = [ "-fno-rtti" ]
-  }
+
 }
 
 # To make an archive that can be distributed, you need to remove this config and

@@ -1,10 +1,16 @@
-
 #include "IncrementalLinkFile.h"
 #include "Driver.h"
 #include "Symbols.h"
 #include "Writer.h"
+#include "cereal/cereal/archives/binary.hpp"
+#include "cereal/cereal/cereal.hpp"
+#include "cereal/cereal/types/map.hpp"
+#include "cereal/cereal/types/set.hpp"
+#include "cereal/cereal/types/string.hpp"
+#include "cereal/cereal/types/vector.hpp"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/Support/raw_ostream.h"
+#include <fstream>
 #include <lld/Common/Timer.h>
 #include <llvm/Support/xxhash.h>
 
@@ -13,6 +19,7 @@ using namespace lld::coff;
 
 static Timer sectionWriter("Writing Output Sections", Timer::root());
 static Timer symbolWriter("Writing Symbols", Timer::root());
+bool isBinary = false;
 
 // Copied from MapFile.cpp
 // Returns a list of all symbols that we want to print out.
@@ -41,16 +48,36 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
   incrementalLinkFile->outputFile = config->outputFile;
   if (incrementalLinkFile->outputFile.empty())
     incrementalLinkFile->outputFile = std::move(possibleOutput);
-  ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
-      MemoryBuffer::getFile(IncrementalLinkFile::getFileName());
-  if (!ilkOrError) {
-    // Add the new arguments anyway
-    incrementalLinkFile->arguments = mArgs;
-    incrementalLinkFile->rewritePossible = false;
-    return incrementalLinkFile->rewritePossible;
+  if (isBinary) {
+    {
+      std::ifstream file(IncrementalLinkFile::getFileName(),
+                         std::ios::out | std::ios::binary);
+      if (file.is_open()) {
+        cereal::BinaryInputArchive inputArchive(file);
+        inputArchive(
+            incrementalLinkFile->arguments, incrementalLinkFile->outputFile,
+            incrementalLinkFile->outputHash,
+            incrementalLinkFile->outputSections, incrementalLinkFile->objFiles);
+      }
+      file.close();
+      for (const auto &f : incrementalLinkFile->objFiles) {
+        for (const auto &s : f.second.definedSymbols) {
+          incrementalLinkFile->globalSymbols[s.first] = s.second;
+        }
+      }
+    }
+  } else {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
+        MemoryBuffer::getFile(IncrementalLinkFile::getFileName());
+    if (!ilkOrError) {
+      // Add the new arguments anyway
+      incrementalLinkFile->arguments = mArgs;
+      incrementalLinkFile->rewritePossible = false;
+      return incrementalLinkFile->rewritePossible;
+    }
+    yaml::Input yin(ilkOrError->get()->getBuffer());
+    yin >> *incrementalLinkFile;
   }
-  yaml::Input yin(ilkOrError->get()->getBuffer());
-  yin >> *incrementalLinkFile;
   bool sameArgs = (mArgs == incrementalLinkFile->arguments);
   incrementalLinkFile->arguments = mArgs;
   ErrorOr<std::unique_ptr<MemoryBuffer>> outputOrError =
@@ -150,9 +177,22 @@ std::string IncrementalLinkFile::getFileName() {
 }
 
 void IncrementalLinkFile::writeToDisk() {
-  std::error_code code;
-  raw_fd_ostream out(IncrementalLinkFile::getFileName(), code);
-  llvm::yaml::Output yout(out);
-  yout << *incrementalLinkFile;
-  out.close();
+  if (isBinary) {
+    std::ofstream file(IncrementalLinkFile::getFileName(),
+                       std::ios::out | std::ios::binary);
+    {
+      cereal::BinaryOutputArchive outputArchive(file);
+      outputArchive(
+          incrementalLinkFile->arguments, incrementalLinkFile->outputFile,
+          incrementalLinkFile->outputHash, incrementalLinkFile->outputSections,
+          incrementalLinkFile->objFiles);
+    }
+    file.close();
+  } else {
+    std::error_code code;
+    raw_fd_ostream out(IncrementalLinkFile::getFileName(), code);
+    llvm::yaml::Output yout(out);
+    yout << *incrementalLinkFile;
+    out.close();
+  }
 }

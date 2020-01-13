@@ -63,9 +63,8 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
   outputFile = ilf.outputFile;
   outputHash = ilf.outputHash;
   for (const auto &s : ilf.outputSections) {
-    NormalizedOutputSectionMap outSection(s.getKey(), s.second.rawAddress,
-                                          s.second.virtualAddress,
-                                          s.second.size);
+    NormalizedOutputSectionMap outSection(
+        s.first, s.second.rawAddress, s.second.virtualAddress, s.second.size);
     outputSections.push_back(outSection);
   }
   for (const auto &f : ilf.objFiles) {
@@ -77,14 +76,14 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
         for (const auto &sym : c.symbols) {
           for (const auto &rel : sym.second) {
             NormalizedRelocationInfo relocationInfo{
-                sym.first(), rel.virtualAddress, rel.type};
+                sym.first, rel.virtualAddress, rel.type};
             symbols.push_back(relocationInfo);
           }
         }
         NormalizedChunkInfo chunkInfo(c.virtualAddress, c.size, symbols);
         chunks.push_back(chunkInfo);
       }
-      NormalizedSectionMap sectionMap(sec.getKey(), sec.second.virtualAddress,
+      NormalizedSectionMap sectionMap(sec.first, sec.second.virtualAddress,
                                       sec.second.size, chunks);
       sections.push_back(sectionMap);
     }
@@ -95,10 +94,10 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
 
     std::vector<NormalizedSymbolInfo> definedSymbols;
     for (auto &s : f.second.definedSymbols) {
-      NormalizedSymbolInfo symInfo{s.first(), s.second};
+      NormalizedSymbolInfo symInfo{s.first, s.second};
       definedSymbols.push_back(symInfo);
     }
-    NormalizedFileMap fileMap(f.getKey(), f.second.modTime, dependentFiles,
+    NormalizedFileMap fileMap(f.first, f.second.modTime, dependentFiles,
                               sections, definedSymbols);
     files.push_back(fileMap);
   }
@@ -106,8 +105,8 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
 
 IncrementalLinkFile
 MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
-  StringMap<lld::coff::IncrementalLinkFile::ObjectFileInfo> objFiles;
-  StringMap<lld::coff::IncrementalLinkFile::OutputSectionInfo> outSections;
+  std::map<std::string, IncrementalLinkFile::ObjectFileInfo> objFiles;
+  std::map<std::string, IncrementalLinkFile::OutputSectionInfo> outSections;
   for (auto &s : outputSections) {
     lld::coff::IncrementalLinkFile::OutputSectionInfo sec{
         s.rawAddress, s.virtualAddress, s.size};
@@ -126,7 +125,8 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
       sectionData.size = sec.size;
       sectionData.virtualAddress = sec.virtualAddress;
       for (auto &c : sec.chunks) {
-        StringMap<std::vector<IncrementalLinkFile::RelocationInfo>> symbols;
+        std::map<std::string, std::vector<IncrementalLinkFile::RelocationInfo>>
+            symbols;
         for (auto &rel : c.relocations) {
           IncrementalLinkFile::RelocationInfo relInfo{rel.virtualAddress,
                                                       rel.type};

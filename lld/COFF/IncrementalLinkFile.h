@@ -16,40 +16,56 @@ namespace coff {
 struct IncrementalLinkFile {
 
   struct RelocationInfo {
-    support::ulittle32_t virtualAddress;
-    support::ulittle16_t type;
+    uint32_t virtualAddress;
+    uint16_t type;
+    template <class Archive> void serialize(Archive &archive) {
+      archive(virtualAddress, type);
+    }
   };
 
   struct ChunkInfo {
     uint32_t virtualAddress;
     size_t size;
-    StringMap<std::vector<RelocationInfo>> symbols;
+    std::map<std::string, std::vector<RelocationInfo>> symbols;
+    template <class Archive> void serialize(Archive &archive) {
+      archive(virtualAddress, size, symbols);
+    }
   };
 
   struct SectionInfo {
     uint32_t virtualAddress;
     size_t size;
     std::vector<ChunkInfo> chunks;
+    template <class Archive> void serialize(Archive &archive) {
+      archive(virtualAddress, size, chunks);
+    }
   };
 
   struct OutputSectionInfo {
     uint64_t rawAddress;
     uint64_t virtualAddress;
     size_t size;
+    template <class Archive> void serialize(Archive &archive) {
+      archive(rawAddress, virtualAddress, size);
+    }
   };
 
   struct ObjectFileInfo {
     uint64_t modTime;
     std::set<std::string> dependentFiles;
-    StringMap<SectionInfo> sections;
-    StringMap<uint64_t> definedSymbols;
+    std::map<std::string, SectionInfo> sections;
+    std::map<std::string, uint64_t> definedSymbols;
+    template <class Archive> void serialize(Archive &archive) {
+      archive(modTime, dependentFiles, sections, definedSymbols);
+    }
   };
 
 public:
   IncrementalLinkFile() = default;
   IncrementalLinkFile(std::vector<std::string> args,
-                      StringMap<ObjectFileInfo> obj, std::string of,
-                      uint64_t oh, StringMap<OutputSectionInfo> outSections,
+                      std::map<std::string, ObjectFileInfo> obj, std::string of,
+                      uint64_t oh,
+                      std::map<std::string, OutputSectionInfo> outSections,
                       StringMap<uint64_t> syms)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
@@ -60,11 +76,11 @@ public:
   DenseSet<StringRef> input;
   // input objects/archives + objects extracted from archives in input
   DenseSet<StringRef> rewritableFileNames;
-  StringMap<ObjectFileInfo> objFiles;
+  std::map<std::string, ObjectFileInfo> objFiles;
   std::string outputFile;
   uint64_t outputHash{};
 
-  StringMap<OutputSectionInfo> outputSections;
+  std::map<std::string, OutputSectionInfo> outputSections;
   StringMap<uint64_t> globalSymbols;
 
   bool rewritePossible = false;
@@ -73,9 +89,13 @@ public:
 
   static void writeToDisk();
   static std::string getFileName();
+
+  template <class Archive> void serialize(Archive &archive) {
+    archive(arguments, outputFile, outputHash, outputSections, objFiles);
+  }
 };
 
-extern IncrementalLinkFile *incrementalLinkFile;
+extern std::unique_ptr<IncrementalLinkFile> incrementalLinkFile;
 
 class OutputSection;
 void writeIlfSections(ArrayRef<OutputSection *> outputSections);
@@ -108,8 +128,8 @@ template <> struct yaml::MappingTraits<NormalizedOutputSectionMap> {
 
 struct NormalizedRelocationInfo {
   std::string symbolName;
-  support::ulittle32_t virtualAddress;
-  support::ulittle16_t type;
+  uint32_t virtualAddress;
+  uint16_t type;
 };
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedRelocationInfo)

@@ -64,7 +64,7 @@ static Timer ilkOutputTimer("Ilk File Output", Timer::root());
 static Timer ilkInputTimer("Ilk File Input", Timer::root());
 
 Configuration *config;
-IncrementalLinkFile *incrementalLinkFile;
+std::unique_ptr<IncrementalLinkFile> incrementalLinkFile;
 LinkerDriver *driver;
 
 bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
@@ -82,7 +82,7 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
   config = make<Configuration>();
   symtab = make<SymbolTable>();
   driver = make<LinkerDriver>();
-  incrementalLinkFile = make<IncrementalLinkFile>();
+  incrementalLinkFile = std::make_unique<IncrementalLinkFile>();
 
   driver->link(args);
 
