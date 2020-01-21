@@ -9,8 +9,8 @@ void yaml::MappingTraits<NormalizedOutputSectionMap>::mapping(
 }
 void yaml::MappingTraits<NormalizedRelocationInfo>::mapping(
     yaml::IO &io, NormalizedRelocationInfo &rel) {
-  io.mapRequired("symbol-name", rel.symbolName);
-  io.mapRequired("address", rel.virtualAddress);
+  io.mapRequired("name", rel.symbolName);
+  io.mapRequired("offset", rel.virtualAddress);
   io.mapRequired("type", rel.type);
 }
 void yaml::MappingTraits<NormalizedSymbolInfo>::mapping(
