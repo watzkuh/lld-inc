@@ -19,7 +19,6 @@ using namespace lld::coff;
 
 static Timer sectionWriter("Writing Output Sections", Timer::root());
 static Timer symbolWriter("Writing Symbols", Timer::root());
-bool isBinary = false;
 
 // Copied from MapFile.cpp
 // Returns a list of all symbols that we want to print out.
@@ -48,7 +47,7 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
   incrementalLinkFile->outputFile = config->outputFile;
   if (incrementalLinkFile->outputFile.empty())
     incrementalLinkFile->outputFile = std::move(possibleOutput);
-  if (isBinary) {
+  if (config->benchmark) {
     {
       std::ifstream file(IncrementalLinkFile::getFileName(),
                          std::ios::out | std::ios::binary);
@@ -177,7 +176,7 @@ std::string IncrementalLinkFile::getFileName() {
 }
 
 void IncrementalLinkFile::writeToDisk() {
-  if (isBinary) {
+  if (config->benchmark) {
     std::ofstream file(IncrementalLinkFile::getFileName(),
                        std::ios::out | std::ios::binary);
     {

@@ -1607,6 +1607,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   }
   config->incrementalLink =
       args.hasFlag(OPT_incrementallink, OPT_incrementallink_no, false);
+  config->benchmark = args.hasFlag(OPT_benchmark, OPT_benchmark_no, false);
 
   if ((config->incremental || config->incrementalLink) && args.hasArg(OPT_profile)) {
     warn("ignoring '/incremental' due to '/profile' specification");

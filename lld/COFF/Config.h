@@ -229,6 +229,7 @@ struct Configuration {
   bool warnLongSectionNames = true;
   bool incremental = true;
   bool incrementalLink = false;
+  bool benchmark = false;
   bool integrityCheck = false;
   bool killAt = false;
   bool repro = false;

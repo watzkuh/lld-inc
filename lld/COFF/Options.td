@@ -166,6 +166,9 @@ defm incremental : B<"incremental",
 defm incrementallink : B<"incrementallink",
                      "Incrementally update binary",
                      "Rewrite binary from scratch">;
+defm benchmark : B<"benchmark",
+                  "Store incremental link file as binary",
+                  "Store incremental link file as YAML">;
 defm integritycheck : B<"integritycheck",
                         "Set FORCE_INTEGRITY bit in PE header",
                         "No effect (default)">;
