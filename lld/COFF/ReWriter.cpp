@@ -123,6 +123,11 @@ void reapplyRelocations(const StringRef &fileName) {
       if (it == updatedSymbols.end()) {
         continue;
       } else {
+        if (it->second.first == it->second.second &&
+            it->second.first == INT64_MAX) {
+          lld::outs() << "MISSING: " << sym.first << "\n";
+          incrementalLinkFile->rewriteAborted = true;
+        }
         lld::outs() << sym.first
                     << " changed address; old: " << it->second.first
                     << "new: " << it->second.second << "\n";
@@ -156,9 +161,9 @@ void reapplyRelocations(const StringRef &fileName) {
         }
         SectionChunk sc;
         // First, undo the original relocation
-        applyRelocation(sc, off, (support::ulittle16_t)rel.type, invertS + 2 * (p + typeOff), p);
-
-        applyRelocation(sc, off, (support::ulittle16_t) rel.type, s, p);
+        applyRelocation(sc, off, (support::ulittle16_t)rel.type,
+                        invertS + 2 * (p + typeOff), p);
+        applyRelocation(sc, off, (support::ulittle16_t)rel.type, s, p);
       }
     }
     buf += c.size;
@@ -315,10 +320,15 @@ void updateSymbolTable(ObjFile *file) {
     if (sym.second == 0)
       continue;
     if (!newSyms[sym.first]) {
-      // TODO: Symbol was removed, should fail it was used by another file
-      lld::outs() << "MISSING: " << sym.first << "\n";
-      incrementalLinkFile->rewriteAborted = true;
+      lld::outs() << "REMOVED: " << sym.first << "\n";
+      // Kind of hackish way to encode a removed symbol to check the error
+      // later during traversal through dependent files
+      updatedSymbols[sym.first] = std::make_pair(INT64_MAX, INT64_MAX);
     }
+  }
+  for (auto &p : updatedSymbols) {
+    if (p.second.first == p.second.second && p.second.first == INT64_MAX)
+      oldSyms.erase(p.first());
   }
 }
 
@@ -348,25 +358,20 @@ void coff::rewriteResult() {
     rewriteQueue.front()();
     rewriteQueue.pop_front();
   }
-  for (auto &f : changedFiles) {
-    updateSymbolTable(f);
-    if (incrementalLinkFile->rewriteAborted) {
-      t.stop();
-      abortIncrementalLink();
-      return;
-    }
-  }
-  for (auto &f : changedFiles) {
-    rewriteFile(f);
-    if (incrementalLinkFile->rewriteAborted) {
-      t.stop();
-      abortIncrementalLink();
-      return;
-    }
-  }
 
+  for (auto &f : changedFiles)
+    updateSymbolTable(f);
+  for (auto &f : changedFiles)
+    rewriteFile(f);
   for (auto &f : dependentFileNames)
     reapplyRelocations(f);
+
+  if (incrementalLinkFile->rewriteAborted) {
+    t.stop();
+    abortIncrementalLink();
+    return;
+  }
+
   StringRef binaryFileData(
       reinterpret_cast<const char *>(binary->getBufferStart()),
       binary->getBufferSize());
