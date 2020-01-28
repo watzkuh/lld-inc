@@ -172,7 +172,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
 }
 
 std::string IncrementalLinkFile::getFileName() {
-  return incrementalLinkFile->outputFile + ".ilk.yaml";
+  std::string end = config->benchmark ? ".bin" : ".yaml";
+  return incrementalLinkFile->outputFile + ".ilk" + end;
 }
 
 void IncrementalLinkFile::writeToDisk() {
