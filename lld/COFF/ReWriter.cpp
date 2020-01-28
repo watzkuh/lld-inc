@@ -41,28 +41,16 @@ void abortIncrementalLink() {
 }
 
 bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
-  if (!sc || !sc->isCOMDAT()) {
+  if (!sc->isCOMDAT() || !sc->sym)
     return false;
-  }
-  // TODO: Adapt this two new symbol per file safe logic
-  /*for (auto i : sc->symbols()) {
-    auto sym = incrementalLinkFile->objFiles[sc->file->getName()]
-                   .definedSymbols[i->getName()];
-    if (sym.fileDefinedIn.empty() || !i->getFile() ||
-        sym.fileDefinedIn == i->getFile()->getName()) {
-      incrementalLinkFile->objFiles[fileName].discardedSections.erase(
-          sc->getSectionNumber());
-      lld::outs() << sym.fileDefinedIn << " if " << i->getName()
-                  << sc->getSectionName() << "\n";
-      return false;
-    } else {
-      lld::outs() << sym.fileDefinedIn << " else " << i->getName()
-                  << sc->getSectionName() << "\n";
-      return true;
+  bool discarded = incrementalLinkFile->objFiles[fileName].definedSymbols.count(
+                       sc->sym->getName()) == 0;
+  if (discarded)
+    // Mark all associated children
+    for (auto &it : sc->children()) {
+      it.sym = sc->sym;
     }
-  }
-  return incrementalLinkFile->objFiles[fileName].discardedSections.count(
-      sc->getSectionNumber());*/
+  return discarded;
 }
 
 void assignAddresses(ObjFile *file) {
@@ -72,8 +60,7 @@ void assignAddresses(ObjFile *file) {
   }
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
-
-    if (isDiscardedCOMDAT(sc, file->getName()))
+    if (!sc || sc->getSize() == 0 || isDiscardedCOMDAT(sc, file->getName()))
       continue;
 
     sc->setRVA(rvas[sc->getSectionName()]);
@@ -110,7 +97,7 @@ void applyRelocation(SectionChunk sc, uint8_t *off, support::ulittle16_t type,
 }
 
 void reapplyRelocations(const StringRef &fileName) {
-  lld::outs() << "Applying relocations for file " << fileName << "\n";
+  lld::outs() << "Reapplying relocations for file " << fileName << "\n";
   auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[".text"];
   auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
   auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
@@ -130,7 +117,7 @@ void reapplyRelocations(const StringRef &fileName) {
         }
         lld::outs() << sym.first
                     << " changed address; old: " << it->second.first
-                    << "new: " << it->second.second << "\n";
+                    << " new: " << it->second.second << "\n";
       }
       uint64_t s = it->second.second;
       uint64_t invertS = -it->second.first;
@@ -247,7 +234,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 
   std::vector<IncrementalLinkFile::ChunkInfo> newChunks;
   for (SectionChunk *sc : chunks) {
-    if (sc->getSize() == 0 || isDiscardedCOMDAT(sc, fileName))
+    if (!sc || sc->getSize() == 0 || isDiscardedCOMDAT(sc, fileName))
       continue;
 
     const size_t paddedSize =
@@ -268,9 +255,10 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     buf += paddedSize;
   }
   secInfo.chunks = newChunks;
-  // if (num != secInfo.chunks.size()) {
-  lld::outs() << num << " new section vs old " << secInfo.chunks.size() << "\n";
-  // }
+  if (num != secInfo.chunks.size()) {
+    lld::outs() << num << " new section vs old " << secInfo.chunks.size()
+                << "\n";
+  }
 
   if (secInfo.size != contribSize) {
     lld::outs() << "New " << secName << " section in " << fileName
@@ -302,8 +290,15 @@ void updateSymbolTable(ObjFile *file) {
     auto it = oldSyms.find(definedSym->getName());
     if (it == oldSyms.end()) {
       // New symbol was introduced, check if it already exists in another file
-      if (isDuplicate(definedSym->getName()))
+      if (isDuplicate(definedSym->getName())) {
+        // If it's a Comdat symbol that was defined elsewhere it is not an error
+        if (definedSym->isCOMDAT) {
+          continue;
+        }
+        lld::outs() << "Duplicate symbol: " << definedSym->getName() << "\n";
         incrementalLinkFile->rewriteAborted = true;
+      }
+      incrementalLinkFile->rewriteAborted = true;
       updatedSymbols[definedSym->getName()] =
           std::make_pair(0, definedSym->getRVA());
       oldSyms[definedSym->getName()] = definedSym->getRVA();
@@ -328,6 +323,7 @@ void updateSymbolTable(ObjFile *file) {
   }
   for (auto &p : updatedSymbols) {
     if (p.second.first == p.second.second && p.second.first == INT64_MAX)
+      // Remove symbols from the incremental link file as well
       oldSyms.erase(p.first());
   }
 }
