@@ -1,7 +1,5 @@
 # RUN: rm -rf %t.dir
 # RUN: mkdir %t.dir
-# RUN: rm -rf %t.dir
-# RUN: mkdir %t.dir
 # RUN: yaml2obj %p/Inputs/extern-reorder.yaml > %t.dir/main.obj
 # RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > %t.dir/missing.obj
 # RUN: lld-link /out:%t.dir/inc.exe /nodefaultlib /opt:noref /entry:main \
