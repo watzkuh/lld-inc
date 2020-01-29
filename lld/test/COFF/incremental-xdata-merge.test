@@ -1,7 +1,8 @@
 # RUN: rm -rf %t.dir
 # RUN: mkdir %t.dir && cd %t.dir
-# RUN: LDFLAGS="/out:out.exe /opt:noref /entry:main /nodefaultlib /incrementallink"
-# RUN: yaml2obj < %p/Inputs/template-double.yaml > template.obj
+# RUN: LDFLAGS="/out:out.exe /opt:noref /entry:main \
+# RUN:  /nodefaultlib /incrementallink"
+# RUN:  yaml2obj < %p/Inputs/template-double.yaml > template.obj
 # RUN: lld-link  $LDFLAGS template.obj
 
 # RUN: yaml2obj < %p/Inputs/template-float.yaml > template.obj
@@ -9,6 +10,7 @@
 
 INC: Attempting incremental link
 INC-NEXT: template.obj has changed
+INC-NOT: Incremental link aborted
 
 # RUN: llvm-readobj --sections --section-data < out.exe > incremental-link
 # RUN: rm out.exe
