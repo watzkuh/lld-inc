@@ -43,8 +43,11 @@ void abortIncrementalLink() {
 bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
   if (!sc->isCOMDAT() || !sc->sym)
     return false;
-  bool discarded = incrementalLinkFile->objFiles[fileName].definedSymbols.count(
-                       sc->sym->getName()) == 0;
+  // A section was discarde if its leader symbol is defined in another file
+  bool discarded =
+      incrementalLinkFile->objFiles[fileName].definedSymbols.count(
+          sc->sym->getName()) == 0 &&
+      incrementalLinkFile->globalSymbols.count(sc->sym->getName()) != 0;
   if (discarded)
     // Mark all associated children
     for (auto &it : sc->children()) {
@@ -298,7 +301,6 @@ void updateSymbolTable(ObjFile *file) {
         lld::outs() << "Duplicate symbol: " << definedSym->getName() << "\n";
         incrementalLinkFile->rewriteAborted = true;
       }
-      incrementalLinkFile->rewriteAborted = true;
       updatedSymbols[definedSym->getName()] =
           std::make_pair(0, definedSym->getRVA());
       oldSyms[definedSym->getName()] = definedSym->getRVA();
