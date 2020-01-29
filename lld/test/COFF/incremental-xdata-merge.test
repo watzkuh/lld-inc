@@ -1,24 +1,20 @@
 # RUN: rm -rf %t.dir
 # RUN: mkdir %t.dir && cd %t.dir
-# RUN: yaml2obj %p/Inputs/template-double.yaml > template.obj
-# RUN: lld-link /out:inc.exe /opt:noref /entry:main /nodefaultlib /incrementallink \
-# RUN:   template.obj | FileCheck %s
+# RUN: LDFLAGS="/out:out.exe /opt:noref /entry:main /nodefaultlib /incrementallink"
+# RUN: yaml2obj < %p/Inputs/template-double.yaml > template.obj
+# RUN: lld-link  $LDFLAGS template.obj
 
-CHECK: No incremental link
-
-# RUN: yaml2obj %p/Inputs/template-float.yaml > template.obj
-# RUN: lld-link /out:inc.exe /opt:noref /entry:main /nodefaultlib /incrementallink \
-# RUN:   template.obj | FileCheck --check-prefix=INC %s
+# RUN: yaml2obj < %p/Inputs/template-float.yaml > template.obj
+# RUN: lld-link $LDFLAGS template.obj | FileCheck --check-prefix=INC %s
 
 INC: Attempting incremental link
 INC-NEXT: template.obj has changed
 
-# RUN: llvm-readobj --sections --section-data inc.exe > incremental-link
-# RUN: rm inc.exe
-# RUN: lld-link /out:inc.exe /opt:noref /entry:main /nodefaultlib /incrementallink \
-# RUN:   template.obj | FileCheck --check-prefix=CLEAN %s
+# RUN: llvm-readobj --sections --section-data < out.exe > incremental-link
+# RUN: rm out.exe
+# RUN: lld-link $LDFLAGS template.obj | FileCheck --check-prefix=CLEAN %s
 
 CLEAN: No incremental link
 
-# RUN: llvm-readobj --sections --section-data inc.exe > clean-link
+# RUN: llvm-readobj --sections --section-data < out.exe > clean-link
 # RUN: diff clean-link incremental-link
