@@ -272,14 +272,14 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   }
 }
 
-bool isDuplicate(StringRef symbol) {
+uint64_t getDuplicateFilePosition(StringRef symbol) {
   for (auto &file : incrementalLinkFile->objFiles) {
     for (auto &sym : file.second.definedSymbols) {
       if (symbol == sym.first)
-        return true;
+        return file.second.position;
     }
   }
-  return false;
+  return 0;
 }
 
 void updateSymbolTable(ObjFile *file) {
@@ -293,10 +293,19 @@ void updateSymbolTable(ObjFile *file) {
     auto it = oldSyms.find(definedSym->getName());
     if (it == oldSyms.end()) {
       // New symbol was introduced, check if it already exists in another file
-      if (isDuplicate(definedSym->getName())) {
-        // If it's a Comdat symbol that was defined elsewhere it is not an error
-        if (definedSym->isCOMDAT) {
-          continue;
+      uint64_t pos = getDuplicateFilePosition(definedSym->getName());
+      if (pos != 0) {
+        // If it's a Comdat symbol that was defined elsewhere
+        // with the value IMAGE_COMDAT_SELECT_ANY it is not an error.
+        // However, the file that defines the symbol must
+        // originally have been parsed before the current one to ensure output
+        // reproducibility
+        if (definedSym->isCOMDAT &&
+            incrementalLinkFile->objFiles[file->getName()].position > pos) {
+          auto sc = dyn_cast_or_null<SectionChunk>(definedSym->getChunk());
+          if (sc && sc->selection == llvm::COFF::IMAGE_COMDAT_SELECT_ANY){
+            continue;
+          }
         }
         lld::outs() << "Duplicate symbol: " << definedSym->getName() << "\n";
         incrementalLinkFile->rewriteAborted = true;
@@ -318,7 +327,7 @@ void updateSymbolTable(ObjFile *file) {
       continue;
     if (!newSyms[sym.first]) {
       lld::outs() << "REMOVED: " << sym.first << "\n";
-      // Kind of hackish way to encode a removed symbol to check the error
+      // Kind of hackish way to encode a removed symbol to check for errors
       // later during traversal through dependent files
       updatedSymbols[sym.first] = std::make_pair(INT64_MAX, INT64_MAX);
     }
