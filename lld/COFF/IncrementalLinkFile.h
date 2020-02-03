@@ -52,11 +52,12 @@ struct IncrementalLinkFile {
 
   struct ObjectFileInfo {
     uint64_t modTime;
+    uint64_t position;
     std::set<std::string> dependentFiles;
     std::map<std::string, SectionInfo> sections;
     std::map<std::string, uint64_t> definedSymbols;
     template <class Archive> void serialize(Archive &archive) {
-      archive(modTime, dependentFiles, sections, definedSymbols);
+      archive(modTime, position, dependentFiles, sections, definedSymbols);
     }
   };
 
@@ -86,6 +87,7 @@ public:
   bool rewritePossible = false;
   bool rewriteAborted = false;
   size_t paddedAlignment = 64;
+  uint64_t fileIndex = 0;
 
   static void writeToDisk();
   static std::string getFileName();
@@ -187,13 +189,16 @@ template <> struct yaml::MappingTraits<NormalizedSectionMap> {
 
 struct NormalizedFileMap {
   NormalizedFileMap() {}
-  NormalizedFileMap(std::string n, uint64_t t, std::vector<std::string> files,
+  NormalizedFileMap(std::string n, uint64_t t, uint64_t i,
+                    std::vector<std::string> files,
                     std::vector<NormalizedSectionMap> s,
                     std::vector<NormalizedSymbolInfo> syms)
-      : name(std::move(n)), modTime(t), dependentFiles(std::move(files)),
-        sections(std::move(s)), definedSymbols(std::move(syms)) {}
+      : name(std::move(n)), modTime(t), pos(i),
+        dependentFiles(std::move(files)), sections(std::move(s)),
+        definedSymbols(std::move(syms)) {}
   std::string name;
   uint64_t modTime;
+  uint64_t pos;
   std::vector<std::string> dependentFiles;
   std::vector<NormalizedSectionMap> sections;
   std::vector<NormalizedSymbolInfo> definedSymbols;

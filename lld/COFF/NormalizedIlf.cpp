@@ -38,6 +38,7 @@ void yaml::MappingTraits<NormalizedFileMap>::mapping(yaml::IO &io,
                                                      NormalizedFileMap &file) {
   io.mapRequired("name", file.name);
   io.mapRequired("last-modified", file.modTime);
+  io.mapRequired("position", file.pos);
   io.mapOptional("dependent-files", file.dependentFiles);
   io.mapOptional("sections", file.sections);
   io.mapOptional("defined-symbols", file.definedSymbols);
@@ -47,7 +48,6 @@ void MappingTraits<IncrementalLinkFile>::mapping(IO &io,
                                                  IncrementalLinkFile &ilf) {
   MappingNormalization<NormalizedIlf, IncrementalLinkFile> keys(io, ilf);
   io.mapRequired("linker-arguments", keys->arguments);
-  io.mapRequired("input", keys->input);
   io.mapRequired("files", keys->files);
   io.mapRequired("output-file", keys->outputFile);
   io.mapRequired("output-hash", keys->outputHash);
@@ -58,8 +58,6 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
     IO &, IncrementalLinkFile &ilf) {
 
   arguments = ilf.arguments;
-  std::vector<std::string> inputVector(ilf.input.begin(), ilf.input.end());
-  input = inputVector;
   outputFile = ilf.outputFile;
   outputHash = ilf.outputHash;
   for (const auto &s : ilf.outputSections) {
@@ -97,8 +95,8 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
       NormalizedSymbolInfo symInfo{s.first, s.second};
       definedSymbols.push_back(symInfo);
     }
-    NormalizedFileMap fileMap(f.first, f.second.modTime, dependentFiles,
-                              sections, definedSymbols);
+    NormalizedFileMap fileMap(f.first, f.second.modTime, f.second.position,
+                              dependentFiles, sections, definedSymbols);
     files.push_back(fileMap);
   }
 }
@@ -116,6 +114,7 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
   for (auto &f : files) {
     lld::coff::IncrementalLinkFile::ObjectFileInfo obj;
     obj.modTime = f.modTime;
+    obj.position = f.pos;
     std::set<std::string> dependentFiles;
     for (auto &dep : f.dependentFiles)
       dependentFiles.insert(dep);

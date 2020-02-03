@@ -48,6 +48,9 @@ void SymbolTable::addFile(InputFile *file) {
     }
     return;
   }
+  if (config->incrementalLink && !incrementalLinkFile->rewritePossible)
+    incrementalLinkFile->objFiles[file->getName()].position =
+        ++incrementalLinkFile->fileIndex;
 
   file->parse();
 
