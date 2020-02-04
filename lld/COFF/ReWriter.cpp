@@ -16,6 +16,7 @@
 
 using namespace llvm;
 using namespace llvm::support;
+using namespace llvm::COFF;
 using namespace lld;
 using namespace lld::coff;
 
@@ -43,7 +44,7 @@ void abortIncrementalLink() {
 bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
   if (!sc->isCOMDAT() || !sc->sym)
     return false;
-  // A section was discarde if its leader symbol is defined in another file
+  // A section was discarded if its leader symbol is defined in another file
   bool discarded =
       incrementalLinkFile->objFiles[fileName].definedSymbols.count(
           sc->sym->getName()) == 0 &&
@@ -272,14 +273,14 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   }
 }
 
-uint64_t getDuplicateFilePosition(StringRef symbol) {
+std::pair<uint64_t, std::string> getFileInfoIfDuplicate(StringRef symbol) {
   for (auto &file : incrementalLinkFile->objFiles) {
     for (auto &sym : file.second.definedSymbols) {
       if (symbol == sym.first)
-        return file.second.position;
+        return {file.second.position, file.first};
     }
   }
-  return 0;
+  return {0, ""};
 }
 
 void updateSymbolTable(ObjFile *file) {
@@ -293,18 +294,57 @@ void updateSymbolTable(ObjFile *file) {
     auto it = oldSyms.find(definedSym->getName());
     if (it == oldSyms.end()) {
       // New symbol was introduced, check if it already exists in another file
-      uint64_t pos = getDuplicateFilePosition(definedSym->getName());
-      if (pos != 0) {
-        // If it's a Comdat symbol that was defined elsewhere
-        // with the value IMAGE_COMDAT_SELECT_ANY it is not an error.
-        // However, the file that defines the symbol must
-        // originally have been parsed before the current one to ensure output
-        // reproducibility
-        if (definedSym->isCOMDAT &&
-            incrementalLinkFile->objFiles[file->getName()].position > pos) {
+      auto fileInfo = getFileInfoIfDuplicate(definedSym->getName());
+      if (fileInfo.first != 0) {
+        // If it's a comdat symbol that was defined elsewhere it might not
+        // necessarily be an error
+        if (definedSym->isCOMDAT) {
           auto sc = dyn_cast_or_null<SectionChunk>(definedSym->getChunk());
-          if (sc && sc->selection == llvm::COFF::IMAGE_COMDAT_SELECT_ANY){
-            continue;
+          switch (sc->selection) {
+          case IMAGE_COMDAT_SELECT_NODUPLICATES:
+            // This is an error, leave diagnostics to the full link
+            break;
+          case IMAGE_COMDAT_SELECT_ANY:
+            // The file that defines the symbol has to appear before the current
+            // file to ensure output reproducibility
+            if (incrementalLinkFile->objFiles[file->getName()].position >
+                fileInfo.first)
+              continue;
+            break;
+          case IMAGE_COMDAT_SELECT_LARGEST:
+          case IMAGE_COMDAT_SELECT_EXACT_MATCH: {
+            auto &chunks = incrementalLinkFile->objFiles[fileInfo.second]
+                               .sections[".text"]
+                               .chunks;
+            // TODO: Chunks are ordered by address, use binary search or
+            // different data structure to avoid O(m*n) complexity
+            IncrementalLinkFile::ChunkInfo chunkInfo;
+            for (auto &c : chunks) {
+              if (c.virtualAddress == definedSym->getRVA()) {
+                chunkInfo = c;
+                break;
+              }
+            }
+            // If the comdat section in the other file is larger, it fine to
+            // keep it
+            if (sc->selection == IMAGE_COMDAT_SELECT_LARGEST &&
+                sc->getSize() >= chunkInfo.size)
+              continue;
+            // If the comdat section in the other file the same size and appears
+            // earlier it is fine to keep it
+            if (sc->selection == IMAGE_COMDAT_SELECT_EXACT_MATCH &&
+                sc->getSize() == chunkInfo.size &&
+                incrementalLinkFile->objFiles[file->getName()].position >
+                    fileInfo.first)
+              continue;
+            break;
+          }
+          case IMAGE_COMDAT_SELECT_ASSOCIATIVE:
+            // Associative comdats should not be extern in practice and
+            // therefore not be stored in the ilk file
+            llvm_unreachable("multiple definitions of associative comdat");
+          default: // NO-OP
+                   ;
           }
         }
         lld::outs() << "Duplicate symbol: " << definedSym->getName() << "\n";
