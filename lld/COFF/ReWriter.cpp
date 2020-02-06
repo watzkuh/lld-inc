@@ -126,8 +126,8 @@ void reapplyRelocations(const StringRef &fileName) {
       uint64_t s = it->second.second;
       uint64_t invertS = -it->second.first;
       for (const auto &rel : sym.second) {
-        uint8_t *off = buf + rel.virtualAddress;
-        uint64_t p = chunkStart + rel.virtualAddress;
+        uint8_t *off = buf + rel.offset;
+        uint64_t p = chunkStart + rel.offset;
         uint8_t typeOff = 0;
         // Only AMD64 support at the moment
         switch (rel.type) {

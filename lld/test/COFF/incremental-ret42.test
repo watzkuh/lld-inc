@@ -18,5 +18,3 @@ ILK: .dir/ret42.exe
 ILK: /entry:main
 ILK: /incrementallink
 ILK: .dir/ret42.obj
-ILK: input:
-ILK: dir/ret42.obj

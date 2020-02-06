@@ -74,7 +74,7 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
         for (const auto &sym : c.symbols) {
           for (const auto &rel : sym.second) {
             NormalizedRelocationInfo relocationInfo{
-                sym.first, rel.virtualAddress, rel.type};
+                sym.first, rel.offset, rel.type};
             symbols.push_back(relocationInfo);
           }
         }

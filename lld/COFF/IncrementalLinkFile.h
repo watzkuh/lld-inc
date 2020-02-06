@@ -13,13 +13,13 @@ using namespace llvm;
 namespace lld {
 namespace coff {
 
-struct IncrementalLinkFile {
-
+class IncrementalLinkFile {
+public:
   struct RelocationInfo {
-    uint32_t virtualAddress;
+    uint32_t offset;
     uint16_t type;
     template <class Archive> void serialize(Archive &archive) {
-      archive(virtualAddress, type);
+      archive(offset, type);
     }
   };
 
@@ -61,7 +61,6 @@ struct IncrementalLinkFile {
     }
   };
 
-public:
   IncrementalLinkFile() = default;
   IncrementalLinkFile(std::vector<std::string> args,
                       std::map<std::string, ObjectFileInfo> obj, std::string of,
