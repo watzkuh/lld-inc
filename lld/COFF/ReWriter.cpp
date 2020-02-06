@@ -172,6 +172,14 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
   chunkInfo.virtualAddress = sc->getRVA();
   chunkInfo.size = paddedSize;
 
+  // Reset dependencies
+  for (auto f : changedFiles) {
+    auto backRefs = incrementalLinkFile->objFiles[f->getName()].dependentOn;
+    for (auto &ref : backRefs) {
+      incrementalLinkFile->objFiles[ref].dependentFiles.erase(f->getName());
+    }
+  }
+
   for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
     const coff_relocation &rel = sc->getRelocs()[j];
     auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
@@ -184,7 +192,14 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
     // Fallback to symbol table if we either have no information
     // about the chunk or the symbol
     if (definedSym == nullptr || s == 0) {
-      s = incrementalLinkFile->globalSymbols[sym->getName()];
+      auto sf = incrementalLinkFile->globalSymbols[sym->getName()];
+      s = sf.first;
+      // Check if a new dependency was introduced
+      if (sf.second != sc->file->getName() &&
+          incrementalLinkFile->input.count(sf.second)) {
+        incrementalLinkFile->objFiles[sf.second]
+            .dependentFiles.insert(sc->file->getName());
+      }
     }
     uint8_t *off = buf + rel.VirtualAddress;
 

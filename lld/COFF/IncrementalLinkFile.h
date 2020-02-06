@@ -26,6 +26,8 @@ public:
   struct ChunkInfo {
     uint32_t virtualAddress;
     size_t size;
+    // TODO: Probably more suited in SectionInfo for faster lookup, albeit
+    // slightly more difficult offset calculation
     std::map<std::string, std::vector<RelocationInfo>> symbols;
     template <class Archive> void serialize(Archive &archive) {
       archive(virtualAddress, size, symbols);
@@ -54,6 +56,7 @@ public:
     uint64_t modTime;
     uint64_t position;
     std::set<std::string> dependentFiles;
+    std::set<std::string> dependentOn;
     std::map<std::string, SectionInfo> sections;
     std::map<std::string, uint64_t> definedSymbols;
     template <class Archive> void serialize(Archive &archive) {
@@ -65,11 +68,10 @@ public:
   IncrementalLinkFile(std::vector<std::string> args,
                       std::map<std::string, ObjectFileInfo> obj, std::string of,
                       uint64_t oh,
-                      std::map<std::string, OutputSectionInfo> outSections,
-                      StringMap<uint64_t> syms)
+                      std::map<std::string, OutputSectionInfo> outSections)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
-        outputSections(std::move(outSections)), globalSymbols(std::move(syms)) {
+        outputSections(std::move(outSections)) {
   }
 
   std::vector<std::string> arguments;
@@ -81,7 +83,7 @@ public:
   uint64_t outputHash{};
 
   std::map<std::string, OutputSectionInfo> outputSections;
-  StringMap<uint64_t> globalSymbols;
+  StringMap<std::pair<uint64_t, std::string>> globalSymbols;
 
   bool rewritePossible = false;
   bool rewriteAborted = false;

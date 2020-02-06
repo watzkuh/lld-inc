@@ -1,0 +1,26 @@
+# Checks whether the dependencies specified in the incremental link file are updated correctly
+# RUN: rm -rf %t.dir
+# RUN: mkdir %t.dir && cd %t.dir
+# RUN: LDFLAGS="/out:out.exe /opt:noref /entry:main \
+# RUN:  /nodefaultlib /incrementallink"
+# RUN: yaml2obj < %p/Inputs/do-not-use-lorem.yaml > main.obj
+# RUN: yaml2obj < %p/Inputs/lorem-ipsum-reorder.yaml > symbol-provider.obj
+# RUN: lld-link $LDFLAGS main.obj symbol-provider.obj
+
+# RUN: yaml2obj < %p/Inputs/use-lorem.yaml > main.obj
+# RUN: lld-link $LDFLAGS main.obj symbol-provider.obj | FileCheck %s
+
+CHECK: main.obj has changed
+CHECK: Rewriting .text section for file main.obj
+CHECK-NOT: Incremental link aborted
+
+# RUN: cat out.exe.ilk.yaml | FileCheck --check-prefix=ILK %s
+
+ILK:     dependent-files:
+ILK:        - main.obj
+
+# RUN: yaml2obj < %p/Inputs/do-not-use-lorem.yaml > main.obj
+# RUN: lld-link $LDFLAGS main.obj symbol-provider.obj
+# RUN: cat out.exe.ilk.yaml | FileCheck --check-prefix=ILK2 %s
+
+ILK2-NOT:     dependent-files:

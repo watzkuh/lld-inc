@@ -59,11 +59,6 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
             incrementalLinkFile->outputSections, incrementalLinkFile->objFiles);
       }
       file.close();
-      for (const auto &f : incrementalLinkFile->objFiles) {
-        for (const auto &s : f.second.definedSymbols) {
-          incrementalLinkFile->globalSymbols[s.first] = s.second;
-        }
-      }
     }
   } else {
     ErrorOr<std::unique_ptr<MemoryBuffer>> ilkOrError =
@@ -76,6 +71,14 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
     }
     yaml::Input yin(ilkOrError->get()->getBuffer());
     yin >> *incrementalLinkFile;
+  }
+  for (const auto &f : incrementalLinkFile->objFiles) {
+    for (const auto &s : f.second.definedSymbols) {
+      incrementalLinkFile->globalSymbols[s.first] = {s.second, f.first};
+    }
+    for (const auto &dep: f.second.dependentFiles) {
+      incrementalLinkFile->objFiles[dep].dependentOn.insert(f.first);
+    }
   }
   bool sameArgs = (mArgs == incrementalLinkFile->arguments);
   incrementalLinkFile->arguments = mArgs;
