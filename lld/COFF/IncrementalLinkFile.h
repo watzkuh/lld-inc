@@ -6,6 +6,7 @@
 #include <llvm/ADT/DenseSet.h>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 using namespace llvm;
@@ -28,7 +29,7 @@ public:
     size_t size;
     // TODO: Probably more suited in SectionInfo for faster lookup, albeit
     // slightly more difficult offset calculation
-    std::map<std::string, std::vector<RelocationInfo>> symbols;
+    std::unordered_map<std::string, std::vector<RelocationInfo>> symbols;
     template <class Archive> void serialize(Archive &archive) {
       archive(virtualAddress, size, symbols);
     }
@@ -57,32 +58,32 @@ public:
     uint64_t position;
     std::set<std::string> dependentFiles;
     std::set<std::string> dependentOn;
-    std::map<std::string, SectionInfo> sections;
-    std::map<std::string, uint64_t> definedSymbols;
+    std::unordered_map<std::string, SectionInfo> sections;
+    std::unordered_map<std::string, uint64_t> definedSymbols;
     template <class Archive> void serialize(Archive &archive) {
       archive(modTime, position, dependentFiles, sections, definedSymbols);
     }
   };
 
   IncrementalLinkFile() = default;
-  IncrementalLinkFile(std::vector<std::string> args,
-                      std::map<std::string, ObjectFileInfo> obj, std::string of,
-                      uint64_t oh,
-                      std::map<std::string, OutputSectionInfo> outSections)
+  IncrementalLinkFile(
+      std::vector<std::string> args,
+      std::unordered_map<std::string, ObjectFileInfo> obj, std::string of,
+      uint64_t oh,
+      std::unordered_map<std::string, OutputSectionInfo> outSections)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
-        outputSections(std::move(outSections)) {
-  }
+        outputSections(std::move(outSections)) {}
 
   std::vector<std::string> arguments;
   DenseSet<StringRef> input;
   // input objects/archives + objects extracted from archives in input
   DenseSet<StringRef> rewritableFileNames;
-  std::map<std::string, ObjectFileInfo> objFiles;
+  std::unordered_map<std::string, ObjectFileInfo> objFiles;
   std::string outputFile;
   uint64_t outputHash{};
 
-  std::map<std::string, OutputSectionInfo> outputSections;
+  std::unordered_map<std::string, OutputSectionInfo> outputSections;
   StringMap<std::pair<uint64_t, std::string>> globalSymbols;
 
   bool rewritePossible = false;

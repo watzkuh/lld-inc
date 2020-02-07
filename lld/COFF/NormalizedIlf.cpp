@@ -103,8 +103,8 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
 
 IncrementalLinkFile
 MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
-  std::map<std::string, IncrementalLinkFile::ObjectFileInfo> objFiles;
-  std::map<std::string, IncrementalLinkFile::OutputSectionInfo> outSections;
+  std::unordered_map<std::string, IncrementalLinkFile::ObjectFileInfo> objFiles;
+  std::unordered_map<std::string, IncrementalLinkFile::OutputSectionInfo> outSections;
   for (auto &s : outputSections) {
     lld::coff::IncrementalLinkFile::OutputSectionInfo sec{
         s.rawAddress, s.virtualAddress, s.size};
@@ -123,7 +123,7 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
       sectionData.size = sec.size;
       sectionData.virtualAddress = sec.virtualAddress;
       for (auto &c : sec.chunks) {
-        std::map<std::string, std::vector<IncrementalLinkFile::RelocationInfo>>
+        std::unordered_map<std::string, std::vector<IncrementalLinkFile::RelocationInfo>>
             symbols;
         for (auto &rel : c.relocations) {
           IncrementalLinkFile::RelocationInfo relInfo{rel.virtualAddress,
