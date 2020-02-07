@@ -288,8 +288,11 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   }
 }
 
-std::pair<uint64_t, std::string> getFileInfoIfDuplicate(StringRef symbol) {
+std::pair<uint64_t, std::string> getFileInfoIfDuplicate(StringRef symbol,
+                                                        StringRef fileName) {
   for (auto &file : incrementalLinkFile->objFiles) {
+    if (file.first == fileName)
+      continue;
     for (auto &sym : file.second.definedSymbols) {
       if (symbol == sym.first)
         return {file.second.position, file.first};
@@ -309,7 +312,8 @@ void updateSymbolTable(ObjFile *file) {
     auto it = oldSyms.find(definedSym->getName());
     if (it == oldSyms.end()) {
       // New symbol was introduced, check if it already exists in another file
-      auto fileInfo = getFileInfoIfDuplicate(definedSym->getName());
+      auto fileInfo = getFileInfoIfDuplicate(definedSym->getName(),
+                                             sym->getFile()->getName());
       if (fileInfo.first != 0) {
         // If it's a comdat symbol that was defined elsewhere it might not
         // necessarily be an error
