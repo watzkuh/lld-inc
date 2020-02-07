@@ -109,23 +109,23 @@ void reapplyRelocations(const StringRef &fileName) {
   uint8_t *buf = binary->getBufferStart() + offset;
   for (const auto &c : secInfo.chunks) {
     uint32_t chunkStart = c.virtualAddress;
-    for (const auto &sym : c.symbols) {
-      auto it = updatedSymbols.find(sym.first);
-      if (it == updatedSymbols.end()) {
+    for (const auto &sym : updatedSymbols) {
+      auto it = c.symbols.find(sym.first());
+      if (it == c.symbols.end()) {
         continue;
       } else {
-        if (it->second.first == it->second.second &&
-            it->second.first == INT64_MAX) {
-          lld::outs() << "MISSING: " << sym.first << "\n";
+        if (sym.second.first == sym.second.second &&
+            sym.second.first == INT64_MAX) {
+          lld::outs() << "MISSING: " << it->first << "\n";
           incrementalLinkFile->rewriteAborted = true;
         }
-        lld::outs() << sym.first
-                    << " changed address; old: " << it->second.first
-                    << " new: " << it->second.second << "\n";
+        lld::outs() << it->first
+                    << " changed address; old: " << sym.second.first
+                    << " new: " << sym.second.second << "\n";
       }
-      uint64_t s = it->second.second;
-      uint64_t invertS = -it->second.first;
-      for (const auto &rel : sym.second) {
+      uint64_t s = sym.second.second;
+      uint64_t invertS = -sym.second.first;
+      for (const auto &rel : it->second) {
         uint8_t *off = buf + rel.offset;
         uint64_t p = chunkStart + rel.offset;
         uint8_t typeOff = 0;
@@ -358,8 +358,7 @@ void updateSymbolTable(ObjFile *file) {
             // Associative comdats should not be extern in practice and
             // therefore not be stored in the ilk file
             llvm_unreachable("multiple definitions of associative comdat");
-          default: // NO-OP
-                   ;
+          default:; // NO-OP
           }
         }
         lld::outs() << "Duplicate symbol: " << definedSym->getName() << "\n";
