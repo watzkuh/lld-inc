@@ -227,8 +227,7 @@ struct Configuration {
   bool warnLocallyDefinedImported = true;
   bool warnDebugInfoUnusable = true;
   bool warnLongSectionNames = true;
-  bool incremental = true;
-  bool incrementalLink = false;
+  bool incremental = false;
   bool benchmark = false;
   bool integrityCheck = false;
   bool killAt = false;

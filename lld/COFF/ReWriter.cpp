@@ -197,8 +197,8 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
       // Check if a new dependency was introduced
       if (sf.second != sc->file->getName() &&
           incrementalLinkFile->input.count(sf.second)) {
-        incrementalLinkFile->objFiles[sf.second]
-            .dependentFiles.insert(sc->file->getName());
+        incrementalLinkFile->objFiles[sf.second].dependentFiles.insert(
+            sc->file->getName());
       }
     }
     uint8_t *off = buf + rel.VirtualAddress;

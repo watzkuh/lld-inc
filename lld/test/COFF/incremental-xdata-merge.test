@@ -1,7 +1,7 @@
 # RUN: rm -rf %t.dir
 # RUN: mkdir %t.dir && cd %t.dir
 # RUN: LDFLAGS="/out:out.exe /opt:noref /entry:main \
-# RUN:  /nodefaultlib /incrementallink"
+# RUN:  /nodefaultlib /incremental"
 # RUN:  yaml2obj < %p/Inputs/template-double.yaml > template.obj
 # RUN: lld-link  $LDFLAGS template.obj
 

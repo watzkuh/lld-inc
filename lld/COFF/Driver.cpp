@@ -1258,7 +1258,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   if (debug == DebugKind::Full || debug == DebugKind::Dwarf ||
       debug == DebugKind::GHash) {
     config->debug = true;
-    config->incremental = true;
   }
 
   // Handle /demangle
@@ -1577,9 +1576,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   config->allowIsolation =
       args.hasFlag(OPT_allowisolation, OPT_allowisolation_no, true);
   config->incremental =
-      args.hasFlag(OPT_incremental, OPT_incremental_no,
-                   !config->doGC && !config->doICF && !args.hasArg(OPT_order) &&
-                       !args.hasArg(OPT_profile));
+      args.hasFlag(OPT_incremental, OPT_incremental_no, false);
   config->integrityCheck =
       args.hasFlag(OPT_integritycheck, OPT_integritycheck_no, false);
   config->cetCompat = args.hasFlag(OPT_cetcompat, OPT_cetcompat_no, false);
@@ -1605,34 +1602,30 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
          "'.\n>>> ignoring /lldmap");
     config->lldmapFile.clear();
   }
-  config->incrementalLink =
-      args.hasFlag(OPT_incrementallink, OPT_incrementallink_no, false);
+
+  // Specifies whether incremental link file is serialized to yaml or binary
   config->benchmark = args.hasFlag(OPT_benchmark, OPT_benchmark_no, false);
 
-  if ((config->incremental || config->incrementalLink) && args.hasArg(OPT_profile)) {
+  if (config->incremental && args.hasArg(OPT_profile)) {
     warn("ignoring '/incremental' due to '/profile' specification");
     config->incremental = false;
-    config->incrementalLink = false;
   }
 
-  if ((config->incremental || config->incrementalLink) && args.hasArg(OPT_order)) {
+  if (config->incremental && args.hasArg(OPT_order)) {
     warn("ignoring '/incremental' due to '/order' specification");
     config->incremental = false;
-    config->incrementalLink = false;
   }
 
-  if ((config->incremental || config->incrementalLink) && config->doGC) {
+  if (config->incremental && config->doGC) {
     warn("ignoring '/incremental' because REF is enabled; use '/opt:noref' to "
          "disable");
     config->incremental = false;
-    config->incrementalLink = false;
   }
 
-  if ((config->incremental || config->incrementalLink) && config->doICF) {
+  if (config->incremental && config->doICF) {
     warn("ignoring '/incremental' because ICF is enabled; use '/opt:noicf' to "
          "disable");
     config->incremental = false;
-    config->incrementalLink = false;
   }
 
   if (errorCount())
@@ -1656,7 +1649,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     return false;
   };
 
-  if (config->incrementalLink) {
+  if (config->incremental) {
     ScopedTimer t3(ilkInputTimer);
     auto possibleOutput =
         getOutputPath((*args.filtered(OPT_INPUT).begin())->getValue());
@@ -1688,7 +1681,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     case OPT_wholearchive_file:
       if (Optional<StringRef> path = findFile(arg->getValue())) {
         enqueuePath(*path, true, inLib);
-        if (config->incrementalLink)
+        if (config->incremental)
           incrementalLinkFile->input.insert(*path);
           incrementalLinkFile->rewritableFileNames.insert(*path);
       }
@@ -1696,7 +1689,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     case OPT_INPUT:
       if (Optional<StringRef> path = findFile(arg->getValue())) {
         enqueuePath(*path, isWholeArchive(*path), inLib);
-        if (config->incrementalLink)
+        if (config->incremental)
           incrementalLinkFile->input.insert(*path);
           incrementalLinkFile->rewritableFileNames.insert(*path);
       }
@@ -1731,7 +1724,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   }
   config->wordsize = config->is64() ? 8 : 4;
 
-  if (config->incrementalLink && incrementalLinkFile->rewritePossible) {
+  if (config->incremental && incrementalLinkFile->rewritePossible) {
     rewriteResult();
 
     ScopedTimer t2(ilkOutputTimer);
@@ -2088,7 +2081,7 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   // Write the result.
   writeResult();
 
-  if (config->incrementalLink) {
+  if (config->incremental) {
     ScopedTimer t2(ilkOutputTimer);
     // Write bookkeeping file for incremental links
     incrementalLinkFile->writeToDisk();

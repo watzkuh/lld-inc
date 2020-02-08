@@ -639,11 +639,11 @@ void Writer::run() {
 
   writeLLDMapFile(outputSections);
 
-  if (config->incrementalLink)
+  if (config->incremental)
     writeIlfSections(outputSections);
 
   t3.stop();
-  if (config->incrementalLink)
+  if (config->incremental)
     writeIlfSections(outputSections);
   if (errorCount())
     return;
@@ -1277,7 +1277,7 @@ void Writer::assignAddresses() {
     // Pad first rewritable chunk + 1
     bool padNext = false;
     for (Chunk *c : sec->chunks) {
-      if (config->incrementalLink) {
+      if (config->incremental) {
         if (auto *sc = dyn_cast<SectionChunk>(c)) {
           bool shouldPad = incrementalLinkFile->rewritableFileNames.count(
                                sc->file->getName()) &&
@@ -1864,7 +1864,7 @@ void Writer::writeBuildId() {
       reinterpret_cast<coff_file_header *>(buf);
   coffHeader->TimeDateStamp = timestamp;
 
-  if (config->incrementalLink) {
+  if (config->incremental) {
     incrementalLinkFile->outputFile = config->outputFile;
     incrementalLinkFile->outputHash = xxHash64(outputFileData);
   }

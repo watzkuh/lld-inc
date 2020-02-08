@@ -95,9 +95,6 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
 }
 
 void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
-  if (!config->incrementalLink)
-    return;
-
   ScopedTimer t1(sectionWriter);
   lld::outs() << "Writing ilk \n";
   for (OutputSection *sec : outputSections) {

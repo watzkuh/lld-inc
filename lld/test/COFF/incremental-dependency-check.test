@@ -2,7 +2,7 @@
 # RUN: rm -rf %t.dir
 # RUN: mkdir %t.dir && cd %t.dir
 # RUN: LDFLAGS="/out:out.exe /opt:noref /entry:main \
-# RUN:  /nodefaultlib /incrementallink"
+# RUN:  /nodefaultlib /incremental"
 # RUN: yaml2obj < %p/Inputs/do-not-use-lorem.yaml > main.obj
 # RUN: yaml2obj < %p/Inputs/lorem-ipsum-reorder.yaml > symbol-provider.obj
 # RUN: lld-link $LDFLAGS main.obj symbol-provider.obj

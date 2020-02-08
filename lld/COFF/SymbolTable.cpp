@@ -36,7 +36,7 @@ SymbolTable *symtab;
 
 void SymbolTable::addFile(InputFile *file) {
   log("Reading " + toString(file));
-  if (config->incrementalLink && incrementalLinkFile->rewritePossible) {
+  if (config->incremental && incrementalLinkFile->rewritePossible) {
     if (!file->hasChanged()) {
       return;
     } else {
@@ -48,7 +48,7 @@ void SymbolTable::addFile(InputFile *file) {
     }
     return;
   }
-  if (config->incrementalLink && !incrementalLinkFile->rewritePossible)
+  if (config->incremental && !incrementalLinkFile->rewritePossible)
     incrementalLinkFile->objFiles[file->getName()].position =
         ++incrementalLinkFile->fileIndex;
 
