@@ -22,8 +22,7 @@ INC-NOT: Incremental link aborted
 # RUN: llvm-readobj --sections --section-data %t.dir/inc.exe > %t.dir/incremental-link
 # RUN: not diff %t.dir/clean-link %t.dir/incremental-link | FileCheck --check-prefix=DIFF %s
 
-DIFF: 71c71
-DIFF-NEXT: <       0000: 48656C6C 6F20576F 726C642E 0A000000  |Hello World.....|
+DIFF: <       0000: 48656C6C 6F20576F 726C642E 0A000000  |Hello World.....|
 DIFF-NEXT: ---
 DIFF-NEXT: >       0000: 48656C6C 6F204C6F 72656D2E 0A000000  |Hello Lorem.....|
 DIFF-NOT: ---

@@ -13,5 +13,5 @@ CHECK: No incremental
 
 INC: Attempting incremental link
 INC: New .data section in
-INC-NEXT: New: 384        Old: 64
+INC-NEXT: New: 384
 INC: Incremental link aborted
