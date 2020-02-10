@@ -1,4 +1,3 @@
-
 #include "ReWriter.h"
 #include "Chunks.h"
 #include "Driver.h"
@@ -8,7 +7,6 @@
 #include "Symbols.h"
 #include "Writer.h"
 #include <lld/Common/ErrorHandler.h>
-#include <lld/Common/Threads.h>
 #include <lld/Common/Timer.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/FileOutputBuffer.h>
