@@ -114,10 +114,12 @@ bool InputFile::hasChanged() {
   StringRef fileName = mb.getBufferIdentifier();
   uint64_t modTime = getModificationTime();
 
-  if (incrementalLinkFile->objFiles[fileName].modTime != modTime) {
+  if (incrementalLinkFile->objFiles[fileName].modTime != modTime ||
+      incrementalDefer) {
     incrementalLinkFile->objFiles[fileName].modTime = modTime;
     return true;
   }
+  incrementalDefer = true;
   return false;
 }
 

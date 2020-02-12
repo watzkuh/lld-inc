@@ -22,6 +22,7 @@ static Timer patchTimer("Binary Patching", Timer::root());
 std::unique_ptr<FileOutputBuffer> binary;
 
 std::vector<ObjFile *> changedFiles;
+std::vector<InputFile *> unchangedFiles;
 std::set<StringRef> dependentFileNames;
 llvm::StringMap<std::pair<uint64_t, uint64_t>> updatedSymbols;
 SmallDenseSet<StringRef> sectionNames = {".text", ".data", ".rdata", ".xdata"};
@@ -98,64 +99,77 @@ void applyRelocation(SectionChunk sc, uint8_t *off, support::ulittle16_t type,
   }
 }
 
-void reapplyRelocations(const StringRef &fileName) {
-  lld::outs() << "Reapplying relocations for file " << fileName << "\n";
-  auto &secInfo = incrementalLinkFile->objFiles[fileName].sections[".text"];
+void reapplyRelocations(ObjFile *file) {
+  lld::outs() << "Reapplying relocations for file " << file->getName() << "\n";
+  auto &secInfo =
+      incrementalLinkFile->objFiles[file->getName()].sections[".text"];
   auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
   auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
                 outputTextSection.virtualAddress;
   uint8_t *buf = binary->getBufferStart() + offset;
-  for (const auto &c : secInfo.chunks) {
-    uint32_t chunkStart = c.virtualAddress;
-    for (const auto &sym : updatedSymbols) {
-      auto it = c.symbols.find(sym.first());
-      if (it == c.symbols.end()) {
+
+  for (auto &c : file->getChunks()) {
+
+    auto sc = dyn_cast_or_null<SectionChunk>(c);
+    if (!sc || sc->getSectionName() != ".text")
+      continue;
+    if (isDiscardedCOMDAT(sc, file->getName()))
+      continue;
+    lld::outs() << c->getSectionName() << "\n";
+
+    for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
+      const coff_relocation &rel = sc->getRelocs()[j];
+      auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
+
+      auto it = updatedSymbols.find(sym->getName());
+      if (it == updatedSymbols.end()) {
+        lld::outs() << sym->getName() << "\n";
         continue;
-      } else {
-        if (sym.second.first == sym.second.second &&
-            sym.second.first == INT64_MAX) {
-          lld::outs() << "MISSING: " << it->first << "\n";
-          incrementalLinkFile->rewriteAborted = true;
-        }
-        lld::outs() << it->first
-                    << " changed address; old: " << sym.second.first
-                    << " new: " << sym.second.second << "\n";
       }
-      uint64_t s = sym.second.second;
-      uint64_t invertS = -sym.second.first;
-      for (const auto &rel : it->second) {
-        uint8_t *off = buf + rel.offset;
-        uint64_t p = chunkStart + rel.offset;
-        uint8_t typeOff = 0;
-        // Only AMD64 support at the moment
-        switch (rel.type) {
-        case COFF::IMAGE_REL_AMD64_REL32:
-          typeOff = 4;
-          break;
-        case COFF::IMAGE_REL_AMD64_REL32_1:
-          typeOff = 5;
-          break;
-        case COFF::IMAGE_REL_AMD64_REL32_2:
-          typeOff = 6;
-          break;
-        case COFF::IMAGE_REL_AMD64_REL32_3:
-          typeOff = 7;
-          break;
-        case COFF::IMAGE_REL_AMD64_REL32_4:
-          typeOff = 8;
-          break;
-        case COFF::IMAGE_REL_AMD64_REL32_5:
-          typeOff = 9;
-          break;
-        }
-        SectionChunk sc;
-        // First, undo the original relocation
-        applyRelocation(sc, off, (support::ulittle16_t)rel.type,
-                        invertS + 2 * (p + typeOff), p);
-        applyRelocation(sc, off, (support::ulittle16_t)rel.type, s, p);
+
+      if (it->second.first == it->second.second &&
+          it->second.first == INT64_MAX) {
+        lld::outs() << "MISSING: " << sym->getName() << "\n";
+        incrementalLinkFile->rewriteAborted = true;
       }
+      lld::outs() << sym->getName()
+                  << " changed address; old: " << it->second.first
+                  << " new: " << it->second.second << "\n";
+
+      uint64_t s = it->second.second;
+      uint64_t invertS = -it->second.first;
+
+      uint8_t *off = buf + rel.VirtualAddress;
+      uint64_t p = sc->getRVA() + rel.VirtualAddress;
+      uint8_t typeOff = 0;
+      // Only AMD64 support at the moment
+      switch (rel.Type) {
+      case COFF::IMAGE_REL_AMD64_REL32:
+        typeOff = 4;
+        break;
+      case COFF::IMAGE_REL_AMD64_REL32_1:
+        typeOff = 5;
+        break;
+      case COFF::IMAGE_REL_AMD64_REL32_2:
+        typeOff = 6;
+        break;
+      case COFF::IMAGE_REL_AMD64_REL32_3:
+        typeOff = 7;
+        break;
+      case COFF::IMAGE_REL_AMD64_REL32_4:
+        typeOff = 8;
+        break;
+      case COFF::IMAGE_REL_AMD64_REL32_5:
+        typeOff = 9;
+        break;
+      }
+
+      // First, undo the original relocation
+      applyRelocation(*sc, off, (support::ulittle16_t)rel.Type,
+                      invertS + 2 * (p + typeOff), p);
+      applyRelocation(*sc, off, (support::ulittle16_t)rel.Type, s, p);
     }
-    buf += c.size;
+    buf += c->getSize();
   }
 }
 
@@ -205,9 +219,6 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
     uint64_t p = chunkStart + rel.VirtualAddress;
 
     applyRelocation(*sc, off, rel.Type, s, p);
-
-    IncrementalLinkFile::RelocationInfo relInfo{rel.VirtualAddress, rel.Type};
-    chunkInfo.symbols[sym->getName()].push_back(relInfo);
   }
   return chunkInfo;
 }
@@ -412,6 +423,8 @@ void coff::markForReWrite(coff::ObjFile *file) {
   changedFiles.push_back(file);
 }
 
+void coff::defer(InputFile *file) { unchangedFiles.push_back(file); }
+
 void coff::rewriteResult() {
   ScopedTimer t(patchTimer);
   binary = CHECK(FileOutputBuffer::create(incrementalLinkFile->outputFile, -1,
@@ -426,8 +439,15 @@ void coff::rewriteResult() {
     updateSymbolTable(f);
   for (auto &f : changedFiles)
     rewriteFile(f);
-  for (auto &f : dependentFileNames)
-    reapplyRelocations(f);
+  for (auto &f : unchangedFiles) {
+    if (dependentFileNames.count(f->getName()) == 1) {
+      symtab->addFile(f);
+      if (auto *obj = dyn_cast<ObjFile>(f)) {
+        assignAddresses(obj);
+        reapplyRelocations(obj);
+      }
+    }
+  }
 
   if (incrementalLinkFile->rewriteAborted) {
     t.stop();

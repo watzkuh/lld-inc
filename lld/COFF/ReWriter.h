@@ -11,6 +11,7 @@ namespace lld {
 namespace coff {
 
 void markForReWrite(ObjFile *file);
+void defer(InputFile *file);
 
 static std::list<std::function<void()>> rewriteQueue;
 void enqueueTask(std::function<void()> task);

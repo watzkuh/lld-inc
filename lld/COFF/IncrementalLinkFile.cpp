@@ -76,7 +76,7 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
     for (const auto &s : f.second.definedSymbols) {
       incrementalLinkFile->globalSymbols[s.first] = {s.second, f.first};
     }
-    for (const auto &dep: f.second.dependentFiles) {
+    for (const auto &dep : f.second.dependentFiles) {
       incrementalLinkFile->objFiles[dep].dependentOn.insert(f.first);
     }
   }
@@ -141,9 +141,6 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
               incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
                   .dependentFiles.insert(fileName);
             }
-            IncrementalLinkFile::RelocationInfo relInfo{rel.VirtualAddress,
-                                                        rel.Type};
-            chunkInfo.symbols[definedSym->getName()].push_back(relInfo);
           }
         }
       }

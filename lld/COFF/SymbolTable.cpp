@@ -38,6 +38,7 @@ void SymbolTable::addFile(InputFile *file) {
   log("Reading " + toString(file));
   if (config->incremental && incrementalLinkFile->rewritePossible) {
     if (!file->hasChanged()) {
+      enqueueTask([=] { defer(file); });
       return;
     } else {
       outs() << file->getName() << " has changed\n";

@@ -99,6 +99,7 @@ protected:
 
 private:
   const Kind fileKind;
+  bool incrementalDefer = false;
 };
 
 // .lib or .a file.
