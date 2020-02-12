@@ -16,22 +16,12 @@ namespace coff {
 
 class IncrementalLinkFile {
 public:
-  struct RelocationInfo {
-    uint32_t offset;
-    uint16_t type;
-    template <class Archive> void serialize(Archive &archive) {
-      archive(offset, type);
-    }
-  };
 
   struct ChunkInfo {
     uint32_t virtualAddress;
     size_t size;
-    // TODO: Probably more suited in SectionInfo for faster lookup, albeit
-    // slightly more difficult offset calculation
-    std::unordered_map<std::string, std::vector<RelocationInfo>> symbols;
     template <class Archive> void serialize(Archive &archive) {
-      archive(virtualAddress, size, symbols);
+      archive(virtualAddress, size);
     }
   };
 
@@ -130,18 +120,6 @@ template <> struct yaml::MappingTraits<NormalizedOutputSectionMap> {
   static void mapping(IO &io, NormalizedOutputSectionMap &sec);
 };
 
-struct NormalizedRelocationInfo {
-  std::string symbolName;
-  uint32_t virtualAddress;
-  uint16_t type;
-};
-
-LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedRelocationInfo)
-
-template <> struct yaml::MappingTraits<NormalizedRelocationInfo> {
-  static void mapping(IO &io, NormalizedRelocationInfo &rel);
-};
-
 struct NormalizedSymbolInfo {
   NormalizedSymbolInfo() {}
   NormalizedSymbolInfo(std::string n, uint64_t d)
@@ -158,12 +136,10 @@ template <> struct yaml::MappingTraits<NormalizedSymbolInfo> {
 
 struct NormalizedChunkInfo {
   NormalizedChunkInfo() {}
-  NormalizedChunkInfo(uint32_t a, size_t s,
-                      std::vector<NormalizedRelocationInfo> rels)
-      : virtualAddress(a), size(s), relocations(std::move(rels)) {}
+  NormalizedChunkInfo(uint32_t a, size_t s)
+      : virtualAddress(a), size(s) {}
   yaml::Hex32 virtualAddress;
   size_t size;
-  std::vector<NormalizedRelocationInfo> relocations;
 };
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedChunkInfo);

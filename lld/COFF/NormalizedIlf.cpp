@@ -7,12 +7,7 @@ void yaml::MappingTraits<NormalizedOutputSectionMap>::mapping(
   io.mapRequired("virtual-address", sec.virtualAddress);
   io.mapOptional("size", sec.size);
 }
-void yaml::MappingTraits<NormalizedRelocationInfo>::mapping(
-    yaml::IO &io, NormalizedRelocationInfo &rel) {
-  io.mapRequired("name", rel.symbolName);
-  io.mapRequired("offset", rel.virtualAddress);
-  io.mapRequired("type", rel.type);
-}
+
 void yaml::MappingTraits<NormalizedSymbolInfo>::mapping(
     yaml::IO &io, NormalizedSymbolInfo &sym) {
   io.mapRequired("name", sym.name);
@@ -23,7 +18,6 @@ void yaml::MappingTraits<NormalizedChunkInfo>::mapping(yaml::IO &io,
                                                        NormalizedChunkInfo &c) {
   io.mapRequired("address", c.virtualAddress);
   io.mapRequired("size", c.size);
-  io.mapOptional("relocations", c.relocations);
 }
 
 void yaml::MappingTraits<NormalizedSectionMap>::mapping(
@@ -70,15 +64,7 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
     for (const auto &sec : f.second.sections) {
       std::vector<NormalizedChunkInfo> chunks;
       for (const auto &c : sec.second.chunks) {
-        std::vector<NormalizedRelocationInfo> symbols;
-        for (const auto &sym : c.symbols) {
-          for (const auto &rel : sym.second) {
-            NormalizedRelocationInfo relocationInfo{
-                sym.first, rel.offset, rel.type};
-            symbols.push_back(relocationInfo);
-          }
-        }
-        NormalizedChunkInfo chunkInfo(c.virtualAddress, c.size, symbols);
+        NormalizedChunkInfo chunkInfo(c.virtualAddress, c.size);
         chunks.push_back(chunkInfo);
       }
       NormalizedSectionMap sectionMap(sec.first, sec.second.virtualAddress,
@@ -104,7 +90,8 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
 IncrementalLinkFile
 MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
   std::unordered_map<std::string, IncrementalLinkFile::ObjectFileInfo> objFiles;
-  std::unordered_map<std::string, IncrementalLinkFile::OutputSectionInfo> outSections;
+  std::unordered_map<std::string, IncrementalLinkFile::OutputSectionInfo>
+      outSections;
   for (auto &s : outputSections) {
     lld::coff::IncrementalLinkFile::OutputSectionInfo sec{
         s.rawAddress, s.virtualAddress, s.size};
@@ -123,15 +110,8 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
       sectionData.size = sec.size;
       sectionData.virtualAddress = sec.virtualAddress;
       for (auto &c : sec.chunks) {
-        std::unordered_map<std::string, std::vector<IncrementalLinkFile::RelocationInfo>>
-            symbols;
-        for (auto &rel : c.relocations) {
-          IncrementalLinkFile::RelocationInfo relInfo{rel.virtualAddress,
-                                                      rel.type};
-          symbols[rel.symbolName].push_back(relInfo);
-        }
         lld::coff::IncrementalLinkFile::ChunkInfo chunkInfo{c.virtualAddress,
-                                                            c.size, symbols};
+                                                            c.size};
         sectionData.chunks.push_back(chunkInfo);
       }
       obj.sections[sec.name] = sectionData;
