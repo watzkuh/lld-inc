@@ -115,7 +115,6 @@ void reapplyRelocations(ObjFile *file) {
       continue;
     if (isDiscardedCOMDAT(sc, file->getName()))
       continue;
-    lld::outs() << c->getSectionName() << "\n";
 
     for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
       const coff_relocation &rel = sc->getRelocs()[j];
@@ -123,7 +122,6 @@ void reapplyRelocations(ObjFile *file) {
 
       auto it = updatedSymbols.find(sym->getName());
       if (it == updatedSymbols.end()) {
-        lld::outs() << sym->getName() << "\n";
         continue;
       }
 
