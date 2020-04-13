@@ -641,10 +641,8 @@ void Writer::run() {
 
   if (config->incremental)
     writeIlfSections(outputSections);
-
   t3.stop();
-  if (config->incremental)
-    writeIlfSections(outputSections);
+
   if (errorCount())
     return;
 
