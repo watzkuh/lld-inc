@@ -75,6 +75,7 @@ public:
 
   // Used for incremental linking
   bool hasChanged();
+  bool incrementalDefer = false;
 
   // Reads a file (the constructor doesn't do that).
   virtual void parse() = 0;
@@ -99,7 +100,6 @@ protected:
 
 private:
   const Kind fileKind;
-  bool incrementalDefer = false;
 };
 
 // .lib or .a file.

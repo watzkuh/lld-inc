@@ -41,7 +41,8 @@ void SymbolTable::addFile(InputFile *file) {
       enqueueTask([=] { defer(file); });
       return;
     } else {
-      outs() << file->getName() << " has changed\n";
+      if (!file->incrementalDefer)
+        outs() << file->getName() << " has changed\n";
       file->parse();
       if (auto *f = dyn_cast<ObjFile>(file)) {
         enqueueTask([=] { markForReWrite(f); });
