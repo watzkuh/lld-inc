@@ -98,7 +98,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   ScopedTimer t1(sectionWriter);
   lld::outs() << "Writing ilk \n";
   for (OutputSection *sec : outputSections) {
-    StringRef const secName = sec->name;
+    std::string const secName = sec->name.str();
     IncrementalLinkFile::OutputSectionInfo outputSectionInfo{
         sec->getFileOff(), sec->getRVA(), sec->getRawSize()};
     incrementalLinkFile->outputSections[secName] = outputSectionInfo;
@@ -106,7 +106,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       auto *sc = dyn_cast<SectionChunk>(c);
       if (!sc || !sc->getSize())
         continue;
-      StringRef const fileName = sc->file->getName();
+      std::string const fileName = sc->file->getName().str();
       if (!incrementalLinkFile->rewritableFileNames.count(fileName))
         continue;
 
@@ -138,7 +138,7 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
             if (definedSym->getFile()->getName() != fileName &&
                 incrementalLinkFile->input.count(
                     definedSym->getFile()->getName())) {
-              incrementalLinkFile->objFiles[definedSym->getFile()->getName()]
+              incrementalLinkFile->objFiles[definedSym->getFile()->getName().str()]
                   .dependentFiles.insert(fileName);
             }
           }
@@ -162,8 +162,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
     if (sym->getRVA() == 0 || !sym->isLive() || !sym->isExternal) {
       continue;
     }
-    incrementalLinkFile->objFiles[sym->file->getName()]
-        .definedSymbols[sym->getName()] = sym->getRVA();
+    incrementalLinkFile->objFiles[sym->file->getName().str()]
+        .definedSymbols[sym->getName().str()] = sym->getRVA();
   }
   t.stop();
 }

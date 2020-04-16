@@ -45,8 +45,8 @@ bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
     return false;
   // A section was discarded if its leader symbol is defined in another file
   bool discarded =
-      incrementalLinkFile->objFiles[fileName].definedSymbols.count(
-          sc->sym->getName()) == 0 &&
+      incrementalLinkFile->objFiles[fileName.str()].definedSymbols.count(
+          sc->sym->getName().str()) == 0 &&
       incrementalLinkFile->globalSymbols.count(sc->sym->getName()) != 0;
   if (discarded)
     // Mark all associated children
@@ -58,7 +58,8 @@ bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
 
 void assignAddresses(ObjFile *file) {
   std::map<StringRef, uint32_t> rvas;
-  for (auto &s : incrementalLinkFile->objFiles[file->getName()].sections) {
+  for (auto &s :
+       incrementalLinkFile->objFiles[file->getName().str()].sections) {
     rvas[s.first] = s.second.virtualAddress;
   }
   for (Chunk *c : file->getChunks()) {
@@ -73,7 +74,7 @@ void assignAddresses(ObjFile *file) {
 }
 
 void markDependentFiles(ObjFile *file) {
-  auto &f = incrementalLinkFile->objFiles[file->getName()];
+  auto &f = incrementalLinkFile->objFiles[file->getName().str()];
   for (auto &dep : f.dependentFiles)
     dependentFileNames.insert(dep);
 }
@@ -102,7 +103,7 @@ void applyRelocation(SectionChunk sc, uint8_t *off, support::ulittle16_t type,
 void reapplyRelocations(ObjFile *file) {
   lld::outs() << "Reapplying relocations for file " << file->getName() << "\n";
   auto &secInfo =
-      incrementalLinkFile->objFiles[file->getName()].sections[".text"];
+      incrementalLinkFile->objFiles[file->getName().str()].sections[".text"];
   auto &outputTextSection = incrementalLinkFile->outputSections[".text"];
   auto offset = outputTextSection.rawAddress + secInfo.virtualAddress -
                 outputTextSection.virtualAddress;
@@ -184,9 +185,11 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
 
   // Reset dependencies
   for (auto f : changedFiles) {
-    auto backRefs = incrementalLinkFile->objFiles[f->getName()].dependentOn;
+    auto backRefs =
+        incrementalLinkFile->objFiles[f->getName().str()].dependentOn;
     for (auto &ref : backRefs) {
-      incrementalLinkFile->objFiles[ref].dependentFiles.erase(f->getName());
+      incrementalLinkFile->objFiles[ref].dependentFiles.erase(
+          f->getName().str());
     }
   }
 
@@ -208,7 +211,7 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
       if (sf.second != sc->file->getName() &&
           incrementalLinkFile->input.count(sf.second)) {
         incrementalLinkFile->objFiles[sf.second].dependentFiles.insert(
-            sc->file->getName());
+            sc->file->getName().str());
       }
     }
     uint8_t *off = buf + rel.VirtualAddress;
@@ -222,7 +225,7 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
 }
 
 void rewriteSection(const std::vector<SectionChunk *> &chunks,
-                    StringRef fileName, StringRef secName) {
+                    const std::string &fileName, const std::string &secName) {
 
   // All currently supported sections for incremental links
   if (sectionNames.count(secName) == 0) {
@@ -238,10 +241,10 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     return;
   auto &secInfo = secIt->second;
 
-  StringRef outSecName(secName);
+  std::string outSecName(secName);
   for (auto &p : config->merge) {
     if (secName == p.first) {
-      outSecName = p.second;
+      outSecName = p.second.str();
       break;
     }
   }
@@ -309,14 +312,15 @@ std::pair<uint64_t, std::string> getFileInfoIfDuplicate(StringRef symbol,
 }
 
 void updateSymbolTable(ObjFile *file) {
-  auto &oldSyms = incrementalLinkFile->objFiles[file->getName()].definedSymbols;
+  auto &oldSyms =
+      incrementalLinkFile->objFiles[file->getName().str()].definedSymbols;
   StringMap<bool> newSyms;
   for (auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
     if (!definedSym || !definedSym->isLive() || !definedSym->isExternal)
       continue;
     newSyms[definedSym->getName()] = true;
-    auto it = oldSyms.find(definedSym->getName());
+    auto it = oldSyms.find(definedSym->getName().str());
     if (it == oldSyms.end()) {
       // New symbol was introduced, check if it already exists in another file
       auto fileInfo = getFileInfoIfDuplicate(definedSym->getName(),
@@ -333,7 +337,7 @@ void updateSymbolTable(ObjFile *file) {
           case IMAGE_COMDAT_SELECT_ANY:
             // The file that defines the symbol has to appear before the current
             // file to ensure output reproducibility
-            if (incrementalLinkFile->objFiles[file->getName()].position >
+            if (incrementalLinkFile->objFiles[file->getName().str()].position >
                 fileInfo.first)
               continue;
             break;
@@ -360,7 +364,7 @@ void updateSymbolTable(ObjFile *file) {
             // earlier it is fine to keep it
             if (sc->selection == IMAGE_COMDAT_SELECT_EXACT_MATCH &&
                 sc->getSize() == chunkInfo.size &&
-                incrementalLinkFile->objFiles[file->getName()].position >
+                incrementalLinkFile->objFiles[file->getName().str()].position >
                     fileInfo.first)
               continue;
             break;
@@ -377,7 +381,7 @@ void updateSymbolTable(ObjFile *file) {
       }
       updatedSymbols[definedSym->getName()] =
           std::make_pair(0, definedSym->getRVA());
-      oldSyms[definedSym->getName()] = definedSym->getRVA();
+      oldSyms[definedSym->getName().str()] = definedSym->getRVA();
       lld::outs() << "ADDED: " << sym->getName() << "\n";
     } else {
       if (it->second != definedSym->getRVA()) {
@@ -400,7 +404,7 @@ void updateSymbolTable(ObjFile *file) {
   for (auto &p : updatedSymbols) {
     if (p.second.first == p.second.second && p.second.first == INT64_MAX)
       // Remove symbols from the incremental link file as well
-      oldSyms.erase(p.first());
+      oldSyms.erase(p.first().str());
   }
 }
 
@@ -411,7 +415,7 @@ void rewriteFile(ObjFile *file) {
     chunks[sc->getSectionName()].push_back(sc);
   }
   for (auto &sec : chunks) {
-    rewriteSection(sec.second, file->getName(), sec.first);
+    rewriteSection(sec.second, file->getName().str(), sec.first.str());
   }
 }
 

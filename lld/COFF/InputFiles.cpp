@@ -111,7 +111,7 @@ uint64_t InputFile::getModificationTime() {
 }
 
 bool InputFile::hasChanged() {
-  StringRef fileName = mb.getBufferIdentifier();
+  std::string fileName = mb.getBufferIdentifier().str();
   uint64_t modTime = getModificationTime();
 
   if (incrementalLinkFile->objFiles[fileName].modTime != modTime ||
@@ -129,7 +129,7 @@ void ArchiveFile::parse() {
   // Parse a MemoryBufferRef as an archive file.
   file = CHECK(Archive::create(mb), this);
   if (config->incremental && !incrementalLinkFile->rewritePossible) {
-    incrementalLinkFile->objFiles[file->getFileName()].modTime =
+    incrementalLinkFile->objFiles[file->getFileName().str()].modTime =
         getModificationTime();
   }
   // Read the symbol table to construct Lazy objects.
@@ -215,7 +215,7 @@ void ObjFile::parse() {
 
   if (auto *obj = dyn_cast<COFFObjectFile>(bin.get())) {
     if (config->incremental && !incrementalLinkFile->rewritePossible) {
-      incrementalLinkFile->objFiles[bin->getFileName()].modTime =
+      incrementalLinkFile->objFiles[bin->getFileName().str()].modTime =
           getModificationTime();
     }
     bin.release();

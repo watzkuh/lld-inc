@@ -36,7 +36,6 @@
 #include "lld/Common/Timer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
-#include <unordered_map>
 
 using namespace llvm;
 using namespace llvm::object;
@@ -191,7 +190,7 @@ getSymbolStrings(ArrayRef<Defined *> syms) {
     os << format_hex_no_prefix((config->imageBase + sym->getRVA()), 16);
     if (!fileDescr.empty()) {
       os << "     "; // FIXME : Handle "f" and "i" flags sometimes generated
-                     // by link.exe in those spaces
+      // by link.exe in those spaces
       os << fileDescr;
     }
   });

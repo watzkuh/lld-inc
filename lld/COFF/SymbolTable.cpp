@@ -50,7 +50,7 @@ void SymbolTable::addFile(InputFile *file) {
     return;
   }
   if (config->incremental && !incrementalLinkFile->rewritePossible)
-    incrementalLinkFile->objFiles[file->getName()].position =
+    incrementalLinkFile->objFiles[file->getName().str()].position =
         ++incrementalLinkFile->fileIndex;
 
   file->parse();

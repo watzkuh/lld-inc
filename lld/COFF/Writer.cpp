@@ -638,6 +638,7 @@ void Writer::run() {
   writeBuildId();
 
   writeLLDMapFile(outputSections);
+  writeMapFile(outputSections);
 
   if (config->incremental)
     writeIlfSections(outputSections);
