@@ -28,7 +28,7 @@ static std::vector<DefinedRegular *> getSymbols() {
   for (ObjFile *file : ObjFile::instances)
     for (Symbol *b : file->getSymbols()) {
       if (auto *sym = dyn_cast_or_null<DefinedRegular>(b))
-        if (sym && !sym->getCOFFSymbol().isSectionDefinition())
+        if (!sym->getCOFFSymbol().isSectionDefinition())
           v.push_back(sym);
     }
   return v;

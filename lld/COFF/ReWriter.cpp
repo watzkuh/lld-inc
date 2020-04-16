@@ -75,7 +75,7 @@ void assignAddresses(ObjFile *file) {
 
 void markDependentFiles(ObjFile *file) {
   auto &f = incrementalLinkFile->objFiles[file->getName().str()];
-  for (auto &dep : f.dependentFiles)
+  for (const auto &dep : f.dependentFiles)
     dependentFileNames.insert(dep);
 }
 
@@ -111,7 +111,7 @@ void reapplyRelocations(ObjFile *file) {
 
   for (auto &c : file->getChunks()) {
 
-    auto sc = dyn_cast_or_null<SectionChunk>(c);
+    auto *sc = dyn_cast_or_null<SectionChunk>(c);
     if (!sc || sc->getSectionName() != ".text")
       continue;
     if (isDiscardedCOMDAT(sc, file->getName()))
@@ -184,10 +184,10 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
   chunkInfo.size = paddedSize;
 
   // Reset dependencies
-  for (auto f : changedFiles) {
+  for (auto *f : changedFiles) {
     auto backRefs =
         incrementalLinkFile->objFiles[f->getName().str()].dependentOn;
-    for (auto &ref : backRefs) {
+    for (const auto &ref : backRefs) {
       incrementalLinkFile->objFiles[ref].dependentFiles.erase(
           f->getName().str());
     }
@@ -315,7 +315,7 @@ void updateSymbolTable(ObjFile *file) {
   auto &oldSyms =
       incrementalLinkFile->objFiles[file->getName().str()].definedSymbols;
   StringMap<bool> newSyms;
-  for (auto &sym : file->getSymbols()) {
+  for (const auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
     if (!definedSym || !definedSym->isLive() || !definedSym->isExternal)
       continue;
@@ -329,7 +329,7 @@ void updateSymbolTable(ObjFile *file) {
         // If it's a comdat symbol that was defined elsewhere it might not
         // necessarily be an error
         if (definedSym->isCOMDAT) {
-          auto sc = dyn_cast_or_null<SectionChunk>(definedSym->getChunk());
+          auto *sc = dyn_cast_or_null<SectionChunk>(definedSym->getChunk());
           switch (sc->selection) {
           case IMAGE_COMDAT_SELECT_NODUPLICATES:
             // This is an error, leave diagnostics to the full link
