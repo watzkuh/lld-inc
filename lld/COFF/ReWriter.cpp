@@ -300,14 +300,10 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 
 std::pair<uint64_t, std::string> getFileInfoIfDuplicate(StringRef symbol,
                                                         StringRef fileName) {
-  // TODO: Global symbols map lookup instead
-  for (auto &file : incrementalLinkFile->objFiles) {
-    if (file.first == fileName)
-      continue;
-    for (auto &sym : file.second.definedSymbols) {
-      if (symbol == sym.first)
-        return {file.second.position, file.first};
-    }
+  auto symLookup = incrementalLinkFile->globalSymbols[symbol];
+  if (symLookup.second != fileName) {
+    return {incrementalLinkFile->objFiles[symLookup.second].position,
+            symLookup.second};
   }
   return {0, ""};
 }
