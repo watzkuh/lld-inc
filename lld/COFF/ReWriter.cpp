@@ -183,14 +183,11 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
   chunkInfo.virtualAddress = sc->getRVA();
   chunkInfo.size = paddedSize;
 
+  StringRef fileName = sc->file->getName();
   // Reset dependencies
-  for (auto *f : changedFiles) {
-    auto backRefs =
-        incrementalLinkFile->objFiles[f->getName().str()].dependentOn;
-    for (const auto &ref : backRefs) {
-      incrementalLinkFile->objFiles[ref].dependentFiles.erase(
-          f->getName().str());
-    }
+  auto backRefs = incrementalLinkFile->objFiles[fileName.str()].dependentOn;
+  for (const auto &ref : backRefs) {
+    incrementalLinkFile->objFiles[ref].dependentFiles.erase(fileName.str());
   }
 
   for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
@@ -199,20 +196,23 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
     // The target of the relocation
     uint64_t s = 0;
+    std::string definedIn = "";
     if (definedSym != nullptr) {
       s = definedSym->getRVA();
+      definedIn = definedSym->getFile()->getName().str();
     }
     // Fallback to symbol table if we either have no information
     // about the chunk or the symbol
     if (definedSym == nullptr || s == 0) {
-      auto sf = incrementalLinkFile->globalSymbols[sym->getName()];
+      auto sf = incrementalLinkFile->globalSymbols[sym->getName().str()];
       s = sf.first;
-      // Check if a new dependency was introduced
-      if (sf.second != sc->file->getName() &&
-          incrementalLinkFile->input.count(sf.second)) {
-        incrementalLinkFile->objFiles[sf.second].dependentFiles.insert(
-            sc->file->getName().str());
-      }
+      printf("%s ", sf.second.c_str());
+      definedIn = sf.second;
+    }
+    // Check if a new dependency was introduced
+    if (definedIn != fileName && incrementalLinkFile->input.count(definedIn)) {
+      incrementalLinkFile->objFiles[definedIn].dependentFiles.insert(
+          fileName.str());
     }
     uint8_t *off = buf + rel.VirtualAddress;
 
@@ -300,6 +300,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
 
 std::pair<uint64_t, std::string> getFileInfoIfDuplicate(StringRef symbol,
                                                         StringRef fileName) {
+  // TODO: Global symbols map lookup instead
   for (auto &file : incrementalLinkFile->objFiles) {
     if (file.first == fileName)
       continue;
