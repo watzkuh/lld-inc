@@ -317,7 +317,9 @@ void updateSymbolTable(ObjFile *file) {
   StringMap<bool> newSyms;
   for (const auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
-    if (!definedSym || !definedSym->isLive() || !definedSym->isExternal)
+    if (!definedSym || !definedSym->isLive() || !definedSym->isExternal
+        // symbol not defined in this file, but the declaring file also changed
+        || definedSym->getFile()->getName() != file->getName())
       continue;
     newSyms[definedSym->getName()] = true;
     auto it = oldSyms.find(definedSym->getName().str());
