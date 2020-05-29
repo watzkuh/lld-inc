@@ -201,12 +201,11 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
       s = definedSym->getRVA();
       definedIn = definedSym->getFile()->getName().str();
     }
-    // Fallback to symbol table if we either have no information
+    // Fall back to symbol table if we either have no information
     // about the chunk or the symbol
     if (definedSym == nullptr || s == 0) {
       auto sf = incrementalLinkFile->globalSymbols[sym->getName().str()];
       s = sf.first;
-      printf("%s ", sf.second.c_str());
       definedIn = sf.second;
     }
     // Check if a new dependency was introduced
