@@ -62,14 +62,27 @@ void assignAddresses(ObjFile *file) {
        incrementalLinkFile->objFiles[file->getName().str()].sections) {
     rvas[s.first] = s.second.virtualAddress;
   }
+  // When chunks from different input sections are merged into one output
+  // section they have to be sorted by their original section name
+  // TODO: At the moment, sorting is done twice: Here and in rewriteFile()
+  std::map<StringRef, std::vector<SectionChunk *>> sections;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
-    if (!sc || sc->getSize() == 0 || isDiscardedCOMDAT(sc, file->getName()))
+    if (!sc)
       continue;
+    sections[sc->getSectionName()].push_back(sc);
+  }
 
-    sc->setRVA(rvas[sc->getSectionName()]);
-    rvas[sc->getSectionName()] +=
-        alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+  for (auto s : sections) {
+    for (auto * sc : s.second) {
+      if (sc->getSize() == 0 || isDiscardedCOMDAT(sc, file->getName()))
+        continue;
+      auto secName = sc->getSectionName().str();
+      if (incrementalLinkFile->mergedSections.count(secName) != 0)
+        secName = incrementalLinkFile->mergedSections[secName];
+      sc->setRVA(rvas[secName]);
+      rvas[secName] += alignTo(sc->getSize(), sc->getAlignment());
+    }
   }
 }
 
@@ -109,8 +122,7 @@ void reapplyRelocations(ObjFile *file) {
                 outputTextSection.virtualAddress;
   uint8_t *buf = binary->getBufferStart() + offset;
 
-  for (auto &c : file->getChunks()) {
-
+  for (const auto &c : file->getChunks()) {
     auto *sc = dyn_cast_or_null<SectionChunk>(c);
     if (!sc || sc->getSectionName() != ".text")
       continue;
@@ -172,16 +184,8 @@ void reapplyRelocations(ObjFile *file) {
   }
 }
 
-IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
-                                                  uint8_t *buf,
-                                                  uint32_t chunkStart,
-                                                  size_t paddedSize) {
-  memset(buf, 0xCC, paddedSize);
+void rewriteTextSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
   memcpy(buf, sc->getContents().data(), sc->getSize());
-
-  IncrementalLinkFile::ChunkInfo chunkInfo;
-  chunkInfo.virtualAddress = sc->getRVA();
-  chunkInfo.size = paddedSize;
 
   StringRef fileName = sc->file->getName();
   // Reset dependencies
@@ -220,7 +224,6 @@ IncrementalLinkFile::ChunkInfo rewriteTextSection(SectionChunk *sc,
 
     applyRelocation(*sc, off, rel.Type, s, p);
   }
-  return chunkInfo;
 }
 
 void rewriteSection(const std::vector<SectionChunk *> &chunks,
@@ -257,41 +260,37 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
            : secInfo.virtualAddress - outputSectionInfo.virtualAddress);
 
   uint8_t *buf = binary->getBufferStart() + offset;
+
+  // delete old content
+  memset(buf, secName == ".text" ? 0xCC : 0x00, secInfo.size);
+
   uint32_t contribSize = 0;
-  uint32_t num = 0;
 
   std::vector<IncrementalLinkFile::ChunkInfo> newChunks;
   for (SectionChunk *sc : chunks) {
     if (!sc || sc->getSize() == 0 || isDiscardedCOMDAT(sc, fileName))
       continue;
 
-    const size_t paddedSize =
-        alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
-    IncrementalLinkFile::ChunkInfo chunkInfo;
+    IncrementalLinkFile::ChunkInfo chunkInfo{sc->getRVA(), sc->getSize()};
     if (secName == ".text") {
-      chunkInfo = rewriteTextSection(
-          sc, buf, (secInfo.virtualAddress + contribSize), paddedSize);
-    } else {
-      memset(buf, 0x0, paddedSize);
+      rewriteTextSection(sc, buf, (secInfo.virtualAddress + contribSize));
+    }
+    else {
       memcpy(buf, sc->getContents().data(), sc->getSize());
-      chunkInfo.size = paddedSize;
-      chunkInfo.virtualAddress = sc->getRVA();
     }
     newChunks.push_back(chunkInfo);
-    contribSize += paddedSize;
-    num++;
-    buf += paddedSize;
+    contribSize += alignTo(sc->getSize(), sc->getAlignment());
+    buf += alignTo(sc->getSize(), sc->getAlignment());
   }
   secInfo.chunks = newChunks;
-  if (num != secInfo.chunks.size()) {
-    lld::outs() << num << " new section vs old " << secInfo.chunks.size()
-                << "\n";
-  }
 
-  if (secInfo.size != contribSize) {
+  if (secInfo.size !=
+      alignTo(contribSize, incrementalLinkFile->paddedAlignment)) {
     lld::outs() << "New " << secName << " section in " << fileName
                 << " is not the same size \n";
-    lld::outs() << "New: " << contribSize << "\tOld: " << secInfo.size << "\n";
+    lld::outs() << "New: "
+                << alignTo(contribSize, incrementalLinkFile->paddedAlignment)
+                << "\tOld: " << secInfo.size << "\n";
     incrementalLinkFile->rewriteAborted = true;
     return;
   }
@@ -313,7 +312,8 @@ void updateSymbolTable(ObjFile *file) {
   StringMap<bool> newSyms;
   for (const auto &sym : file->getSymbols()) {
     auto *definedSym = dyn_cast_or_null<Defined>(sym);
-    if (!definedSym || !definedSym->isLive() || !definedSym->isExternal
+    if (!definedSym || !definedSym->isLive() ||
+        !definedSym->isExternal
         // symbol not defined in this file, but the declaring file also changed
         || definedSym->getFile()->getName() != file->getName())
       continue;
@@ -407,12 +407,24 @@ void updateSymbolTable(ObjFile *file) {
 }
 
 void rewriteFile(ObjFile *file) {
-  std::map<StringRef, std::vector<SectionChunk *>> chunks;
+  std::map<StringRef, std::vector<SectionChunk *>> sections;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
-    chunks[sc->getSectionName()].push_back(sc);
+    sections[sc->getSectionName()].push_back(sc);
   }
-  for (auto &sec : chunks) {
+  std::map<StringRef, std::vector<SectionChunk *>> mergedSections;
+  for (auto s : sections) {
+    for (auto *sc : s.second) {
+      auto it =
+          incrementalLinkFile->mergedSections.find(sc->getSectionName().str());
+      if (it == incrementalLinkFile->mergedSections.end()) {
+        mergedSections[sc->getSectionName()].push_back(sc);
+      } else {
+        mergedSections[it->second].push_back(sc);
+      }
+    }
+  }
+  for (auto &sec : mergedSections) {
     rewriteSection(sec.second, file->getName().str(), sec.first.str());
   }
 }

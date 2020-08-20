@@ -1242,6 +1242,8 @@ void Writer::mergeSections() {
       continue;
     }
     to->merge(from);
+    if (config->incremental)
+      incrementalLinkFile->mergedSections[from->name.str()] = to->name.str();
   }
 }
 
@@ -1273,19 +1275,31 @@ void Writer::assignAddresses() {
         (sec->header.Characteristics & IMAGE_SCN_MEM_EXECUTE);
     uint32_t padding = isCodeSection ? config->functionPadMin : 0;
 
-    // Pad first rewritable chunk + 1
+    StringRef previousName = "";
+    uint32_t contribSize = 0;
     bool padNext = false;
     for (Chunk *c : sec->chunks) {
       if (config->incremental) {
         if (auto *sc = dyn_cast<SectionChunk>(c)) {
+          auto name = sc->file->getName();
           bool shouldPad = incrementalLinkFile->rewritableFileNames.count(
                                sc->file->getName()) &&
                            (sc->getSectionName() == ".text" ||
                             sc->getSectionName() == ".data" ||
                             sc->getSectionName() == ".xdata" ||
                             sc->getSectionName() == ".rdata");
-          if (padNext || shouldPad)
-            c->setAlignment(incrementalLinkFile->paddedAlignment);
+          if (padNext || shouldPad) {
+            uint64_t alignedSize = alignTo(sc->getSize(), sc->getAlignment());
+            if (name == previousName) {
+              contribSize += alignedSize;
+            } else {
+              virtualSize +=
+                  alignTo(contribSize, incrementalLinkFile->paddedAlignment) -
+                  contribSize;
+              contribSize = alignedSize;
+            }
+          }
+          previousName = name;
           padNext = shouldPad;
         }
       }
@@ -1297,6 +1311,11 @@ void Writer::assignAddresses() {
       if (c->hasData)
         rawSize = alignTo(virtualSize, config->fileAlign);
     }
+    if (config->incremental) {
+      virtualSize = alignTo(virtualSize, incrementalLinkFile->paddedAlignment);
+      rawSize = alignTo(rawSize, incrementalLinkFile->paddedAlignment);
+    }
+
     if (virtualSize > UINT32_MAX)
       error("section larger than 4 GiB: " + sec->name);
     sec->header.VirtualSize = virtualSize;

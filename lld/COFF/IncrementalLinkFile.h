@@ -16,7 +16,6 @@ namespace coff {
 
 class IncrementalLinkFile {
 public:
-
   struct ChunkInfo {
     uint32_t virtualAddress;
     size_t size;
@@ -60,10 +59,11 @@ public:
       std::vector<std::string> args,
       std::unordered_map<std::string, ObjectFileInfo> obj, std::string of,
       uint64_t oh,
-      std::unordered_map<std::string, OutputSectionInfo> outSections)
+      std::unordered_map<std::string, OutputSectionInfo> outSections,
+      std::unordered_map<std::string, std::string> merged)
       : arguments(std::move((args))), objFiles(std::move(obj)),
         outputFile(std::move(of)), outputHash(oh),
-        outputSections(std::move(outSections)) {}
+        outputSections(std::move(outSections)), mergedSections(merged) {}
 
   std::vector<std::string> arguments;
   DenseSet<StringRef> input;
@@ -74,18 +74,20 @@ public:
   uint64_t outputHash{};
 
   std::unordered_map<std::string, OutputSectionInfo> outputSections;
+  std::unordered_map<std::string, std::string> mergedSections;
   StringMap<std::pair<uint64_t, std::string>> globalSymbols;
 
   bool rewritePossible = false;
   bool rewriteAborted = false;
-  size_t paddedAlignment = 64;
+  size_t paddedAlignment = 128;
   uint64_t fileIndex = 0;
 
   static void writeToDisk();
   static std::string getFileName();
 
   template <class Archive> void serialize(Archive &archive) {
-    archive(arguments, outputFile, outputHash, outputSections, objFiles);
+    archive(arguments, outputFile, outputHash, outputSections, mergedSections,
+            objFiles);
   }
 };
 
@@ -136,8 +138,7 @@ template <> struct yaml::MappingTraits<NormalizedSymbolInfo> {
 
 struct NormalizedChunkInfo {
   NormalizedChunkInfo() {}
-  NormalizedChunkInfo(uint32_t a, size_t s)
-      : virtualAddress(a), size(s) {}
+  NormalizedChunkInfo(uint32_t a, size_t s) : virtualAddress(a), size(s) {}
   yaml::Hex32 virtualAddress;
   size_t size;
 };
@@ -146,6 +147,19 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedChunkInfo);
 
 template <> struct yaml::MappingTraits<NormalizedChunkInfo> {
   static void mapping(IO &io, NormalizedChunkInfo &c);
+};
+
+struct NormalizedMergeInfo {
+  NormalizedMergeInfo() {}
+  NormalizedMergeInfo(std::string f, std::string t) : from(f), to(t) {}
+  std::string from;
+  std::string to;
+};
+
+LLVM_YAML_IS_SEQUENCE_VECTOR(NormalizedMergeInfo);
+
+template <> struct yaml::MappingTraits<NormalizedMergeInfo> {
+  static void mapping(IO &io, NormalizedMergeInfo &m);
 };
 
 struct NormalizedSectionMap {
@@ -170,15 +184,17 @@ struct NormalizedFileMap {
   NormalizedFileMap(std::string n, uint64_t t, uint64_t i,
                     std::vector<std::string> files,
                     std::vector<NormalizedSectionMap> s,
+                    std::vector<NormalizedMergeInfo> merged,
                     std::vector<NormalizedSymbolInfo> syms)
       : name(std::move(n)), modTime(t), pos(i),
         dependentFiles(std::move(files)), sections(std::move(s)),
-        definedSymbols(std::move(syms)) {}
+        mergedSections(merged), definedSymbols(std::move(syms)) {}
   std::string name;
   uint64_t modTime;
   uint64_t pos;
   std::vector<std::string> dependentFiles;
   std::vector<NormalizedSectionMap> sections;
+  std::vector<NormalizedMergeInfo> mergedSections;
   std::vector<NormalizedSymbolInfo> definedSymbols;
 };
 
@@ -201,6 +217,7 @@ template <> struct MappingTraits<IncrementalLinkFile> {
     std::vector<std::string> input;
     std::string outputFile;
     uint64_t outputHash;
+    std::vector<NormalizedMergeInfo> mergedSections;
     std::vector<NormalizedOutputSectionMap> outputSections;
   };
 

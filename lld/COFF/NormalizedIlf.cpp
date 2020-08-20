@@ -20,6 +20,12 @@ void yaml::MappingTraits<NormalizedChunkInfo>::mapping(yaml::IO &io,
   io.mapRequired("size", c.size);
 }
 
+void yaml::MappingTraits<NormalizedMergeInfo>::mapping(IO &io,
+                                                       NormalizedMergeInfo &m) {
+  io.mapRequired("from", m.from);
+  io.mapRequired("to", m.to);
+}
+
 void yaml::MappingTraits<NormalizedSectionMap>::mapping(
     yaml::IO &io, NormalizedSectionMap &sec) {
   io.mapRequired("name", sec.name);
@@ -46,6 +52,7 @@ void MappingTraits<IncrementalLinkFile>::mapping(IO &io,
   io.mapRequired("output-file", keys->outputFile);
   io.mapRequired("output-hash", keys->outputHash);
   io.mapRequired("output-sections", keys->outputSections);
+  io.mapRequired("merged-sections", keys->mergedSections);
 }
 
 MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
@@ -58,6 +65,10 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
     NormalizedOutputSectionMap outSection(
         s.first, s.second.rawAddress, s.second.virtualAddress, s.second.size);
     outputSections.push_back(outSection);
+  }
+  for (const auto &m : ilf.mergedSections) {
+    NormalizedMergeInfo mergeInfo{m.first, m.second};
+    mergedSections.push_back(mergeInfo);
   }
   for (const auto &f : ilf.objFiles) {
     std::vector<NormalizedSectionMap> sections;
@@ -73,16 +84,17 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::NormalizedIlf(
     }
 
     std::vector<std::string> dependentFiles;
-    for (auto &dep : f.second.dependentFiles)
+    for (const auto &dep : f.second.dependentFiles)
       dependentFiles.push_back(dep);
 
     std::vector<NormalizedSymbolInfo> definedSymbols;
-    for (auto &s : f.second.definedSymbols) {
+    for (const auto &s : f.second.definedSymbols) {
       NormalizedSymbolInfo symInfo{s.first, s.second};
       definedSymbols.push_back(symInfo);
     }
     NormalizedFileMap fileMap(f.first, f.second.modTime, f.second.position,
-                              dependentFiles, sections, definedSymbols);
+                              dependentFiles, sections, mergedSections,
+                              definedSymbols);
     files.push_back(fileMap);
   }
 }
@@ -92,10 +104,14 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
   std::unordered_map<std::string, IncrementalLinkFile::ObjectFileInfo> objFiles;
   std::unordered_map<std::string, IncrementalLinkFile::OutputSectionInfo>
       outSections;
+  std::unordered_map<std::string, std::string> merged;
   for (auto &s : outputSections) {
     lld::coff::IncrementalLinkFile::OutputSectionInfo sec{
         s.rawAddress, s.virtualAddress, s.size};
     outSections[s.name] = sec;
+  }
+  for (auto &m : mergedSections) {
+    merged[m.from] = m.to;
   }
   for (auto &f : files) {
     lld::coff::IncrementalLinkFile::ObjectFileInfo obj;
@@ -123,5 +139,5 @@ MappingTraits<IncrementalLinkFile>::NormalizedIlf::denormalize(IO &) {
   }
 
   return IncrementalLinkFile(arguments, objFiles, outputFile, outputHash,
-                             outSections);
+                             outSections, merged);
 }

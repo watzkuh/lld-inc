@@ -41,7 +41,7 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
     return incrementalLinkFile->rewritePossible;
   }
   std::vector<std::string> mArgs;
-  for (auto arg : argsArr) {
+  for (const auto &arg : argsArr) {
     mArgs.push_back(arg);
   }
   incrementalLinkFile->outputFile = config->outputFile;
@@ -56,7 +56,8 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
         inputArchive(
             incrementalLinkFile->arguments, incrementalLinkFile->outputFile,
             incrementalLinkFile->outputHash,
-            incrementalLinkFile->outputSections, incrementalLinkFile->objFiles);
+            incrementalLinkFile->outputSections, incrementalLinkFile->objFiles,
+            incrementalLinkFile->mergedSections);
       }
       file.close();
     }
@@ -98,6 +99,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   ScopedTimer t1(sectionWriter);
   lld::outs() << "Writing ilk \n";
   for (OutputSection *sec : outputSections) {
+    if (sec->getRawSize() == 0)
+      continue;
     std::string const secName = sec->name.str();
     IncrementalLinkFile::OutputSectionInfo outputSectionInfo{
         sec->getFileOff(), sec->getRVA(), sec->getRawSize()};
@@ -110,18 +113,11 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       if (!incrementalLinkFile->rewritableFileNames.count(fileName))
         continue;
 
-      // Important! We want to save the section type as its defined in the COFF
-      // header, not in the OutputSection object as Writer.cpp merges different
-      // sections types into one output section. We do not do this when linking
-      // incrementally, so we have to remember the location based on its
-      // original section type.
-      auto &sec =
-          incrementalLinkFile->objFiles[fileName].sections[sc->header->Name];
+      auto &sec = incrementalLinkFile->objFiles[fileName].sections[secName];
 
       IncrementalLinkFile::ChunkInfo chunkInfo;
       chunkInfo.virtualAddress = sc->getRVA();
-      chunkInfo.size =
-          alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+      chunkInfo.size = sc->getSize();
 
       // Assumption: Only the .text sections has interesting relocations
       if (secName == ".text") {
@@ -138,7 +134,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
             if (definedSym->getFile()->getName() != fileName &&
                 incrementalLinkFile->input.count(
                     definedSym->getFile()->getName())) {
-              incrementalLinkFile->objFiles[definedSym->getFile()->getName().str()]
+              incrementalLinkFile
+                  ->objFiles[definedSym->getFile()->getName().str()]
                   .dependentFiles.insert(fileName);
             }
           }
@@ -151,7 +148,11 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       // and the sum of the sizes could work
       if (sec.virtualAddress == 0 || sec.virtualAddress > sc->getRVA())
         sec.virtualAddress = sc->getRVA();
-      sec.size += alignTo(sc->getSize(), incrementalLinkFile->paddedAlignment);
+      sec.size += alignTo(sc->getSize(), sc->getAlignment());
+    }
+    for (auto &f : incrementalLinkFile->rewritableFileNames) {
+      auto &sec = incrementalLinkFile->objFiles[f.str()].sections[secName];
+      sec.size = alignTo(sec.size, incrementalLinkFile->paddedAlignment);
     }
   }
   t1.stop();
@@ -182,7 +183,7 @@ void IncrementalLinkFile::writeToDisk() {
       outputArchive(
           incrementalLinkFile->arguments, incrementalLinkFile->outputFile,
           incrementalLinkFile->outputHash, incrementalLinkFile->outputSections,
-          incrementalLinkFile->objFiles);
+          incrementalLinkFile->objFiles, incrementalLinkFile->mergedSections);
     }
     file.close();
   } else {

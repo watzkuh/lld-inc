@@ -15,3 +15,12 @@ INC: Attempting incremental link
 INC: New .data section in
 INC-NEXT: New: 384
 INC: Incremental link aborted
+
+# RUN: yaml2obj %p/Inputs/extern-data.yaml > %t.dir/extern-data.obj
+# RUN: lld-link /out:%t.dir/inc.exe /opt:noref /entry:main /nodefaultlib /incremental \
+# RUN:   %t.dir/extern-data.obj %t.dir/function.obj | FileCheck --check-prefix=SHRINK %s
+
+SHRINK: Attempting incremental link
+SHRINK: New .data section in
+SHRINK: New: 128
+SHRINK: Incremental link aborted

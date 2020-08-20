@@ -15,21 +15,20 @@
 INC-NOT: Incremental link aborted
 
 # RUN: llvm-readobj --sections --section-data inc.exe > incremental-link
-# RUN: not diff incremental-link clean-link | FileCheck %s
+# RUN: not diff clean-link incremental-link | FileCheck %s
 
-CHECK:      <       0000: 4883EC28 C7442424 00000000 E86F0000  |H..(.D$$.....o..|
-CHECK-NEXT: <       0010: 00894424 20E82600 00009048 83C428C3  |..D$ .&....H..(.|
+CHECK: <       0000: 4883EC28 C7442424 00000000 E86F0000  |H..(.D$$.....o..|
+CHECK-NEXT: <       0010: 00894424 20E87600 00009048 83C428C3  |..D$ .v....H..(.|
 CHECK-NEXT: ---
-CHECK-NEXT: >       0000: 4883EC28 C7442424 00000000 E82F0000  |H..(.D$$...../..|
+CHECK-NEXT: >       0000: 4883EC28 C7442424 00000000 E87F0000  |H..(.D$$........|
 CHECK-NEXT: >       0010: 00894424 20E86600 00009048 83C428C3  |..D$ .f....H..(.|
-CHECK-NEXT: 28c28
-CHECK-NEXT: <       0040: B82A0000 00C3CCCC CCCCCCCC CCCCCCCC  |.*..............|
+CHECK-NEXT: 32,33c32,33
+CHECK-NEXT: <       0080: B8170000 00C3CCCC CCCCCCCC CCCCCCCC  |................|
+CHECK-NEXT: <       0090: B82A0000 00C3CCCC CCCCCCCC CCCCCCCC  |.*..............|
 CHECK-NEXT: ---
-CHECK-NEXT: >       0040: B8170000 00C3CCCC CCCCCCCC CCCCCCCC  |................|
-CHECK-NEXT: 32c32
-CHECK-NEXT: <       0080: B8170000 00C3                        |......|
-CHECK-NEXT: ---
-CHECK-NEXT: >       0080: B82A0000 00C3                        |.*....|
+CHECK-NEXT: >       0080: B82A0000 00C3CCCC CCCCCCCC CCCCCCCC  |.*..............|
+CHECK-NEXT: >       0090: B8170000 00C3CCCC CCCCCCCC CCCCCCCC  |................|
+
 
 # The incremental link file is not guaranteed to be identical, but size should be the same
 # RUN: wc -w inc.exe.ilk.yaml | diff - incremental-ilf-wc
