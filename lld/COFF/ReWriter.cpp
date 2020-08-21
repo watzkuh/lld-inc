@@ -8,6 +8,7 @@
 #include "Writer.h"
 #include <lld/Common/ErrorHandler.h>
 #include <lld/Common/Timer.h>
+#include "lld/Common/Threads.h"
 #include <llvm/Support/Error.h>
 #include <llvm/Support/FileOutputBuffer.h>
 #include <llvm/Support/xxhash.h>
@@ -26,6 +27,10 @@ std::vector<InputFile *> unchangedFiles;
 std::set<StringRef> dependentFileNames;
 llvm::StringMap<std::pair<uint64_t, uint64_t>> updatedSymbols;
 SmallDenseSet<StringRef> sectionNames = {".text", ".data", ".rdata", ".xdata"};
+
+// TODO: Support Arm exceptions
+struct Exception { ulittle32_t begin, end, unwind; };
+MutableArrayRef<Exception> exceptionTable;
 
 void abortIncrementalLink() {
   lld::outs() << "Incremental link aborted, starting clean link...\n";
@@ -228,6 +233,54 @@ void rewriteTextSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
 
 void rewriteSection(const std::vector<SectionChunk *> &chunks,
                     const std::string &fileName, const std::string &secName) {
+  if (secName == ".pdata") {
+    // TODO: Duplicates logic for updating ILF, checking relocs, etc...
+    lld::outs() << "Rewriting .pdata section of file " << fileName << "\n";
+    auto it = incrementalLinkFile->objFiles[fileName].sections.find(".pdata");
+    if (it == incrementalLinkFile->objFiles[fileName].sections.end()) {
+      incrementalLinkFile->rewriteAborted = true;
+      return;
+    }
+    // Remove old entries
+    auto exSec = incrementalLinkFile->outputSections[".pdata"];
+    for (auto &c : it->second.chunks) {
+      int i = (c.virtualAddress - exSec.virtualAddress) / sizeof(Exception);
+      exceptionTable[i] = {(ulittle32_t)0, (ulittle32_t)0, (ulittle32_t)0};
+    }
+    int upperBound =
+        (alignTo(exSec.size, sizeof(Exception)) / sizeof(Exception)) - 2;
+    std::vector<IncrementalLinkFile::ChunkInfo> newChunks;
+    for (auto &sc : chunks) {
+      if (!sc || sc->getSize() == 0 || isDiscardedCOMDAT(sc, fileName))
+        continue;
+      auto entry = MutableArrayRef<Exception>(
+          (Exception *)sc->getContents().begin(), sc->getSize());
+      SmallVector<ulittle32_t, 3> addresses;
+      for (auto &rel : sc->getRelocs()) {
+        auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
+        auto *definedSym = dyn_cast_or_null<Defined>(sym);
+        uint64_t s;
+        if (definedSym != nullptr)
+          s = definedSym->getRVA();
+        if (definedSym == nullptr || s == 0)
+          s = incrementalLinkFile->globalSymbols[sym->getName().str()].first;
+        addresses.push_back((ulittle32_t)s);
+      }
+      entry[0].begin = addresses[0];
+      entry[0].end += addresses[1];
+      entry[0].unwind = addresses[2];
+      for (; upperBound > 0; upperBound--) {
+        if (exceptionTable[upperBound].begin == 0) {
+          exceptionTable[upperBound] = entry[0];
+          break;
+        }
+      }
+      newChunks.push_back(
+          IncrementalLinkFile::ChunkInfo{sc->getRVA(), sc->getSize()});
+    }
+    it->second.chunks = newChunks;
+    return;
+  }
 
   // All currently supported sections for incremental links
   if (sectionNames.count(secName) == 0) {
@@ -437,6 +490,34 @@ void coff::markForReWrite(coff::ObjFile *file) {
 
 void coff::defer(InputFile *file) { unchangedFiles.push_back(file); }
 
+void readExceptionTable() {
+  auto it = incrementalLinkFile->outputSections.find(".pdata");
+  if (it == incrementalLinkFile->outputSections.end())
+    return;
+  auto &exceptionSection = incrementalLinkFile->outputSections[".pdata"];
+  uint8_t *begin = binary->getBufferStart() + exceptionSection.rawAddress;
+  uint8_t *end = begin + alignTo(exceptionSection.size, sizeof(Exception)) -
+                 sizeof(Exception);
+  exceptionTable =
+      MutableArrayRef<Exception>((Exception *)begin, (Exception *)end);
+}
+
+void sortExceptionTable() {
+  auto it = incrementalLinkFile->outputSections.find(".pdata");
+  if (it == incrementalLinkFile->outputSections.end())
+    return;
+  if (config->machine == AMD64) {
+    parallelSort(exceptionTable, [](const Exception &a, const Exception &b) {
+      // Padding bytes have to be at the end
+      if (a.begin == 0)
+        return false;
+      if (b.begin == 0)
+        return true;
+      return a.begin < b.begin;
+    });
+  }
+}
+
 void coff::rewriteResult() {
   ScopedTimer t(patchTimer);
   binary = CHECK(FileOutputBuffer::create(incrementalLinkFile->outputFile, -1,
@@ -446,7 +527,7 @@ void coff::rewriteResult() {
     rewriteQueue.front()();
     rewriteQueue.pop_front();
   }
-
+  readExceptionTable();
   for (auto &f : changedFiles)
     updateSymbolTable(f);
   for (auto &f : changedFiles)
@@ -460,6 +541,7 @@ void coff::rewriteResult() {
       }
     }
   }
+  sortExceptionTable();
 
   if (incrementalLinkFile->rewriteAborted) {
     t.stop();
