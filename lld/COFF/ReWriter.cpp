@@ -329,7 +329,8 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
       rewriteTextSection(sc, buf, (secInfo.virtualAddress + contribSize));
     }
     else {
-      memcpy(buf, sc->getContents().data(), sc->getSize());
+      if (sc->getContents().data() != nullptr)
+        memcpy(buf, sc->getContents().data(), sc->getSize());
     }
     newChunks.push_back(chunkInfo);
     contribSize += alignTo(sc->getSize(), sc->getAlignment());
