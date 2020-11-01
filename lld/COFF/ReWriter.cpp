@@ -333,8 +333,10 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
         memcpy(buf, sc->getContents().data(), sc->getSize());
     }
     newChunks.push_back(chunkInfo);
-    contribSize += alignTo(sc->getSize(), sc->getAlignment());
-    buf += alignTo(sc->getSize(), sc->getAlignment());
+    if (sc->hasData) {
+      contribSize += alignTo(sc->getSize(), sc->getAlignment());
+      buf += alignTo(sc->getSize(), sc->getAlignment());
+    }
   }
   secInfo.chunks = newChunks;
 
@@ -469,6 +471,8 @@ void rewriteFile(ObjFile *file) {
   std::map<StringRef, std::vector<SectionChunk *>> mergedSections;
   for (auto s : sections) {
     for (auto *sc : s.second) {
+      if (sc->getSize() == 0)
+        continue;
       auto it =
           incrementalLinkFile->mergedSections.find(sc->getSectionName().str());
       if (it == incrementalLinkFile->mergedSections.end()) {

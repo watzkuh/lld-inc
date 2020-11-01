@@ -99,8 +99,6 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   ScopedTimer t1(sectionWriter);
   lld::outs() << "Writing ilk \n";
   for (OutputSection *sec : outputSections) {
-    if (sec->getRawSize() == 0)
-      continue;
     std::string const secName = sec->name.str();
     IncrementalLinkFile::OutputSectionInfo outputSectionInfo{
         sec->getFileOff(), sec->getRVA(), sec->getRawSize()};
@@ -148,7 +146,8 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       // and the sum of the sizes could work
       if (sec.virtualAddress == 0 || sec.virtualAddress > sc->getRVA())
         sec.virtualAddress = sc->getRVA();
-      sec.size += alignTo(sc->getSize(), sc->getAlignment());
+      if (c->hasData)
+        sec.size += alignTo(sc->getSize(), sc->getAlignment());
     }
     for (auto &f : incrementalLinkFile->rewritableFileNames) {
       auto &sec = incrementalLinkFile->objFiles[f.str()].sections[secName];
