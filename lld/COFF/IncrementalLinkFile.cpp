@@ -98,12 +98,12 @@ bool coff::initializeIlf(ArrayRef<char const *> argsArr,
 void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
   ScopedTimer t1(sectionWriter);
   lld::outs() << "Writing ilk \n";
-  for (OutputSection *sec : outputSections) {
-    std::string const secName = sec->name.str();
+  for (OutputSection *os : outputSections) {
+    std::string const secName = os->name.str();
     IncrementalLinkFile::OutputSectionInfo outputSectionInfo{
-        sec->getFileOff(), sec->getRVA(), sec->getRawSize()};
+        os->getFileOff(), os->getRVA(), os->getRawSize()};
     incrementalLinkFile->outputSections[secName] = outputSectionInfo;
-    for (Chunk *c : sec->chunks) {
+    for (Chunk *c : os->chunks) {
       auto *sc = dyn_cast<SectionChunk>(c);
       if (!sc || !sc->getSize())
         continue;
@@ -150,8 +150,10 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
         sec.size += alignTo(sc->getSize(), sc->getAlignment());
     }
     for (auto &f : incrementalLinkFile->rewritableFileNames) {
-      auto &sec = incrementalLinkFile->objFiles[f.str()].sections[secName];
-      sec.size = alignTo(sec.size, incrementalLinkFile->paddedAlignment);
+      auto it = incrementalLinkFile->objFiles[f.str()].sections.find(secName);
+      if (it != incrementalLinkFile->objFiles[f.str()].sections.end())
+        it->second.size =
+            alignTo(it->second.size, incrementalLinkFile->paddedAlignment);
     }
   }
   t1.stop();

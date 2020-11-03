@@ -292,8 +292,11 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
               << "\n";
 
   auto secIt = incrementalLinkFile->objFiles[fileName].sections.find(secName);
-  if (secIt == incrementalLinkFile->objFiles[fileName].sections.end())
+  if (secIt == incrementalLinkFile->objFiles[fileName].sections.end()) {
+    lld::outs() << "^^^ New section introduced\n";
+    incrementalLinkFile->rewriteAborted = true;
     return;
+  }
   auto &secInfo = secIt->second;
 
   std::string outSecName(secName);
@@ -478,8 +481,15 @@ void rewriteFile(ObjFile *file) {
       }
     }
   }
+  const auto &fileName = file->getName().str();
   for (auto &sec : mergedSections) {
-    rewriteSection(sec.second, file->getName().str(), sec.first.str());
+    rewriteSection(sec.second, fileName, sec.first.str());
+  }
+  for (auto &oldSec : incrementalLinkFile->objFiles[fileName].sections) {
+    if (mergedSections.count(oldSec.first) == 0) {
+      lld::outs() << fileName <<" Section removed: " << oldSec.first << "\n";
+      incrementalLinkFile->rewriteAborted = true;
+    }
   }
 }
 

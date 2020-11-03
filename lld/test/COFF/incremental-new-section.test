@@ -1,0 +1,15 @@
+# Checks whether link is aborted when a new section is added or removed
+# RUN: rm -rf %t.dir
+# RUN: mkdir %t.dir && cd %t.dir
+# RUN: LDFLAGS="/out:out.exe /opt:noref /entry:main \
+# RUN:  /nodefaultlib /incremental"
+# RUN: yaml2obj < %p/Inputs/ret0.yaml > main.obj
+# RUN: lld-link $LDFLAGS main.obj
+
+# RUN: yaml2obj < %p/Inputs/ret0-with-data-section.yaml > main.obj
+# RUN: lld-link $LDFLAGS main.obj | FileCheck %s
+
+CHECK: Incremental link aborted
+
+# RUN: yaml2obj < %p/Inputs/ret0.yaml > main.obj
+# RUN: lld-link $LDFLAGS main.obj | FileCheck %s
