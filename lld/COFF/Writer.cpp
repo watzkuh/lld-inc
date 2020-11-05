@@ -1275,13 +1275,14 @@ void Writer::assignAddresses() {
         (sec->header.Characteristics & IMAGE_SCN_MEM_EXECUTE);
     uint32_t padding = isCodeSection ? config->functionPadMin : 0;
 
-    StringRef previousName = "";
+    StringRef previousFileName, previousSectionName = "";
     uint32_t contribSize = 0;
     bool padNext = false;
     for (Chunk *c : sec->chunks) {
       if (config->incremental) {
         if (auto *sc = dyn_cast<SectionChunk>(c)) {
-          auto name = sc->file->getName();
+          auto fileName = sc->file->getName();
+          auto sectionName = sc->getSectionName();
           bool shouldPad = incrementalLinkFile->rewritableFileNames.count(
                                sc->file->getName()) &&
                            (sc->getSectionName() == ".text" ||
@@ -1290,7 +1291,8 @@ void Writer::assignAddresses() {
                             sc->getSectionName() == ".rdata");
           if (padNext || shouldPad) {
             uint64_t alignedSize = alignTo(sc->getSize(), sc->getAlignment());
-            if (name == previousName) {
+            if (fileName == previousFileName &&
+                sectionName == previousSectionName) {
               contribSize += alignedSize;
             } else {
               virtualSize +=
@@ -1299,7 +1301,8 @@ void Writer::assignAddresses() {
               contribSize = alignedSize;
             }
           }
-          previousName = name;
+          previousFileName = fileName;
+          previousSectionName = sectionName;
           padNext = shouldPad;
         }
       }

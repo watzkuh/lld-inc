@@ -111,7 +111,10 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       if (!incrementalLinkFile->rewritableFileNames.count(fileName))
         continue;
 
-      auto &sec = incrementalLinkFile->objFiles[fileName].sections[secName];
+      // We want to save the section type as it is defined in the COFF header,
+      // not in the OutputSection object
+      auto &sec =
+          incrementalLinkFile->objFiles[fileName].sections[sc->header->Name];
 
       IncrementalLinkFile::ChunkInfo chunkInfo;
       chunkInfo.virtualAddress = sc->getRVA();
@@ -149,11 +152,11 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       if (c->hasData)
         sec.size += alignTo(sc->getSize(), sc->getAlignment());
     }
-    for (auto &f : incrementalLinkFile->rewritableFileNames) {
-      auto it = incrementalLinkFile->objFiles[f.str()].sections.find(secName);
-      if (it != incrementalLinkFile->objFiles[f.str()].sections.end())
-        it->second.size =
-            alignTo(it->second.size, incrementalLinkFile->paddedAlignment);
+  }
+  for (auto &f : incrementalLinkFile->rewritableFileNames) {
+    for (auto &s : incrementalLinkFile->objFiles[f.str()].sections) {
+      s.second.size =
+          alignTo(s.second.size, incrementalLinkFile->paddedAlignment);
     }
   }
   t1.stop();

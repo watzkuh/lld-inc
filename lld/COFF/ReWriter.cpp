@@ -26,7 +26,8 @@ std::vector<ObjFile *> changedFiles;
 std::vector<InputFile *> unchangedFiles;
 std::set<StringRef> dependentFileNames;
 llvm::StringMap<std::pair<uint64_t, uint64_t>> updatedSymbols;
-SmallDenseSet<StringRef> sectionNames = {".text", ".data", ".rdata", ".xdata"};
+SmallDenseSet<StringRef> sectionNames = {".bss", ".text", ".data", ".rdata",
+                                         ".xdata"};
 
 // TODO: Support Arm exceptions
 struct Exception { ulittle32_t begin, end, unwind; };
@@ -83,8 +84,6 @@ void assignAddresses(ObjFile *file) {
       if (sc->getSize() == 0 || isDiscardedCOMDAT(sc, file->getName()))
         continue;
       auto secName = sc->getSectionName().str();
-      if (incrementalLinkFile->mergedSections.count(secName) != 0)
-        secName = incrementalLinkFile->mergedSections[secName];
       sc->setRVA(rvas[secName]);
       rvas[secName] += alignTo(sc->getSize(), sc->getAlignment());
     }
@@ -465,29 +464,17 @@ void rewriteFile(ObjFile *file) {
   std::map<StringRef, std::vector<SectionChunk *>> sections;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
+    if (sc->getSize() == 0)
+      continue;
     sections[sc->getSectionName()].push_back(sc);
   }
-  std::map<StringRef, std::vector<SectionChunk *>> mergedSections;
-  for (auto s : sections) {
-    for (auto *sc : s.second) {
-      if (sc->getSize() == 0)
-        continue;
-      auto it =
-          incrementalLinkFile->mergedSections.find(sc->getSectionName().str());
-      if (it == incrementalLinkFile->mergedSections.end()) {
-        mergedSections[sc->getSectionName()].push_back(sc);
-      } else {
-        mergedSections[it->second].push_back(sc);
-      }
-    }
-  }
   const auto &fileName = file->getName().str();
-  for (auto &sec : mergedSections) {
+  for (auto &sec : sections) {
     rewriteSection(sec.second, fileName, sec.first.str());
   }
   for (auto &oldSec : incrementalLinkFile->objFiles[fileName].sections) {
-    if (mergedSections.count(oldSec.first) == 0) {
-      lld::outs() << fileName <<" Section removed: " << oldSec.first << "\n";
+    if (sections.count(oldSec.first) == 0) {
+      lld::outs() << fileName << " Section removed: " << oldSec.first << "\n";
       incrementalLinkFile->rewriteAborted = true;
     }
   }
