@@ -1285,7 +1285,7 @@ void Writer::assignAddresses() {
           auto sectionName = sc->getSectionName();
           bool shouldPad = incrementalLinkFile->rewritableFileNames.count(
                                sc->file->getName()) &&
-                           (sc->getSectionName() == ".text" ||
+                           (isCodeSection ||
                             sc->getSectionName() == ".data" ||
                             sc->getSectionName() == ".xdata" ||
                             sc->getSectionName() == ".rdata");

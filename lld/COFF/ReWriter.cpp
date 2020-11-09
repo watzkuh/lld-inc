@@ -128,9 +128,13 @@ void reapplyRelocations(ObjFile *file) {
 
   for (const auto &c : file->getChunks()) {
     auto *sc = dyn_cast_or_null<SectionChunk>(c);
-    if (!sc || sc->getSectionName() != ".text")
+    if (!sc)
       continue;
-    if (isDiscardedCOMDAT(sc, file->getName()))
+    const bool isCodeSection =
+        (sc->header->Characteristics & IMAGE_SCN_CNT_CODE) &&
+        (sc->header->Characteristics & IMAGE_SCN_MEM_READ) &&
+        (sc->header->Characteristics & IMAGE_SCN_MEM_EXECUTE);
+    if (isDiscardedCOMDAT(sc, file->getName()) || !isCodeSection)
       continue;
 
     for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
@@ -184,11 +188,11 @@ void reapplyRelocations(ObjFile *file) {
                       invertS + 2 * (p + typeOff), p);
       applyRelocation(*sc, off, (support::ulittle16_t)rel.Type, s, p);
     }
-    buf += c->getSize();
+    buf += sc->getSize();
   }
 }
 
-void rewriteTextSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
+void rewriteCodeSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
   memcpy(buf, sc->getContents().data(), sc->getSize());
 
   StringRef fileName = sc->file->getName();
@@ -323,10 +327,13 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
       continue;
 
     IncrementalLinkFile::ChunkInfo chunkInfo{sc->getRVA(), sc->getSize()};
-    if (secName == ".text") {
-      rewriteTextSection(sc, buf, (secInfo.virtualAddress + contribSize));
-    }
-    else {
+    const bool isCodeSection =
+        (sc->header->Characteristics & IMAGE_SCN_CNT_CODE) &&
+        (sc->header->Characteristics & IMAGE_SCN_MEM_READ) &&
+        (sc->header->Characteristics & IMAGE_SCN_MEM_EXECUTE);
+    if (isCodeSection) {
+      rewriteCodeSection(sc, buf, (secInfo.virtualAddress + contribSize));
+    } else {
       if (sc->getContents().data() != nullptr)
         memcpy(buf, sc->getContents().data(), sc->getSize());
     }
@@ -395,16 +402,18 @@ void updateSymbolTable(ObjFile *file) {
             break;
           case IMAGE_COMDAT_SELECT_LARGEST:
           case IMAGE_COMDAT_SELECT_EXACT_MATCH: {
-            auto &chunks = incrementalLinkFile->objFiles[fileInfo.second]
-                               .sections[".text"]
-                               .chunks;
+            auto &sections =
+                incrementalLinkFile->objFiles[fileInfo.second].sections;
+            IncrementalLinkFile::ChunkInfo chunkInfo;
             // TODO: Chunks are ordered by address, use binary search or
             // different data structure to avoid O(m*n) complexity
-            IncrementalLinkFile::ChunkInfo chunkInfo;
-            for (auto &c : chunks) {
-              if (c.virtualAddress == definedSym->getRVA()) {
-                chunkInfo = c;
-                break;
+            for (auto &section : sections) {
+              auto &chunks = section.second.chunks;
+              for (auto &c : chunks) {
+                if (c.virtualAddress == definedSym->getRVA()) {
+                  chunkInfo = c;
+                  break;
+                }
               }
             }
             // If the comdat section in the other file is larger, it fine to

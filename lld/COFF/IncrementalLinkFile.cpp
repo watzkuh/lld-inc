@@ -15,6 +15,7 @@
 #include <llvm/Support/xxhash.h>
 
 using namespace lld;
+using namespace llvm::COFF;
 using namespace lld::coff;
 
 static Timer sectionWriter("Writing Output Sections", Timer::root());
@@ -120,8 +121,11 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
       chunkInfo.virtualAddress = sc->getRVA();
       chunkInfo.size = sc->getSize();
 
-      // Assumption: Only the .text sections has interesting relocations
-      if (secName == ".text") {
+      const bool isCodeSection =
+          (os->header.Characteristics & IMAGE_SCN_CNT_CODE) &&
+          (os->header.Characteristics & IMAGE_SCN_MEM_READ) &&
+          (os->header.Characteristics & IMAGE_SCN_MEM_EXECUTE);
+      if (isCodeSection) {
         for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
           const coff_relocation &rel = sc->getRelocs()[j];
           auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
