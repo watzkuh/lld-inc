@@ -247,17 +247,17 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     // Remove old entries
     auto exSec = incrementalLinkFile->outputSections[".pdata"];
     for (auto &c : it->second.chunks) {
-      int i = (c.virtualAddress - exSec.virtualAddress) / sizeof(Exception);
-      exceptionTable[i] = {(ulittle32_t)0, (ulittle32_t)0, (ulittle32_t)0};
+      for (size_t i = 0; i < c.size; i += sizeof(Exception)) {
+        int pos =
+            ((c.virtualAddress + i) - exSec.virtualAddress) / sizeof(Exception);
+        exceptionTable[pos] = {(ulittle32_t)0, (ulittle32_t)0, (ulittle32_t)0};
+      }
     }
-    int upperBound =
-        (alignTo(exSec.size, sizeof(Exception)) / sizeof(Exception)) - 2;
+    int upperBound = (exSec.size / sizeof(Exception)) - 2;
     std::vector<IncrementalLinkFile::ChunkInfo> newChunks;
     for (auto &sc : chunks) {
       if (!sc || sc->getSize() == 0 || isDiscardedCOMDAT(sc, fileName))
         continue;
-      auto entry = MutableArrayRef<Exception>(
-          (Exception *)sc->getContents().begin(), sc->getSize());
       SmallVector<ulittle32_t, 3> addresses;
       for (auto &rel : sc->getRelocs()) {
         auto *sym = sc->file->getSymbol(rel.SymbolTableIndex);
@@ -269,13 +269,18 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
           s = incrementalLinkFile->globalSymbols[sym->getName().str()].first;
         addresses.push_back((ulittle32_t)s);
       }
-      entry[0].begin = addresses[0];
-      entry[0].end += addresses[1];
-      entry[0].unwind = addresses[2];
-      for (; upperBound > 0; upperBound--) {
-        if (exceptionTable[upperBound].begin == 0) {
-          exceptionTable[upperBound] = entry[0];
-          break;
+      const auto *it = sc->getContents().begin();
+      for (size_t i = 0; i < addresses.size(); it += sizeof(Exception)) {
+        auto entry =
+            MutableArrayRef<Exception>((Exception *)it, sizeof(Exception));
+        entry[0].begin = addresses[i++];
+        entry[0].end += addresses[i++];
+        entry[0].unwind += addresses[i++];
+        for (; upperBound > 0; upperBound--) {
+          if (exceptionTable[upperBound].begin == 0) {
+            exceptionTable[upperBound] = entry[0];
+            break;
+          }
         }
       }
       newChunks.push_back(

@@ -1,0 +1,164 @@
+--- !COFF
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [  ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    Alignment:       16
+    SectionData:     50894C2404B80200000059C30F1F400050C744240400000000B82A00000059C3
+  - Name:            .data
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    Alignment:       4
+    SectionData:     ''
+  - Name:            .bss
+    Characteristics: [ IMAGE_SCN_CNT_UNINITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    Alignment:       4
+    SectionData:     ''
+    SizeOfRawData:   0
+  - Name:            .xdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ ]
+    Alignment:       4
+    SectionData:     '01010100010200000101010001020000'
+  - Name:            .drectve
+    Characteristics: [ IMAGE_SCN_LNK_INFO, IMAGE_SCN_LNK_REMOVE ]
+    Alignment:       1
+    SectionData:     202F44454641554C544C49423A6C6962636D742E6C6962202F44454641554C544C49423A6F6C646E616D65732E6C6962
+  - Name:            .pdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ ]
+    Alignment:       4
+    SectionData:     000000000C00000000000000000000001000000008000000
+    Relocations:
+      - VirtualAddress:  0
+        SymbolName:      '?ipsum@@YAHH@Z'
+        Type:            IMAGE_REL_AMD64_ADDR32NB
+      - VirtualAddress:  4
+        SymbolName:      '?ipsum@@YAHH@Z'
+        Type:            IMAGE_REL_AMD64_ADDR32NB
+      - VirtualAddress:  8
+        SymbolName:      .xdata
+        Type:            IMAGE_REL_AMD64_ADDR32NB
+      - VirtualAddress:  12
+        SymbolName:      main
+        Type:            IMAGE_REL_AMD64_ADDR32NB
+      - VirtualAddress:  16
+        SymbolName:      main
+        Type:            IMAGE_REL_AMD64_ADDR32NB
+      - VirtualAddress:  20
+        SymbolName:      .xdata
+        Type:            IMAGE_REL_AMD64_ADDR32NB
+  - Name:            .llvm_addrsig
+    Characteristics: [ IMAGE_SCN_LNK_REMOVE ]
+    Alignment:       1
+    SectionData:     ''
+symbols:
+  - Name:            .text
+    Value:           0
+    SectionNumber:   1
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_STATIC
+    SectionDefinition:
+      Length:          32
+      NumberOfRelocations: 0
+      NumberOfLinenumbers: 0
+      CheckSum:        935492827
+      Number:          1
+  - Name:            .data
+    Value:           0
+    SectionNumber:   2
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_STATIC
+    SectionDefinition:
+      Length:          0
+      NumberOfRelocations: 0
+      NumberOfLinenumbers: 0
+      CheckSum:        0
+      Number:          2
+  - Name:            .bss
+    Value:           0
+    SectionNumber:   3
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_STATIC
+    SectionDefinition:
+      Length:          0
+      NumberOfRelocations: 0
+      NumberOfLinenumbers: 0
+      CheckSum:        0
+      Number:          3
+  - Name:            .xdata
+    Value:           0
+    SectionNumber:   4
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_STATIC
+    SectionDefinition:
+      Length:          16
+      NumberOfRelocations: 0
+      NumberOfLinenumbers: 0
+      CheckSum:        1407989029
+      Number:          4
+  - Name:            .drectve
+    Value:           0
+    SectionNumber:   5
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_STATIC
+    SectionDefinition:
+      Length:          48
+      NumberOfRelocations: 0
+      NumberOfLinenumbers: 0
+      CheckSum:        149686238
+      Number:          5
+  - Name:            .pdata
+    Value:           0
+    SectionNumber:   6
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_STATIC
+    SectionDefinition:
+      Length:          24
+      NumberOfRelocations: 6
+      NumberOfLinenumbers: 0
+      CheckSum:        1782129711
+      Number:          6
+  - Name:            .llvm_addrsig
+    Value:           0
+    SectionNumber:   7
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_STATIC
+    SectionDefinition:
+      Length:          0
+      NumberOfRelocations: 0
+      NumberOfLinenumbers: 0
+      CheckSum:        0
+      Number:          7
+  - Name:            '@feat.00'
+    Value:           0
+    SectionNumber:   -1
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_STATIC
+  - Name:            '?ipsum@@YAHH@Z'
+    Value:           0
+    SectionNumber:   1
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_FUNCTION
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            main
+    Value:           16
+    SectionNumber:   1
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_FUNCTION
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            .file
+    Value:           0
+    SectionNumber:   -2
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_FILE
+    File:            a.cc
+...
