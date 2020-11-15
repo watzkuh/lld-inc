@@ -26,8 +26,6 @@ std::vector<ObjFile *> changedFiles;
 std::vector<InputFile *> unchangedFiles;
 std::set<StringRef> dependentFileNames;
 llvm::StringMap<std::pair<uint64_t, uint64_t>> updatedSymbols;
-SmallDenseSet<StringRef> sectionNames = {".bss", ".text", ".data", ".rdata",
-                                         ".xdata"};
 
 // TODO: Support Arm exceptions
 struct Exception { ulittle32_t begin, end, unwind; };
@@ -289,13 +287,6 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     it->second.chunks = newChunks;
     return;
   }
-
-  // All currently supported sections for incremental links
-  if (sectionNames.count(secName) == 0) {
-    lld::outs() << "Ignored: " << secName << " section\n";
-    return;
-  }
-
   lld::outs() << "Rewriting " << secName << " section for file " << fileName
               << "\n";
 

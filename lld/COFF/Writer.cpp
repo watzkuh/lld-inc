@@ -1283,12 +1283,7 @@ void Writer::assignAddresses() {
         if (auto *sc = dyn_cast<SectionChunk>(c)) {
           auto fileName = sc->file->getName();
           auto sectionName = sc->getSectionName();
-          bool shouldPad = incrementalLinkFile->rewritableFileNames.count(
-                               sc->file->getName()) &&
-                           (isCodeSection ||
-                            sc->getSectionName() == ".data" ||
-                            sc->getSectionName() == ".xdata" ||
-                            sc->getSectionName() == ".rdata");
+          bool shouldPad = sc->getSectionName() != ".pdata";
           if (padNext || shouldPad) {
             uint64_t alignedSize = alignTo(sc->getSize(), sc->getAlignment());
             if (fileName == previousFileName &&
