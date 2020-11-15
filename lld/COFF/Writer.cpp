@@ -1285,15 +1285,15 @@ void Writer::assignAddresses() {
           auto sectionName = sc->getSectionName();
           bool shouldPad = sc->getSectionName() != ".pdata";
           if (padNext || shouldPad) {
-            uint64_t alignedSize = alignTo(sc->getSize(), sc->getAlignment());
+            contribSize = alignTo(contribSize, sc->getAlignment());
             if (fileName == previousFileName &&
                 sectionName == previousSectionName) {
-              contribSize += alignedSize;
+              contribSize += sc->getSize();
             } else {
               virtualSize +=
                   alignTo(contribSize, incrementalLinkFile->paddedAlignment) -
                   contribSize;
-              contribSize = alignedSize;
+              contribSize = sc->getSize();
             }
           }
           previousFileName = fileName;
