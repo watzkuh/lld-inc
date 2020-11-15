@@ -251,6 +251,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
         exceptionTable[pos] = {(ulittle32_t)0, (ulittle32_t)0, (ulittle32_t)0};
       }
     }
+
     int upperBound = (exSec.size / sizeof(Exception)) - 2;
     std::vector<IncrementalLinkFile::ChunkInfo> newChunks;
     for (auto &sc : chunks) {
@@ -269,8 +270,9 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
       }
       const auto *it = sc->getContents().begin();
       for (size_t i = 0; i < addresses.size(); it += sizeof(Exception)) {
-        auto entry =
+        auto slice =
             MutableArrayRef<Exception>((Exception *)it, sizeof(Exception));
+        auto entry = OwningArrayRef<Exception>(slice);
         entry[0].begin = addresses[i++];
         entry[0].end += addresses[i++];
         entry[0].unwind += addresses[i++];
