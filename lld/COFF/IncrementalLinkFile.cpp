@@ -114,8 +114,9 @@ void coff::writeIlfSections(llvm::ArrayRef<OutputSection *> outputSections) {
 
       // We want to save the section type as it is defined in the COFF header,
       // not in the OutputSection object
+      auto origSecName = StringRef(sc->header->Name).split('$').first;
       auto &sec =
-          incrementalLinkFile->objFiles[fileName].sections[sc->header->Name];
+          incrementalLinkFile->objFiles[fileName].sections[origSecName.str()];
 
       IncrementalLinkFile::ChunkInfo chunkInfo;
       chunkInfo.virtualAddress = sc->getRVA();

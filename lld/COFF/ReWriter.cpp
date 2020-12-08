@@ -81,7 +81,7 @@ void assignAddresses(ObjFile *file) {
     for (auto * sc : s.second) {
       if (sc->getSize() == 0 || isDiscardedCOMDAT(sc, file->getName()))
         continue;
-      auto secName = sc->getSectionName().str();
+      auto secName = sc->getSectionName().split('$').first.str();
       sc->setRVA(rvas[secName]);
       rvas[secName] += alignTo(sc->getSize(), sc->getAlignment());
     }
@@ -126,13 +126,7 @@ void reapplyRelocations(ObjFile *file) {
 
   for (const auto &c : file->getChunks()) {
     auto *sc = dyn_cast_or_null<SectionChunk>(c);
-    if (!sc)
-      continue;
-    const bool isCodeSection =
-        (sc->header->Characteristics & IMAGE_SCN_CNT_CODE) &&
-        (sc->header->Characteristics & IMAGE_SCN_MEM_READ) &&
-        (sc->header->Characteristics & IMAGE_SCN_MEM_EXECUTE);
-    if (isDiscardedCOMDAT(sc, file->getName()) || !isCodeSection)
+    if (!sc || isDiscardedCOMDAT(sc, file->getName()))
       continue;
 
     for (size_t j = 0, e = sc->getRelocs().size(); j < e; j++) {
@@ -234,17 +228,19 @@ void rewriteCodeSection(SectionChunk *sc, uint8_t *buf, uint32_t chunkStart) {
 
 void rewriteSection(const std::vector<SectionChunk *> &chunks,
                     const std::string &fileName, const std::string &secName) {
+  lld::outs() << "Rewriting " << secName << " section for file " << fileName
+              << "\n";
+  auto secIt = incrementalLinkFile->objFiles[fileName].sections.find(secName);
+  if (secIt == incrementalLinkFile->objFiles[fileName].sections.end()) {
+    lld::outs() << "^^^ New section introduced\n";
+    incrementalLinkFile->rewriteAborted = true;
+    return;
+  }
   if (secName == ".pdata") {
     // TODO: Duplicates logic for updating ILF, checking relocs, etc...
-    lld::outs() << "Rewriting .pdata section of file " << fileName << "\n";
-    auto it = incrementalLinkFile->objFiles[fileName].sections.find(".pdata");
-    if (it == incrementalLinkFile->objFiles[fileName].sections.end()) {
-      incrementalLinkFile->rewriteAborted = true;
-      return;
-    }
     // Remove old entries
     auto exSec = incrementalLinkFile->outputSections[".pdata"];
-    for (auto &c : it->second.chunks) {
+    for (auto &c : secIt->second.chunks) {
       for (size_t i = 0; i < c.size; i += sizeof(Exception)) {
         int pos =
             ((c.virtualAddress + i) - exSec.virtualAddress) / sizeof(Exception);
@@ -286,20 +282,9 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
       newChunks.push_back(
           IncrementalLinkFile::ChunkInfo{sc->getRVA(), sc->getSize()});
     }
-    it->second.chunks = newChunks;
+    secIt->second.chunks = newChunks;
     return;
   }
-  lld::outs() << "Rewriting " << secName << " section for file " << fileName
-              << "\n";
-
-  auto secIt = incrementalLinkFile->objFiles[fileName].sections.find(secName);
-  if (secIt == incrementalLinkFile->objFiles[fileName].sections.end()) {
-    lld::outs() << "^^^ New section introduced\n";
-    incrementalLinkFile->rewriteAborted = true;
-    return;
-  }
-  auto &secInfo = secIt->second;
-
   std::string outSecName(secName);
   for (auto &p : config->merge) {
     if (secName == p.first) {
@@ -307,15 +292,20 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
       break;
     }
   }
-
+  auto &secInfo = secIt->second;
   auto &outputSectionInfo = incrementalLinkFile->outputSections[outSecName];
   auto offset = outputSectionInfo.rawAddress + secInfo.virtualAddress -
                 outputSectionInfo.virtualAddress;
 
   uint8_t *buf = binary->getBufferStart() + offset;
 
+  const bool isCodeSection =
+      (chunks.front()->header->Characteristics & IMAGE_SCN_CNT_CODE) &&
+      (chunks.front()->header->Characteristics & IMAGE_SCN_MEM_READ) &&
+      (chunks.front()->header->Characteristics & IMAGE_SCN_MEM_EXECUTE);
+
   // delete old content
-  memset(buf, secName == ".text" ? 0xCC : 0x00, secInfo.size);
+  memset(buf, isCodeSection ? 0xCC : 0x00, secInfo.size);
 
   uint32_t contribSize = 0;
 
@@ -325,11 +315,8 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
       continue;
 
     IncrementalLinkFile::ChunkInfo chunkInfo{sc->getRVA(), sc->getSize()};
-    const bool isCodeSection =
-        (sc->header->Characteristics & IMAGE_SCN_CNT_CODE) &&
-        (sc->header->Characteristics & IMAGE_SCN_MEM_READ) &&
-        (sc->header->Characteristics & IMAGE_SCN_MEM_EXECUTE);
-    if (isCodeSection) {
+    //TODO: Just check if there are relocations
+    if (isCodeSection || secName == ".CRT") {
       rewriteCodeSection(sc, buf, (secInfo.virtualAddress + contribSize));
     } else {
       if (sc->getContents().data() != nullptr)
@@ -468,16 +455,17 @@ void updateSymbolTable(ObjFile *file) {
 }
 
 void rewriteFile(ObjFile *file) {
-  std::map<StringRef, std::vector<SectionChunk *>> sections;
+  std::map<std::string, std::vector<SectionChunk *>> sections;
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
     if (sc->getSize() == 0)
       continue;
-    sections[sc->getSectionName()].push_back(sc);
+    std::string secName = sc->getSectionName().split('$').first.str();
+    sections[secName].push_back(sc);
   }
   const auto &fileName = file->getName().str();
   for (auto &sec : sections) {
-    rewriteSection(sec.second, fileName, sec.first.str());
+    rewriteSection(sec.second, fileName, sec.first);
   }
   for (auto &oldSec : incrementalLinkFile->objFiles[fileName].sections) {
     if (sections.count(oldSec.first) == 0) {

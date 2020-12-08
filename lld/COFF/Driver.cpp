@@ -1724,21 +1724,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
   }
   config->wordsize = config->is64() ? 8 : 4;
 
-  if (config->incremental && incrementalLinkFile->rewritePossible) {
-    rewriteResult();
-
-    ScopedTimer t2(ilkOutputTimer);
-    // Write bookkeeping file for incremental links
-    incrementalLinkFile->writeToDisk();
-    t2.stop();
-
-    // Stop early so we can print the results.
-    Timer::root().stop();
-    if (config->showTiming)
-      Timer::root().print();
-    exit(0);
-  }
-
   // Handle /safeseh, x86 only, on by default, except for mingw.
   if (config->machine == I386 &&
       args.hasFlag(OPT_safeseh, OPT_safeseh_no, !config->mingw))
@@ -1785,11 +1770,30 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     parseModuleDefs(arg->getValue());
   }
 
+  // Set default image base if /base is not given.
+  if (config->imageBase == uint64_t(-1))
+    config->imageBase = getDefaultImageBase();
+
   // Handle generation of import library from a def file.
   if (!args.hasArg(OPT_INPUT, OPT_wholearchive_file)) {
     fixupExports();
     createImportLibrary(/*asLib=*/true);
     return;
+  }
+
+  if (config->incremental && incrementalLinkFile->rewritePossible) {
+    rewriteResult();
+
+    ScopedTimer t2(ilkOutputTimer);
+    // Write bookkeeping file for incremental links
+    incrementalLinkFile->writeToDisk();
+    t2.stop();
+
+    // Stop early so we can print the results.
+    Timer::root().stop();
+    if (config->showTiming)
+      Timer::root().print();
+    exit(0);
   }
 
   // Windows specific -- if no /subsystem is given, we need to infer
@@ -1867,10 +1871,6 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
       parsePDBAltPath(config->pdbAltPath);
     }
   }
-
-  // Set default image base if /base is not given.
-  if (config->imageBase == uint64_t(-1))
-    config->imageBase = getDefaultImageBase();
 
   symtab->addSynthetic(mangle("__ImageBase"), nullptr);
   if (config->machine == I386) {
