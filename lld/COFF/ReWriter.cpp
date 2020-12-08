@@ -5,10 +5,10 @@
 #include "InputFiles.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
-#include "Writer.h"
+#include "WriterUtils.h"
+#include "lld/Common/Threads.h"
 #include <lld/Common/ErrorHandler.h>
 #include <lld/Common/Timer.h>
-#include "lld/Common/Threads.h"
 #include <llvm/Support/Error.h>
 #include <llvm/Support/FileOutputBuffer.h>
 #include <llvm/Support/xxhash.h>
@@ -78,10 +78,10 @@ void assignAddresses(ObjFile *file) {
   }
 
   for (auto s : sections) {
-    for (auto * sc : s.second) {
+    for (auto *sc : s.second) {
       if (sc->getSize() == 0 || isDiscardedCOMDAT(sc, file->getName()))
         continue;
-      auto secName = sc->getSectionName().split('$').first.str();
+      auto secName = getOutputSectionName(sc->getSectionName());
       sc->setRVA(rvas[secName]);
       rvas[secName] += alignTo(sc->getSize(), sc->getAlignment());
     }
@@ -236,7 +236,9 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     incrementalLinkFile->rewriteAborted = true;
     return;
   }
-  if (secName == ".pdata") {
+  if (secName == ".CRT")
+    sortCRTSectionChunks((std::vector<Chunk *> &)chunks);
+  else if (secName == ".pdata") {
     // TODO: Duplicates logic for updating ILF, checking relocs, etc...
     // Remove old entries
     auto exSec = incrementalLinkFile->outputSections[".pdata"];
@@ -315,7 +317,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
       continue;
 
     IncrementalLinkFile::ChunkInfo chunkInfo{sc->getRVA(), sc->getSize()};
-    //TODO: Just check if there are relocations
+    // TODO: Just check if there are relocations
     if (isCodeSection || secName == ".CRT") {
       rewriteCodeSection(sc, buf, (secInfo.virtualAddress + contribSize));
     } else {
@@ -460,8 +462,8 @@ void rewriteFile(ObjFile *file) {
     auto *sc = dyn_cast<SectionChunk>(c);
     if (sc->getSize() == 0)
       continue;
-    std::string secName = sc->getSectionName().split('$').first.str();
-    sections[secName].push_back(sc);
+    auto secName = getOutputSectionName(sc->getSectionName());
+    sections[secName.str()].push_back(sc);
   }
   const auto &fileName = file->getName().str();
   for (auto &sec : sections) {

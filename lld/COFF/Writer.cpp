@@ -16,6 +16,7 @@
 #include "PDB.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
+#include "WriterUtils.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
 #include "lld/Common/Threads.h"
@@ -232,7 +233,6 @@ private:
   void writeSections();
   void writeBuildId();
   void sortExceptionTable();
-  void sortCRTSectionChunks(std::vector<Chunk *> &chunks);
   void addSyntheticIdata();
   void fixPartialSectionChars(StringRef name, uint32_t chars);
   bool fixGnuImportChunks();
@@ -651,14 +651,6 @@ void Writer::run() {
   if (auto e = buffer->commit())
     fatal("failed to write the output file: " + toString(std::move(e)));
   t2.stop();
-}
-
-static StringRef getOutputSectionName(StringRef name) {
-  StringRef s = name.split('$').first;
-
-  // Treat a later period as a separator for MinGW, for sections like
-  // ".ctors.01234".
-  return s.substr(0, s.find('.', 1));
 }
 
 // For /order.
@@ -1913,42 +1905,6 @@ void Writer::sortExceptionTable() {
     return;
   }
   lld::errs() << "warning: don't know how to handle .pdata.\n";
-}
-
-// The CRT section contains, among other things, the array of function
-// pointers that initialize every global variable that is not trivially
-// constructed. The CRT calls them one after the other prior to invoking
-// main().
-//
-// As per C++ spec, 3.6.2/2.3,
-// "Variables with ordered initialization defined within a single
-// translation unit shall be initialized in the order of their definitions
-// in the translation unit"
-//
-// It is therefore critical to sort the chunks containing the function
-// pointers in the order that they are listed in the object file (top to
-// bottom), otherwise global objects might not be initialized in the
-// correct order.
-void Writer::sortCRTSectionChunks(std::vector<Chunk *> &chunks) {
-  auto sectionChunkOrder = [](const Chunk *a, const Chunk *b) {
-    auto sa = dyn_cast<SectionChunk>(a);
-    auto sb = dyn_cast<SectionChunk>(b);
-    assert(sa && sb && "Non-section chunks in CRT section!");
-
-    StringRef sAObj = sa->file->mb.getBufferIdentifier();
-    StringRef sBObj = sb->file->mb.getBufferIdentifier();
-
-    return sAObj == sBObj && sa->getSectionNumber() < sb->getSectionNumber();
-  };
-  llvm::stable_sort(chunks, sectionChunkOrder);
-
-  if (config->verbose) {
-    for (auto &c : chunks) {
-      auto sc = dyn_cast<SectionChunk>(c);
-      log("  " + sc->file->mb.getBufferIdentifier().str() +
-          ", SectionID: " + Twine(sc->getSectionNumber()));
-    }
-  }
 }
 
 OutputSection *Writer::findSection(StringRef name) {

@@ -28,6 +28,7 @@ add_lld_library(lldCOFF
   SymbolTable.cpp
   Symbols.cpp
   Writer.cpp
+  WriterUtils.cpp
 
   LINK_COMPONENTS
   ${LLVM_TARGETS_TO_BUILD}

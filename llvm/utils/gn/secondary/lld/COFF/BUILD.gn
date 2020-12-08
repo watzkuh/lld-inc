@@ -47,5 +47,6 @@ static_library("COFF") {
     "SymbolTable.cpp",
     "Symbols.cpp",
     "Writer.cpp",
+    "WriterUtils.cpp",
   ]
 }
