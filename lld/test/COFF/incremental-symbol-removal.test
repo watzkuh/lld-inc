@@ -1,13 +1,12 @@
 # RUN: rm -rf %t.dir
-# RUN: mkdir %t.dir
-# RUN: yaml2obj %p/Inputs/extern-reorder.yaml > %t.dir/main.obj
-# RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > %t.dir/missing.obj
-# RUN: lld-link /out:%t.dir/inc.exe /nodefaultlib /opt:noref /entry:main \
-# RUN:  /incremental %t.dir/main.obj %t.dir/missing.obj
+# RUN: mkdir %t.dir && cd %t.dir
+# RUN: LDFLAGS="/out:inc.exe /opt:noref /entry:main /incremental /nodefaultlib"
+# RUN: yaml2obj %p/Inputs/extern-reorder.yaml > main.obj
+# RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > missing.obj
+# RUN: lld-link $LDFLAGS main.obj missing.obj
 #
-# RUN: yaml2obj %p/Inputs/deleted-lorem.yaml > %t.dir/missing.obj
-# RUN: lld-link /out:%t.dir/inc.exe /nodefaultlib /opt:noref /entry:main \
-# RUN:  /incremental %t.dir/main.obj %t.dir/missing.obj | FileCheck --check-prefix=ERR %s
+# RUN: yaml2obj %p/Inputs/deleted-lorem.yaml > missing.obj
+# RUN: lld-link $LDFLAGS main.obj missing.obj | FileCheck --check-prefix=ERR %s
 
 ERR: Attempting incremental link
 ERR: MISSING: ?lorem@@YAHXZ

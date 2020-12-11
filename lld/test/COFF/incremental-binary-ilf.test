@@ -1,11 +1,13 @@
 # Just like hello-incremental.test, but uses the binary format for serialization and derserialization of the ilk file
 # RUN: rm -rf %t.dir
-# RUN: mkdir %t.dir
-# RUN: yaml2obj < %p/Inputs/ret42.yaml > %t.dir/ret42.obj
-# RUN: lld-link /out:%t.dir/ret42.exe /opt:noref /entry:main /incremental /benchmark %t.dir/ret42.obj | FileCheck %s
+# RUN: mkdir %t.dir && cd %t.dir
+# RUN: LDFLAGS="/out:out.exe /benchmark /opt:noref /entry:main \
+# RUN:  /nodefaultlib /incremental"
+# RUN: yaml2obj < %p/Inputs/ret42.yaml > ret42.obj
+# RUN: lld-link $LDFLAGS ret42.obj | FileCheck %s
 
 CHECK: No incremental
 
-# RUN: lld-link /out:%t.dir/ret42.exe /opt:noref /entry:main /incremental /benchmark %t.dir/ret42.obj | FileCheck -check-prefix=2ND %s
+# RUN: lld-link $LDFLAGS ret42.obj | FileCheck -check-prefix=2ND %s
 
 2ND: Attempting incremental

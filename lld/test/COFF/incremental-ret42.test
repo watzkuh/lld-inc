@@ -1,20 +1,20 @@
 # RUN: rm -rf %t.dir
-# RUN: mkdir %t.dir
-# RUN: yaml2obj < %p/Inputs/ret42.yaml > %t.dir/ret42.obj
-# RUN: lld-link /out:%t.dir/ret42.exe /opt:noref /entry:main /incremental %t.dir/ret42.obj | FileCheck %s
+# RUN: mkdir %t.dir && cd %t.dir
+# RUN: LDFLAGS="/out:ret42.exe /opt:noref /entry:main /incremental"
+# RUN: yaml2obj < %p/Inputs/ret42.yaml > ret42.obj
+# RUN: lld-link $LDFLAGS ret42.obj | FileCheck %s
 
 CHECK: No incremental
 
-# RUN: lld-link /out:%t.dir/ret42.exe /opt:noref /entry:main /incremental %t.dir/ret42.obj | FileCheck -check-prefix=2ND %s
+# RUN: lld-link $LDFLAGS ret42.obj | FileCheck -check-prefix=2ND %s
 
 2ND: Attempting incremental
 
-# RUN: cat %t.dir/ret42.exe.ilk.yaml | FileCheck -check-prefix=ILK %s
+# RUN: cat ret42.exe.ilk.yaml | FileCheck -check-prefix=ILK %s
 
 ILK: linker-arguments:
 ILK: lld-link
-ILK: /out:/
-ILK: .dir/ret42.exe
+ILK: /out:ret42.exe
 ILK: /entry:main
 ILK: /incremental
-ILK: .dir/ret42.obj
+ILK: ret42.obj

@@ -2,15 +2,14 @@
 # result again
 # RUN: rm -rf %t.dir
 # RUN: mkdir %t.dir && cd %t.dir
+# RUN: LDFLAGS="/out:inc.exe /nodefaultlib /opt:noref /entry:main /incremental"
 # RUN: yaml2obj %p/Inputs/extern-reorder.yaml > main.obj
 # RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > reorder.obj
-# RUN: lld-link /out:inc.exe /nodefaultlib /opt:noref /entry:main \
-# RUN:  /incremental main.obj reorder.obj
+# RUN: lld-link $LDFLAGS main.obj reorder.obj
 # RUN: llvm-readobj --sections --section-data inc.exe > clean-link
 #
 # RUN: yaml2obj %p/Inputs/ipsum-lorem-reorder.yaml > reorder.obj
-# RUN: lld-link /out:inc.exe /nodefaultlib /opt:noref /entry:main \
-# RUN:  /incremental main.obj reorder.obj
+# RUN: lld-link $LDFLAGS main.obj reorder.obj
 #
 # RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > reorder.obj
 # RUN: lld-link /out:inc.exe /nodefaultlib /opt:noref /entry:main \
