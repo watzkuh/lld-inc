@@ -1689,9 +1689,10 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     case OPT_INPUT:
       if (Optional<StringRef> path = findFile(arg->getValue())) {
         enqueuePath(*path, isWholeArchive(*path), inLib);
-        if (config->incremental)
+        if (config->incremental) {
           incrementalLinkFile->input.insert(*path);
           incrementalLinkFile->rewritableFileNames.insert(*path);
+        }
       }
       break;
     default:
