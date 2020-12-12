@@ -37,11 +37,12 @@ void abortIncrementalLink() {
   symtab->clear();
   incrementalLinkFile->rewriteAborted = true;
   incrementalLinkFile->outputHash = 0;
-  driver->clearVisitedFiles();
+  driver->clear();
   std::vector<char *> args;
   for (auto &a : incrementalLinkFile->arguments)
     args.push_back(&a[0]);
   driver->link(ArrayRef<char *>(args));
+  exit(0);
 }
 
 bool isDiscardedCOMDAT(SectionChunk *sc, StringRef fileName) {
@@ -141,7 +142,7 @@ void reapplyRelocations(ObjFile *file) {
       if (it->second.first == it->second.second &&
           it->second.first == INT64_MAX) {
         lld::outs() << "MISSING: " << sym->getName() << "\n";
-        incrementalLinkFile->rewriteAborted = true;
+        abortIncrementalLink();
       }
       lld::outs() << sym->getName()
                   << " changed address; old: " << it->second.first
@@ -233,7 +234,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
   auto secIt = incrementalLinkFile->objFiles[fileName].sections.find(secName);
   if (secIt == incrementalLinkFile->objFiles[fileName].sections.end()) {
     lld::outs() << "^^^ New section introduced\n";
-    incrementalLinkFile->rewriteAborted = true;
+    abortIncrementalLink();
     return;
   }
   if (secName == ".CRT")
@@ -339,7 +340,7 @@ void rewriteSection(const std::vector<SectionChunk *> &chunks,
     lld::outs() << "New: "
                 << alignTo(contribSize, incrementalLinkFile->paddedAlignment)
                 << "\tOld: " << secInfo.size << "\n";
-    incrementalLinkFile->rewriteAborted = true;
+    abortIncrementalLink();
     return;
   }
 }
@@ -458,6 +459,9 @@ void updateSymbolTable(ObjFile *file) {
 
 void rewriteFile(ObjFile *file) {
   std::map<std::string, std::vector<SectionChunk *>> sections;
+  if (file->isResourceObjFile()) {
+    abortIncrementalLink();
+  }
   for (Chunk *c : file->getChunks()) {
     auto *sc = dyn_cast<SectionChunk>(c);
     if (sc->getSize() == 0)
@@ -472,7 +476,7 @@ void rewriteFile(ObjFile *file) {
   for (auto &oldSec : incrementalLinkFile->objFiles[fileName].sections) {
     if (sections.count(oldSec.first) == 0) {
       lld::outs() << fileName << " Section removed: " << oldSec.first << "\n";
-      incrementalLinkFile->rewriteAborted = true;
+      abortIncrementalLink();
     }
   }
 }

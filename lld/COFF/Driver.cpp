@@ -195,6 +195,18 @@ void LinkerDriver::addBuffer(std::unique_ptr<MemoryBuffer> mb,
   switch (identify_magic(mbref.getBuffer())) {
   case file_magic::windows_resource:
     resources.push_back(mbref);
+    if (config->incremental) {
+      uint64_t modTime = 0;
+      llvm::sys::fs::file_status stat;
+      if (!llvm::sys::fs::status(filename, stat)) {
+        if (llvm::sys::fs::exists(stat))
+          modTime = stat.getLastModificationTime().time_since_epoch().count();
+      }
+      auto &f = incrementalLinkFile->objFiles[filename.str()];
+      if (incrementalLinkFile->rewritePossible && f.modTime != modTime)
+        incrementalLinkFile->rewriteAborted = true;
+      f.modTime = modTime;
+    }
     break;
   case file_magic::archive:
     if (wholeArchive) {
@@ -511,8 +523,9 @@ Optional<StringRef> LinkerDriver::findLib(StringRef filename) {
   return path;
 }
 
-void LinkerDriver::clearVisitedFiles() {
+void LinkerDriver::clear() {
   visitedFiles.clear();
+  resources.clear();
 }
 
 // Parses LIB environment which contains a list of search paths.

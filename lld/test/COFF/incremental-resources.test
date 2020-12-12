@@ -1,0 +1,16 @@
+# RUN: rm -rf %t.dir
+# RUN: mkdir %t.dir && cd %t.dir
+# RUN: LDFLAGS="/out:out.exe /opt:noref /entry:main /nodefaultlib /incremental"
+# RUN: yaml2obj %p/Inputs/ret42.yaml > mixed.obj
+# RUN: lld-link $LDFLAGS mixed.obj
+# RUN: rm mixed.obj
+# RUN: yaml2obj %p/mixed-resource-obj.yaml > mixed.obj
+# RUN: lld-link $LDFLAGS mixed.obj | FileCheck %s
+
+# CHECK: Incremental link aborted
+
+# RUN: yaml2obj %p/Inputs/ret42.yaml > ret42.obj
+# RUN: cp %p/Inputs/id.res id.res
+# RUN: lld-link $LDFLAGS ret42.obj id.res
+# RUN: cp %p/Inputs/id.res id.res
+# RUN: lld-link $LDFLAGS ret42.obj id.res | FileCheck %s
