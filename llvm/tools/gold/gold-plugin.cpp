@@ -16,14 +16,17 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/Config/config.h" // plugin-api.h requires HAVE_STDINT_H
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/LTO/Caching.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Error.h"
+#include "llvm/Remarks/HotnessThresholdParser.h"
 #include "llvm/Support/CachePruning.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -198,7 +201,7 @@ namespace options {
   // Sample profile file path
   static std::string sample_profile;
   // New pass manager
-  static bool new_pass_manager = false;
+  static bool new_pass_manager = LLVM_ENABLE_NEW_PASS_MANAGER;
   // Debug new pass manager
   static bool debug_pass_manager = false;
   // Directory to store the .dwo files.
@@ -212,6 +215,7 @@ namespace options {
   static std::string RemarksFilename;
   static std::string RemarksPasses;
   static bool RemarksWithHotness = false;
+  static Optional<uint64_t> RemarksHotnessThreshold = 0;
   static std::string RemarksFormat;
 
   // Context sensitive PGO options.
@@ -224,15 +228,14 @@ namespace options {
       return;
     llvm::StringRef opt = opt_;
 
-    if (opt.startswith("mcpu=")) {
-      mcpu = std::string(opt.substr(strlen("mcpu=")));
-    } else if (opt.startswith("extra-library-path=")) {
-      extra_library_path =
-          std::string(opt.substr(strlen("extra_library_path=")));
-    } else if (opt.startswith("mtriple=")) {
-      triple = std::string(opt.substr(strlen("mtriple=")));
-    } else if (opt.startswith("obj-path=")) {
-      obj_path = std::string(opt.substr(strlen("obj-path=")));
+    if (opt.consume_front("mcpu=")) {
+      mcpu = std::string(opt);
+    } else if (opt.consume_front("extra-library-path=")) {
+      extra_library_path = std::string(opt);
+    } else if (opt.consume_front("mtriple=")) {
+      triple = std::string(opt);
+    } else if (opt.consume_front("obj-path=")) {
+      obj_path = std::string(opt);
     } else if (opt == "emit-llvm") {
       TheOutputType = OT_BC_ONLY;
     } else if (opt == "save-temps") {
@@ -245,67 +248,70 @@ namespace options {
       thinlto = true;
     } else if (opt == "thinlto-index-only") {
       thinlto_index_only = true;
-    } else if (opt.startswith("thinlto-index-only=")) {
+    } else if (opt.consume_front("thinlto-index-only=")) {
       thinlto_index_only = true;
-      thinlto_linked_objects_file =
-          std::string(opt.substr(strlen("thinlto-index-only=")));
+      thinlto_linked_objects_file = std::string(opt);
     } else if (opt == "thinlto-emit-imports-files") {
       thinlto_emit_imports_files = true;
-    } else if (opt.startswith("thinlto-prefix-replace=")) {
-      thinlto_prefix_replace =
-          std::string(opt.substr(strlen("thinlto-prefix-replace=")));
+    } else if (opt.consume_front("thinlto-prefix-replace=")) {
+      thinlto_prefix_replace = std::string(opt);
       if (thinlto_prefix_replace.find(';') == std::string::npos)
         message(LDPL_FATAL, "thinlto-prefix-replace expects 'old;new' format");
-    } else if (opt.startswith("thinlto-object-suffix-replace=")) {
-      thinlto_object_suffix_replace =
-          std::string(opt.substr(strlen("thinlto-object-suffix-replace=")));
+    } else if (opt.consume_front("thinlto-object-suffix-replace=")) {
+      thinlto_object_suffix_replace = std::string(opt);
       if (thinlto_object_suffix_replace.find(';') == std::string::npos)
         message(LDPL_FATAL,
                 "thinlto-object-suffix-replace expects 'old;new' format");
-    } else if (opt.startswith("cache-dir=")) {
-      cache_dir = std::string(opt.substr(strlen("cache-dir=")));
-    } else if (opt.startswith("cache-policy=")) {
-      cache_policy = std::string(opt.substr(strlen("cache-policy=")));
+    } else if (opt.consume_front("cache-dir=")) {
+      cache_dir = std::string(opt);
+    } else if (opt.consume_front("cache-policy=")) {
+      cache_policy = std::string(opt);
     } else if (opt.size() == 2 && opt[0] == 'O') {
       if (opt[1] < '0' || opt[1] > '3')
         message(LDPL_FATAL, "Optimization level must be between 0 and 3");
       OptLevel = opt[1] - '0';
-    } else if (opt.startswith("jobs=")) {
-      StringRef Num(opt_ + 5);
-      if (!get_threadpool_strategy(Num))
-        message(LDPL_FATAL, "Invalid parallelism level: %s", Num.data());
-      Parallelism = Num.str();
-    } else if (opt.startswith("lto-partitions=")) {
-      if (opt.substr(strlen("lto-partitions="))
-              .getAsInteger(10, ParallelCodeGenParallelismLevel))
+    } else if (opt.consume_front("jobs=")) {
+      Parallelism = std::string(opt);
+      if (!get_threadpool_strategy(opt))
+        message(LDPL_FATAL, "Invalid parallelism level: %s",
+                Parallelism.c_str());
+    } else if (opt.consume_front("lto-partitions=")) {
+      if (opt.getAsInteger(10, ParallelCodeGenParallelismLevel))
         message(LDPL_FATAL, "Invalid codegen partition level: %s", opt_ + 5);
     } else if (opt == "disable-verify") {
       DisableVerify = true;
-    } else if (opt.startswith("sample-profile=")) {
-      sample_profile = std::string(opt.substr(strlen("sample-profile=")));
+    } else if (opt.consume_front("sample-profile=")) {
+      sample_profile = std::string(opt);
     } else if (opt == "cs-profile-generate") {
       cs_pgo_gen = true;
-    } else if (opt.startswith("cs-profile-path=")) {
-      cs_profile_path = std::string(opt.substr(strlen("cs-profile-path=")));
+    } else if (opt.consume_front("cs-profile-path=")) {
+      cs_profile_path = std::string(opt);
     } else if (opt == "new-pass-manager") {
       new_pass_manager = true;
+    } else if (opt == "legacy-pass-manager") {
+      new_pass_manager = false;
     } else if (opt == "debug-pass-manager") {
       debug_pass_manager = true;
     } else if (opt == "whole-program-visibility") {
       whole_program_visibility = true;
-    } else if (opt.startswith("dwo_dir=")) {
-      dwo_dir = std::string(opt.substr(strlen("dwo_dir=")));
-    } else if (opt.startswith("opt-remarks-filename=")) {
-      RemarksFilename =
-          std::string(opt.substr(strlen("opt-remarks-filename=")));
-    } else if (opt.startswith("opt-remarks-passes=")) {
-      RemarksPasses = std::string(opt.substr(strlen("opt-remarks-passes=")));
+    } else if (opt.consume_front("dwo_dir=")) {
+      dwo_dir = std::string(opt);
+    } else if (opt.consume_front("opt-remarks-filename=")) {
+      RemarksFilename = std::string(opt);
+    } else if (opt.consume_front("opt-remarks-passes=")) {
+      RemarksPasses = std::string(opt);
     } else if (opt == "opt-remarks-with-hotness") {
       RemarksWithHotness = true;
-    } else if (opt.startswith("opt-remarks-format=")) {
-      RemarksFormat = std::string(opt.substr(strlen("opt-remarks-format=")));
-    } else if (opt.startswith("stats-file=")) {
-      stats_file = std::string(opt.substr(strlen("stats-file=")));
+    } else if (opt.consume_front("opt-remarks-hotness-threshold=")) {
+      auto ResultOrErr = remarks::parseHotnessThresholdOption(opt);
+      if (!ResultOrErr)
+        message(LDPL_FATAL, "Invalid remarks hotness threshold: %s", opt);
+      else
+        RemarksHotnessThreshold = *ResultOrErr;
+    } else if (opt.consume_front("opt-remarks-format=")) {
+      RemarksFormat = std::string(opt);
+    } else if (opt.consume_front("stats-file=")) {
+      stats_file = std::string(opt);
     } else {
       // Save this option to pass to the code generator.
       // ParseCommandLineOptions() expects argv[0] to be program name. Lazily
@@ -685,7 +691,7 @@ static const void *getSymbolsAndView(claimed_file &F) {
 static void getThinLTOOldAndNewSuffix(std::string &OldSuffix,
                                       std::string &NewSuffix) {
   assert(options::thinlto_object_suffix_replace.empty() ||
-         options::thinlto_object_suffix_replace.find(";") != StringRef::npos);
+         options::thinlto_object_suffix_replace.find(';') != StringRef::npos);
   StringRef SuffixReplace = options::thinlto_object_suffix_replace;
   auto Split = SuffixReplace.split(';');
   OldSuffix = std::string(Split.first);
@@ -841,7 +847,7 @@ static CodeGenOpt::Level getCGOptLevel() {
 static void getThinLTOOldAndNewPrefix(std::string &OldPrefix,
                                       std::string &NewPrefix) {
   StringRef PrefixReplace = options::thinlto_prefix_replace;
-  assert(PrefixReplace.empty() || PrefixReplace.find(";") != StringRef::npos);
+  assert(PrefixReplace.empty() || PrefixReplace.find(';') != StringRef::npos);
   auto Split = PrefixReplace.split(';');
   OldPrefix = std::string(Split.first);
   NewPrefix = std::string(Split.second);
@@ -857,7 +863,7 @@ static std::unique_ptr<LTO> createLTO(IndexWriteCallback OnIndexWrite,
   ThinBackend Backend;
 
   Conf.CPU = options::mcpu;
-  Conf.Options = codegen::InitTargetOptionsFromCodeGenFlags();
+  Conf.Options = codegen::InitTargetOptionsFromCodeGenFlags(Triple());
 
   // Disable the new X86 relax relocations since gold might not support them.
   // FIXME: Check the gold version or add a new option to enable them.
@@ -877,6 +883,7 @@ static std::unique_ptr<LTO> createLTO(IndexWriteCallback OnIndexWrite,
   Conf.OptLevel = options::OptLevel;
   Conf.PTO.LoopVectorization = options::OptLevel > 1;
   Conf.PTO.SLPVectorization = options::OptLevel > 1;
+  Conf.AlwaysEmitRegularLTOObj = !options::obj_path.empty();
 
   if (options::thinlto_index_only) {
     std::string OldPrefix, NewPrefix;
@@ -935,6 +942,7 @@ static std::unique_ptr<LTO> createLTO(IndexWriteCallback OnIndexWrite,
   Conf.RemarksFilename = options::RemarksFilename;
   Conf.RemarksPasses = options::RemarksPasses;
   Conf.RemarksWithHotness = options::RemarksWithHotness;
+  Conf.RemarksHotnessThreshold = options::RemarksHotnessThreshold;
   Conf.RemarksFormat = options::RemarksFormat;
 
   // Use new pass manager if set in driver
@@ -1054,7 +1062,7 @@ static std::vector<std::pair<SmallString<128>, bool>> runLTO() {
   if (!options::obj_path.empty())
     Filename = options::obj_path;
   else if (options::TheOutputType == options::OT_SAVE_TEMPS)
-    Filename = output_name + ".o";
+    Filename = output_name + ".lto.o";
   else if (options::TheOutputType == options::OT_ASM_ONLY)
     Filename = output_name;
   bool SaveTemps = !Filename.empty();

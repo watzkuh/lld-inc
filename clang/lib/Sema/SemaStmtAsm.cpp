@@ -296,6 +296,14 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
         checkExprMemoryConstraintCompat(*this, OutputExpr, Info, false))
       return StmtError();
 
+    // Disallow _ExtInt, since the backends tend to have difficulties with
+    // non-normal sizes.
+    if (OutputExpr->getType()->isExtIntType())
+      return StmtError(
+          Diag(OutputExpr->getBeginLoc(), diag::err_asm_invalid_type)
+          << OutputExpr->getType() << 0 /*Input*/
+          << OutputExpr->getSourceRange());
+
     OutputConstraintInfos.push_back(Info);
 
     // If this is dependent, just continue.
@@ -420,6 +428,12 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
       }
     }
 
+    if (InputExpr->getType()->isExtIntType())
+      return StmtError(
+          Diag(InputExpr->getBeginLoc(), diag::err_asm_invalid_type)
+          << InputExpr->getType() << 1 /*Output*/
+          << InputExpr->getSourceRange());
+
     InputConstraintInfos.push_back(Info);
 
     const Type *Ty = Exprs[i]->getType().getTypePtr();
@@ -434,9 +448,9 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
     unsigned Size = Context.getTypeSize(Ty);
     if (!Context.getTargetInfo().validateInputSize(FeatureMap,
                                                    Literal->getString(), Size))
-      return StmtResult(
-          targetDiag(InputExpr->getBeginLoc(), diag::err_asm_invalid_input_size)
-          << Info.getConstraintStr());
+      return targetDiag(InputExpr->getBeginLoc(),
+                        diag::err_asm_invalid_input_size)
+             << Info.getConstraintStr();
   }
 
   // Check that the clobbers are valid.
@@ -892,6 +906,15 @@ StmtResult Sema::ActOnMSAsmStmt(SourceLocation AsmLoc, SourceLocation LBraceLoc,
                                 SourceLocation EndLoc) {
   bool IsSimple = (NumOutputs != 0 || NumInputs != 0);
   setFunctionHasBranchProtectedScope();
+
+  for (uint64_t I = 0; I < NumOutputs + NumInputs; ++I) {
+    if (Exprs[I]->getType()->isExtIntType())
+      return StmtError(
+          Diag(Exprs[I]->getBeginLoc(), diag::err_asm_invalid_type)
+          << Exprs[I]->getType() << (I < NumOutputs)
+          << Exprs[I]->getSourceRange());
+  }
+
   MSAsmStmt *NS =
     new (Context) MSAsmStmt(Context, AsmLoc, LBraceLoc, IsSimple,
                             /*IsVolatile*/ true, AsmToks, NumOutputs, NumInputs,

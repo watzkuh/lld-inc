@@ -446,7 +446,7 @@ Register FastISel::materializeConstant(const Value *V, MVT VT) {
             getRegForValue(ConstantInt::get(V->getContext(), SIntVal));
         if (IntegerReg)
           Reg = fastEmit_r(IntVT.getSimpleVT(), VT, ISD::SINT_TO_FP, IntegerReg,
-                           /*Kill=*/false);
+                           /*Op0IsKill=*/false);
       }
     }
   } else if (const auto *Op = dyn_cast<Operator>(V)) {
@@ -619,7 +619,7 @@ bool FastISel::selectBinaryOp(const User *I, unsigned ISDOpcode) {
   // we don't have anything that canonicalizes operand order.
   if (const auto *CI = dyn_cast<ConstantInt>(I->getOperand(0)))
     if (isa<Instruction>(I) && cast<Instruction>(I)->isCommutative()) {
-      unsigned Op1 = getRegForValue(I->getOperand(1));
+      Register Op1 = getRegForValue(I->getOperand(1));
       if (!Op1)
         return false;
       bool Op1IsKill = hasTrivialKill(I->getOperand(1));
@@ -690,6 +690,12 @@ bool FastISel::selectGetElementPtr(const User *I) {
   Register N = getRegForValue(I->getOperand(0));
   if (!N) // Unhandled operand. Halt "fast" selection and bail.
     return false;
+
+  // FIXME: The code below does not handle vector GEPs. Halt "fast" selection
+  // and bail.
+  if (isa<VectorType>(I->getType()))
+    return false;
+
   bool NIsKill = hasTrivialKill(I->getOperand(0));
 
   // Keep a running tab of the total offset to coalesce multiple N = N + Offset
@@ -1214,7 +1220,16 @@ bool FastISel::lowerCallTo(CallLoweringInfo &CLI) {
       // the various CC lowering callbacks.
       Flags.setByVal();
     }
-    if (Arg.IsByVal || Arg.IsInAlloca) {
+    if (Arg.IsPreallocated) {
+      Flags.setPreallocated();
+      // Set the byval flag for CCAssignFn callbacks that don't know about
+      // preallocated. This way we can know how many bytes we should've
+      // allocated and how many bytes a callee cleanup function will pop.  If we
+      // port preallocated to more targets, we'll have to add custom
+      // preallocated handling in the various CC lowering callbacks.
+      Flags.setByVal();
+    }
+    if (Arg.IsByVal || Arg.IsInAlloca || Arg.IsPreallocated) {
       PointerType *Ty = cast<PointerType>(Arg.Ty);
       Type *ElementTy = Ty->getElementType();
       unsigned FrameSize =
@@ -1282,7 +1297,7 @@ bool FastISel::lowerCall(const CallInst *CI) {
   // Check if target-independent constraints permit a tail call here.
   // Target-dependent constraints are checked within fastLowerCall.
   bool IsTailCall = CI->isTailCall();
-  if (IsTailCall && !isInTailCallPosition(CI, TM))
+  if (IsTailCall && !isInTailCallPosition(*CI, TM))
     IsTailCall = false;
   if (IsTailCall && MF->getFunction()
                             .getFnAttribute("disable-tail-calls")
@@ -1290,7 +1305,7 @@ bool FastISel::lowerCall(const CallInst *CI) {
     IsTailCall = false;
 
   CallLoweringInfo CLI;
-  CLI.setCallee(RetTy, FuncTy, CI->getCalledValue(), std::move(Args), *CI)
+  CLI.setCallee(RetTy, FuncTy, CI->getCalledOperand(), std::move(Args), *CI)
       .setTailCall(IsTailCall);
 
   return lowerCallTo(CLI);
@@ -1300,7 +1315,7 @@ bool FastISel::selectCall(const User *I) {
   const CallInst *Call = cast<CallInst>(I);
 
   // Handle simple inline asms.
-  if (const InlineAsm *IA = dyn_cast<InlineAsm>(Call->getCalledValue())) {
+  if (const InlineAsm *IA = dyn_cast<InlineAsm>(Call->getCalledOperand())) {
     // If the inline asm has side effects, then make sure that no local value
     // lives across by flushing the local value map.
     if (IA->hasSideEffects())
@@ -1315,12 +1330,19 @@ bool FastISel::selectCall(const User *I) {
       ExtraInfo |= InlineAsm::Extra_HasSideEffects;
     if (IA->isAlignStack())
       ExtraInfo |= InlineAsm::Extra_IsAlignStack;
+    if (Call->isConvergent())
+      ExtraInfo |= InlineAsm::Extra_IsConvergent;
     ExtraInfo |= IA->getDialect() * InlineAsm::Extra_AsmDialect;
 
-    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-            TII.get(TargetOpcode::INLINEASM))
-        .addExternalSymbol(IA->getAsmString().c_str())
-        .addImm(ExtraInfo);
+    MachineInstrBuilder MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
+                                      TII.get(TargetOpcode::INLINEASM));
+    MIB.addExternalSymbol(IA->getAsmString().c_str());
+    MIB.addImm(ExtraInfo);
+
+    const MDNode *SrcLoc = Call->getMetadata("srcloc");
+    if (SrcLoc)
+      MIB.addMetadata(SrcLoc);
+
     return true;
   }
 
@@ -1493,6 +1515,20 @@ bool FastISel::selectIntrinsicCall(const IntrinsicInst *II) {
     return selectXRayCustomEvent(II);
   case Intrinsic::xray_typedevent:
     return selectXRayTypedEvent(II);
+
+  case Intrinsic::memcpy:
+  case Intrinsic::memcpy_element_unordered_atomic:
+  case Intrinsic::memcpy_inline:
+  case Intrinsic::memmove:
+  case Intrinsic::memmove_element_unordered_atomic:
+  case Intrinsic::memset:
+  case Intrinsic::memset_element_unordered_atomic:
+    // Flush the local value map just like we do for regular calls,
+    // to avoid excessive spills and reloads.
+    // These intrinsics mostly turn into library calls at O0; and
+    // even memcpy_inline should be treated like one for this purpose.
+    flushLocalValueMap();
+    break;
   }
 
   return fastLowerIntrinsicCall(II);
@@ -1767,13 +1803,13 @@ bool FastISel::selectFNeg(const User *I, const Value *In) {
     return false;
 
   Register IntResultReg = fastEmit_ri_(
-      IntVT.getSimpleVT(), ISD::XOR, IntReg, /*IsKill=*/true,
+      IntVT.getSimpleVT(), ISD::XOR, IntReg, /*Op0IsKill=*/true,
       UINT64_C(1) << (VT.getSizeInBits() - 1), IntVT.getSimpleVT());
   if (!IntResultReg)
     return false;
 
   ResultReg = fastEmit_r(IntVT.getSimpleVT(), VT.getSimpleVT(), ISD::BITCAST,
-                         IntResultReg, /*IsKill=*/true);
+                         IntResultReg, /*Op0IsKill=*/true);
   if (!ResultReg)
     return false;
 
@@ -1829,13 +1865,8 @@ bool FastISel::selectOperator(const User *I, unsigned Opcode) {
     return selectBinaryOp(I, ISD::FADD);
   case Instruction::Sub:
     return selectBinaryOp(I, ISD::SUB);
-  case Instruction::FSub: {
-    // FNeg is currently represented in LLVM IR as a special case of FSub.
-    Value *X;
-    if (match(I, m_FNeg(m_Value(X))))
-       return selectFNeg(I, X);
+  case Instruction::FSub:
     return selectBinaryOp(I, ISD::FSUB);
-  }
   case Instruction::Mul:
     return selectBinaryOp(I, ISD::MUL);
   case Instruction::FMul:
@@ -1932,7 +1963,7 @@ bool FastISel::selectOperator(const User *I, unsigned Opcode) {
       return selectCast(I, ISD::ZERO_EXTEND);
     if (DstVT.bitsLT(SrcVT))
       return selectCast(I, ISD::TRUNCATE);
-    unsigned Reg = getRegForValue(I->getOperand(0));
+    Register Reg = getRegForValue(I->getOperand(0));
     if (!Reg)
       return false;
     updateValueMap(I, Reg);
@@ -2062,7 +2093,7 @@ Register FastISel::constrainOperandRegClass(const MCInstrDesc &II, Register Op,
     if (!MRI.constrainRegClass(Op, RegClass)) {
       // If it's not legal to COPY between the register classes, something
       // has gone very wrong before we got here.
-      unsigned NewOp = createResultReg(RegClass);
+      Register NewOp = createResultReg(RegClass);
       BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
               TII.get(TargetOpcode::COPY), NewOp).addReg(Op);
       return NewOp;

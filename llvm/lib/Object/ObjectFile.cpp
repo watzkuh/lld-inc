@@ -54,12 +54,15 @@ bool SectionRef::containsSymbol(SymbolRef S) const {
   return *this == **SymSec;
 }
 
-uint64_t ObjectFile::getSymbolValue(DataRefImpl Ref) const {
-  uint32_t Flags = getSymbolFlags(Ref);
-  if (Flags & SymbolRef::SF_Undefined)
-    return 0;
-  if (Flags & SymbolRef::SF_Common)
-    return getCommonSymbolSize(Ref);
+Expected<uint64_t> ObjectFile::getSymbolValue(DataRefImpl Ref) const {
+  if (Expected<uint32_t> FlagsOrErr = getSymbolFlags(Ref)) {
+    if (*FlagsOrErr & SymbolRef::SF_Undefined)
+      return 0;
+    if (*FlagsOrErr & SymbolRef::SF_Common)
+      return getCommonSymbolSize(Ref);
+  } else
+    // TODO: Test this error.
+    return FlagsOrErr.takeError();
   return getSymbolValueImpl(Ref);
 }
 
@@ -129,7 +132,8 @@ Triple ObjectFile::makeTriple() const {
 }
 
 Expected<std::unique_ptr<ObjectFile>>
-ObjectFile::createObjectFile(MemoryBufferRef Object, file_magic Type) {
+ObjectFile::createObjectFile(MemoryBufferRef Object, file_magic Type,
+                             bool InitContent) {
   StringRef Data = Object.getBuffer();
   if (Type == file_magic::unknown)
     Type = identify_magic(Data);
@@ -151,7 +155,7 @@ ObjectFile::createObjectFile(MemoryBufferRef Object, file_magic Type) {
   case file_magic::elf_executable:
   case file_magic::elf_shared_object:
   case file_magic::elf_core:
-    return createELFObjectFile(Object);
+    return createELFObjectFile(Object, InitContent);
   case file_magic::macho_object:
   case file_magic::macho_executable:
   case file_magic::macho_fixed_virtual_memory_shared_lib:

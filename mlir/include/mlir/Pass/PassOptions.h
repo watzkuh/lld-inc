@@ -16,7 +16,6 @@
 
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Support/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -97,8 +96,8 @@ public:
   /// The specific parser to use depending on llvm::cl parser used. This is only
   /// necessary because we need to provide additional methods for certain data
   /// type parsers.
-  /// TODO(riverriddle) We should upstream the methods in GenericOptionParser to
-  /// avoid the need to do this.
+  /// TODO: We should upstream the methods in GenericOptionParser to avoid the
+  /// need to do this.
   template <typename DataType>
   using OptionParser =
       std::conditional_t<std::is_base_of<llvm::cl::generic_parser_base,
@@ -194,7 +193,7 @@ public:
       auto printElementFn = [&](const DataType &value) {
         printValue(os, this->getParser(), value);
       };
-      interleave(*this, os, printElementFn, ",");
+      llvm::interleave(*this, os, printElementFn, ",");
     }
 
     /// Copy the value from the given option into this one.

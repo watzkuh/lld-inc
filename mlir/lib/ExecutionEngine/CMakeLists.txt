@@ -1,49 +1,114 @@
+# Exclude these from libMLIR.so because the JIT infrastructure
+# is a big dependency which most don't need.
+
 set(LLVM_OPTIONAL_SOURCES
+  AsyncRuntime.cpp
   CRunnerUtils.cpp
+  SparseUtils.cpp
   ExecutionEngine.cpp
   RunnerUtils.cpp
   OptUtils.cpp
+  JitRunner.cpp
   )
 
-llvm_map_components_to_libnames(outlibs "nativecodegen" "IPO")
 add_mlir_library(MLIRExecutionEngine
   ExecutionEngine.cpp
   OptUtils.cpp
 
+  EXCLUDE_FROM_LIBMLIR
+
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/ExecutionEngine
-  )
-target_link_libraries(MLIRExecutionEngine
-  PUBLIC
+
+  DEPENDS
+  intrinsics_gen
+
+  LINK_COMPONENTS
+  Core
+  Coroutines
+  ExecutionEngine
+  Object
+  OrcJIT
+  JITLink
+  Analysis
+  AggressiveInstCombine
+  InstCombine
+  MC
+  ScalarOpts
+  Target
+  Vectorize
+  TransformUtils
+  nativecodegen
+  IPO
+
+  LINK_LIBS PUBLIC
   MLIRLLVMIR
   MLIRTargetLLVMIR
-  LLVMBitReader
-  LLVMBitWriter
-  LLVMExecutionEngine
-  LLVMObject
-  LLVMOrcJIT
-  LLVMJITLink
-  LLVMSupport
-  LLVMAnalysis
-  LLVMAggressiveInstCombine
-  LLVMInstCombine
-  LLVMMC
-  LLVMScalarOpts
-  LLVMTarget
-  LLVMVectorize
-  LLVMTransformUtils
+  )
 
-  ${outlibs})
+get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+add_mlir_library(MLIRJitRunner
+  JitRunner.cpp
 
-add_llvm_library(mlir_c_runner_utils SHARED CRunnerUtils.cpp)
+  EXCLUDE_FROM_LIBMLIR
+
+  DEPENDS
+  intrinsics_gen
+
+  LINK_COMPONENTS
+  Core
+  OrcJIT
+  JITLink
+
+  LINK_LIBS PUBLIC
+  ${dialect_libs}
+  MLIRExecutionEngine
+  MLIRIR
+  MLIRParser
+  MLIRStandard
+  MLIRTargetLLVMIR
+  MLIRTransforms
+  MLIRStandardToLLVM
+  MLIRSupport
+)
+
+add_mlir_library(mlir_c_runner_utils
+  SHARED
+  CRunnerUtils.cpp
+  SparseUtils.cpp
+
+  EXCLUDE_FROM_LIBMLIR
+  )
 set_property(TARGET mlir_c_runner_utils PROPERTY CXX_STANDARD 11)
-add_llvm_library(mlir_c_runner_utils_static CRunnerUtils.cpp)
+
+add_mlir_library(mlir_c_runner_utils_static
+  CRunnerUtils.cpp
+  SparseUtils.cpp
+
+  EXCLUDE_FROM_LIBMLIR
+  )
 set_property(TARGET mlir_c_runner_utils_static PROPERTY CXX_STANDARD 11)
 target_compile_definitions(mlir_c_runner_utils PRIVATE mlir_c_runner_utils_EXPORTS)
 
-add_llvm_library(mlir_runner_utils SHARED RunnerUtils.cpp)
-target_link_libraries(mlir_runner_utils
-  PUBLIC
+add_mlir_library(mlir_runner_utils
+  SHARED
+  RunnerUtils.cpp
+
+  EXCLUDE_FROM_LIBMLIR
+
+  LINK_LIBS PUBLIC
   mlir_c_runner_utils_static
 )
 target_compile_definitions(mlir_runner_utils PRIVATE mlir_runner_utils_EXPORTS)
+
+add_mlir_library(mlir_async_runtime
+  SHARED
+  AsyncRuntime.cpp
+
+  EXCLUDE_FROM_LIBMLIR
+
+  LINK_LIBS PUBLIC
+  mlir_c_runner_utils_static
+  ${LLVM_PTHREAD_LIB}
+)
+target_compile_definitions(mlir_async_runtime PRIVATE mlir_async_runtime_EXPORTS)

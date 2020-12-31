@@ -1,4 +1,4 @@
-//===-Config.h - LLVM Link Time Optimizer Configuration -------------------===//
+//===-Config.h - LLVM Link Time Optimizer Configuration ---------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -15,6 +15,7 @@
 #define LLVM_LTO_CONFIG_H
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/LLVMContext.h"
@@ -41,6 +42,7 @@ struct Config {
   std::string CPU;
   TargetOptions Options;
   std::vector<std::string> MAttrs;
+  std::vector<std::string> PassPlugins;
   Optional<Reloc::Model> RelocModel = Reloc::PIC_;
   Optional<CodeModel::Model> CodeModel = None;
   CodeGenOpt::Level CGOptLevel = CodeGenOpt::Default;
@@ -49,7 +51,7 @@ struct Config {
   bool DisableVerify = false;
 
   /// Use the new pass manager
-  bool UseNewPM = false;
+  bool UseNewPM = LLVM_ENABLE_NEW_PASS_MANAGER;
 
   /// Flag to indicate that the optimizer should not assume builtins are present
   /// on the target.
@@ -64,6 +66,11 @@ struct Config {
   /// Asserts whether we can assume whole program visibility during the LTO
   /// link.
   bool HasWholeProgramVisibility = false;
+
+  /// Always emit a Regular LTO object even when it is empty because no Regular
+  /// LTO modules were linked. This option is useful for some build system which
+  /// want to know a priori all possible output files.
+  bool AlwaysEmitRegularLTOObj = false;
 
   /// If this field is set, the set of passes run in the middle-end optimizer
   /// will be the one specified by the string. Only works with the new pass
@@ -115,6 +122,21 @@ struct Config {
   /// Whether to emit optimization remarks with hotness informations.
   bool RemarksWithHotness = false;
 
+  /// The minimum hotness value a diagnostic needs in order to be included in
+  /// optimization diagnostics.
+  ///
+  /// The threshold is an Optional value, which maps to one of the 3 states:
+  /// 1. 0            => threshold disabled. All emarks will be printed.
+  /// 2. positive int => manual threshold by user. Remarks with hotness exceed
+  ///                    threshold will be printed.
+  /// 3. None         => 'auto' threshold by user. The actual value is not
+  ///                    available at command line, but will be synced with
+  ///                    hotness threhold from profile summary during
+  ///                    compilation.
+  ///
+  /// If threshold option is not specified, it is disabled by default.
+  llvm::Optional<uint64_t> RemarksHotnessThreshold = 0;
+
   /// The format used for serializing remarks (default: YAML).
   std::string RemarksFormat = "";
 
@@ -123,6 +145,9 @@ struct Config {
 
   /// Statistics output file path.
   std::string StatsFile;
+
+  /// Specific thinLTO modules to compile.
+  std::vector<std::string> ThinLTOModulesToCompile;
 
   /// Time trace enabled.
   bool TimeTraceEnabled = false;

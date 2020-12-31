@@ -92,6 +92,19 @@ D
 **DSE**
     Dead Store Elimination
 
+E
+-
+
+**ento**
+    This namespace houses the
+    `Clang Static Analyzer <https://clang.llvm.org/docs/ClangStaticAnalyzer.html>`_.
+    It is an abbreviaton of `entomology <https://en.wikipedia.org/wiki/Entomology>`_.
+
+      *"Entomology is the scientific study of insects."*
+
+    In the past, this namespace had not only the name `GR` (aka. Graph Reachability)
+    but also `entoSA`.
+
 F
 -
 
@@ -254,7 +267,7 @@ S
 **Safe Point**
     In garbage collection, it is necessary to identify `stack roots`_ so that
     reachability analysis may proceed. It may be infeasible to provide this
-    information for every instruction, so instead the information may is
+    information for every instruction, so instead the information is
     calculated only at designated safe points. With a copying collector,
     `derived pointers`_ must not be retained across safe points and `object
     pointers`_ must be reloaded from stack roots.

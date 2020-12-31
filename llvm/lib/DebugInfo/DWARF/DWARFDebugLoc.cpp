@@ -106,11 +106,16 @@ DWARFLocationInterpreter::Interpret(const DWARFLocationEntry &E) {
   }
 }
 
-static void dumpExpression(raw_ostream &OS, ArrayRef<uint8_t> Data,
-                           bool IsLittleEndian, unsigned AddressSize,
-                           const MCRegisterInfo *MRI, DWARFUnit *U) {
+static void dumpExpression(raw_ostream &OS, DIDumpOptions DumpOpts,
+                           ArrayRef<uint8_t> Data, bool IsLittleEndian,
+                           unsigned AddressSize, const MCRegisterInfo *MRI,
+                           DWARFUnit *U) {
   DWARFDataExtractor Extractor(Data, IsLittleEndian, AddressSize);
-  DWARFExpression(Extractor, AddressSize).print(OS, MRI, U);
+  // Note. We do not pass any format to DWARFExpression, even if the
+  // corresponding unit is known. For now, there is only one operation,
+  // DW_OP_call_ref, which depends on the format; it is rarely used, and
+  // is unexpected in location tables.
+  DWARFExpression(Extractor, AddressSize).print(OS, DumpOpts, MRI, U);
 }
 
 bool DWARFLocationTable::dumpLocationList(uint64_t *Offset, raw_ostream &OS,
@@ -150,15 +155,13 @@ bool DWARFLocationTable::dumpLocationList(uint64_t *Offset, raw_ostream &OS,
         E.Kind != dwarf::DW_LLE_base_addressx &&
         E.Kind != dwarf::DW_LLE_end_of_list) {
       OS << ": ";
-      dumpExpression(OS, E.Loc, Data.isLittleEndian(), Data.getAddressSize(),
-                     MRI, U);
+      dumpExpression(OS, DumpOpts, E.Loc, Data.isLittleEndian(),
+                     Data.getAddressSize(), MRI, U);
     }
     return true;
   });
   if (E) {
-    OS << "\n";
-    OS.indent(Indent);
-    OS << "error: " << toString(std::move(E));
+    DumpOpts.RecoverableErrorHandler(std::move(E));
     return false;
   }
   return true;

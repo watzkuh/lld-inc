@@ -10,13 +10,11 @@
 #include "flang/Optimizer/Dialect/FIRAttr.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/IR/StandardTypes.h"
 
 using namespace fir;
 
 fir::FIROpsDialect::FIROpsDialect(mlir::MLIRContext *ctx)
-    : mlir::Dialect("fir", ctx) {
+    : mlir::Dialect("fir", ctx, mlir::TypeID::get<FIROpsDialect>()) {
   addTypes<BoxType, BoxCharType, BoxProcType, CharacterType, CplxType, DimsType,
            FieldType, HeapType, IntType, LenType, LogicalType, PointerType,
            RealType, RecordType, ReferenceType, SequenceType, TypeDescType>();

@@ -14,19 +14,18 @@
 
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/Module.h"
 #include "llvm/MC/MCTargetOptionsCommandFlags.h"
-#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Host.h"
-#include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <string>
+#include <vector>
 
 namespace llvm {
+
+class Module;
 
 namespace codegen {
 
@@ -76,6 +75,8 @@ bool getDontPlaceZerosInBSS();
 
 bool getEnableGuaranteedTailCallOpt();
 
+bool getEnableAIXExtendedAltivecABI();
+
 bool getDisableTailCalls();
 
 bool getStackSymbolOrdering();
@@ -96,7 +97,15 @@ Optional<bool> getExplicitDataSections();
 bool getFunctionSections();
 Optional<bool> getExplicitFunctionSections();
 
+bool getIgnoreXCOFFVisibility();
+
+bool getXCOFFTracebackTable();
+
 std::string getBBSections();
+
+std::string getStackProtectorGuard();
+unsigned getStackProtectorGuardOffset();
+std::string getStackProtectorGuardReg();
 
 unsigned getTLSSize();
 
@@ -104,7 +113,7 @@ bool getEmulatedTLS();
 
 bool getUniqueSectionNames();
 
-bool getUniqueBBSectionNames();
+bool getUniqueBasicBlockSectionNames();
 
 llvm::EABI getEABIVersion();
 
@@ -116,9 +125,17 @@ bool getEnableAddrsig();
 
 bool getEmitCallSiteInfo();
 
+bool getEnableMachineFunctionSplitter();
+
 bool getEnableDebugEntryValues();
 
+bool getPseudoProbeForProfiling();
+
+bool getValueTrackingVariableLocations();
+
 bool getForceDwarfFrameSection();
+
+bool getXRayOmitFunctionIndex();
 
 /// Create this object with static storage to register codegen-related command
 /// line options.
@@ -128,9 +145,16 @@ struct RegisterCodeGenFlags {
 
 llvm::BasicBlockSection getBBSectionsMode(llvm::TargetOptions &Options);
 
-// Common utility function tightly tied to the options listed here. Initializes
-// a TargetOptions object with CodeGen flags and returns it.
-TargetOptions InitTargetOptionsFromCodeGenFlags();
+llvm::StackProtectorGuards
+getStackProtectorGuardMode(llvm::TargetOptions &Options);
+
+/// Common utility function tightly tied to the options listed here. Initializes
+/// a TargetOptions object with CodeGen flags and returns it.
+/// \p TheTriple is used to determine the default value for options if
+///    options are not explicitly specified. If those triple dependant options
+///    value do not have effect for your component, a default Triple() could be
+///    passed in.
+TargetOptions InitTargetOptionsFromCodeGenFlags(const llvm::Triple &TheTriple);
 
 std::string getCPUStr();
 

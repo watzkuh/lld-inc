@@ -25,14 +25,18 @@ if (NOT (HAVE_STRERROR OR HAVE_STRERROR_R OR HAVE_DECL_STRERROR_S))
 endif()
 
 configure_file(config.h.cmake config.h)
+# include_directories is used here instead of target_include_directories
+# because add_flang_library creates multiple objects (STATIC/SHARED, OBJECT)
+# with different names
+include_directories(AFTER ${CMAKE_CURRENT_BINARY_DIR})
 
-add_library(FortranRuntime
+add_flang_library(FortranRuntime
   ISO_Fortran_binding.cpp
   allocatable.cpp
   buffer.cpp
   character.cpp
   connection.cpp
-  derived-type.cpp
+  derived.cpp
   descriptor.cpp
   edit-input.cpp
   edit-output.cpp
@@ -46,6 +50,7 @@ add_library(FortranRuntime
   io-stmt.cpp
   main.cpp
   memory.cpp
+  stat.cpp
   stop.cpp
   terminator.cpp
   tools.cpp
@@ -53,12 +58,7 @@ add_library(FortranRuntime
   type-code.cpp
   unit.cpp
   unit-map.cpp
-)
 
-target_include_directories(FortranRuntime
-  PRIVATE ${CMAKE_CURRENT_BINARY_DIR}
-)
-
-target_link_libraries(FortranRuntime
+  LINK_LIBS
   FortranDecimal
 )

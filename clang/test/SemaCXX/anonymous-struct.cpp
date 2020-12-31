@@ -131,5 +131,55 @@ namespace ValidButUnsupported {
   typedef struct { // expected-error {{unsupported}}
     enum X {};
     int arr[&f<X> ? 1 : 2];
+#if __cplusplus < 201103L
+    // expected-warning@-2 {{folded to constant}}
+#endif
   } C; // expected-note {{by this typedef}}
+}
+
+namespace ImplicitDecls {
+struct Destructor {
+  ~Destructor() {}
+};
+typedef struct {
+} Empty;
+
+typedef struct {
+  Destructor x;
+} A;
+
+typedef struct {
+  Empty E;
+} B;
+
+typedef struct {
+  const Empty E;
+} C;
+} // namespace ImplicitDecls
+
+struct {
+  static int x; // expected-error {{static data member 'x' not allowed in anonymous struct}}
+} static_member_1;
+
+class {
+  struct A {
+    static int x; // expected-error {{static data member 'x' not allowed in anonymous class}}
+  } x;
+} static_member_2;
+
+union {
+  struct A {
+    struct B {
+      static int x; // expected-error {{static data member 'x' not allowed in anonymous union}}
+    } x;
+  } x;
+} static_member_3;
+
+// Ensure we don't compute the linkage of a member function just because it
+// happens to have the same name as a builtin.
+namespace BuiltinName {
+  // Note that this is not an error: we didn't trigger linkage computation in this example.
+  typedef struct { // expected-warning {{anonymous non-C-compatible type}}
+    void memcpy(); // expected-note {{due to this member}}
+  } A; // expected-note {{given name 'A' for linkage purposes by this typedef}}
 }

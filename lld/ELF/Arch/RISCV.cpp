@@ -15,9 +15,8 @@ using namespace llvm;
 using namespace llvm::object;
 using namespace llvm::support::endian;
 using namespace llvm::ELF;
-
-namespace lld {
-namespace elf {
+using namespace lld;
+using namespace lld::elf;
 
 namespace {
 
@@ -105,8 +104,8 @@ RISCV::RISCV() {
 
 static uint32_t getEFlags(InputFile *f) {
   if (config->is64)
-    return cast<ObjFile<ELF64LE>>(f)->getObj().getHeader()->e_flags;
-  return cast<ObjFile<ELF32LE>>(f)->getObj().getHeader()->e_flags;
+    return cast<ObjFile<ELF64LE>>(f)->getObj().getHeader().e_flags;
+  return cast<ObjFile<ELF32LE>>(f)->getObj().getHeader().e_flags;
 }
 
 uint32_t RISCV::calcEFlags() const {
@@ -236,7 +235,7 @@ RelExpr RISCV::getRelExpr(const RelType type, const Symbol &s,
   case R_RISCV_TPREL_HI20:
   case R_RISCV_TPREL_LO12_I:
   case R_RISCV_TPREL_LO12_S:
-    return R_TLS;
+    return R_TPREL;
   case R_RISCV_RELAX:
   case R_RISCV_TPREL_ADD:
     return R_NONE;
@@ -446,10 +445,7 @@ void RISCV::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   }
 }
 
-TargetInfo *getRISCVTargetInfo() {
+TargetInfo *elf::getRISCVTargetInfo() {
   static RISCV target;
   return &target;
 }
-
-} // namespace elf
-} // namespace lld

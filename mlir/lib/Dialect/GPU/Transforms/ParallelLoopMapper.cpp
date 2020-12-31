@@ -15,18 +15,17 @@
 
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/GPU/Passes.h"
-#include "mlir/Dialect/LoopOps/LoopOps.h"
+#include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
 using namespace mlir::gpu;
-using namespace mlir::loop;
-
-#include "mlir/Dialect/GPU/ParallelLoopMapperEnums.cpp.inc"
-namespace mlir {
+using namespace mlir::scf;
 
 #include "mlir/Dialect/GPU/ParallelLoopMapperAttr.cpp.inc"
+#include "mlir/Dialect/GPU/ParallelLoopMapperEnums.cpp.inc"
+namespace mlir {
 namespace gpu {
 
 StringRef getMappingAttrName() { return "mapping"; }
@@ -41,7 +40,7 @@ ParallelLoopDimMapping getParallelLoopDimMappingAttr(Processor processor,
       AffineMapAttr::get(map), AffineMapAttr::get(bound), context);
 }
 
-LogicalResult setMappingAttr(loop::ParallelOp ploopOp,
+LogicalResult setMappingAttr(scf::ParallelOp ploopOp,
                              ArrayRef<ParallelLoopDimMapping> mapping) {
   // Verify that each processor is mapped to only once.
   llvm::DenseSet<gpu::Processor> specifiedMappings;
@@ -53,8 +52,8 @@ LogicalResult setMappingAttr(loop::ParallelOp ploopOp,
           "invalid mapping multiple loops to same processor");
   }
   ArrayRef<Attribute> mappingAsAttrs(mapping.data(), mapping.size());
-  ploopOp.setAttr(getMappingAttrName(),
-                  ArrayAttr::get(mappingAsAttrs, ploopOp.getContext()));
+  ploopOp->setAttr(getMappingAttrName(),
+                   ArrayAttr::get(mappingAsAttrs, ploopOp.getContext()));
   return success();
 }
 } // namespace gpu
@@ -80,7 +79,7 @@ MappingLevel &operator++(MappingLevel &mappingLevel) {
 /// Computed the hardware id to use for a given mapping level. Will
 /// assign x,y and z hardware ids for the first 3 dimensions and use
 /// sequential after.
-/// TODO(ravishankarm/herhut) : Make this use x for the inner-most loop that is
+/// TODO: Make this use x for the inner-most loop that is
 /// distributed to map to x, the next innermost to y and the next innermost to
 /// z.
 static gpu::Processor getHardwareIdForMapping(MappingLevel level,
@@ -123,8 +122,8 @@ static gpu::Processor getHardwareIdForMapping(MappingLevel level,
 static void mapParallelOp(ParallelOp parallelOp,
                           MappingLevel mappingLevel = MapGrid) {
   // Do not try to add a mapping to already mapped loops or nested loops.
-  if (parallelOp.getAttr(getMappingAttrName()) ||
-      ((mappingLevel == MapGrid) && parallelOp.getParentOfType<ParallelOp>()))
+  if (parallelOp->getAttr(getMappingAttrName()) ||
+      ((mappingLevel == MapGrid) && parallelOp->getParentOfType<ParallelOp>()))
     return;
 
   MLIRContext *ctx = parallelOp.getContext();
@@ -146,6 +145,6 @@ static void mapParallelOp(ParallelOp parallelOp,
   }
 }
 
-void mlir::greedilyMapParallelLoopsToGPU(Region &region) {
+void mlir::greedilyMapParallelSCFToGPU(Region &region) {
   region.walk([](ParallelOp parallelOp) { mapParallelOp(parallelOp); });
 }

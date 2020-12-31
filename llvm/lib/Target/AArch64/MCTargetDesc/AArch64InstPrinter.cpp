@@ -283,7 +283,8 @@ void AArch64InstPrinter::printInst(const MCInst *MI, uint64_t Address,
   }
 
   if (Opcode == AArch64::SPACE) {
-    O << '\t' << MAI.getCommentString() << " SPACE";
+    O << '\t' << MAI.getCommentString() << " SPACE "
+      << MI->getOperand(1).getImm();
     printAnnotation(O, Annot);
     return;
   }
@@ -848,7 +849,7 @@ bool AArch64InstPrinter::printSysAlias(const MCInst *MI,
     }
     break;
     }
-  } else if (CnVal == 8) {
+  } else if (CnVal == 8 || CnVal == 9) {
     // TLBI aliases
     const AArch64TLBI::TLBI *TLBI = AArch64TLBI::lookupTLBIByEncoding(Encoding);
     if (!TLBI || !TLBI->haveFeatures(STI.getFeatureBits()))
@@ -1376,7 +1377,8 @@ void AArch64InstPrinter::printAlignedLabel(const MCInst *MI, uint64_t Address,
   }
 }
 
-void AArch64InstPrinter::printAdrpLabel(const MCInst *MI, unsigned OpNum,
+void AArch64InstPrinter::printAdrpLabel(const MCInst *MI, uint64_t Address,
+                                        unsigned OpNum,
                                         const MCSubtargetInfo &STI,
                                         raw_ostream &O) {
   const MCOperand &Op = MI->getOperand(OpNum);
@@ -1384,7 +1386,11 @@ void AArch64InstPrinter::printAdrpLabel(const MCInst *MI, unsigned OpNum,
   // If the label has already been resolved to an immediate offset (say, when
   // we're running the disassembler), just print the immediate.
   if (Op.isImm()) {
-    O << "#" << formatImm(Op.getImm() * (1 << 12));
+    const int64_t Offset = Op.getImm() * 4096;
+    if (PrintBranchImmAsAddress)
+      O << formatHex((Address & -4096) + Offset);
+    else
+      O << "#" << Offset;
     return;
   }
 
@@ -1409,6 +1415,22 @@ void AArch64InstPrinter::printBarrierOption(const MCInst *MI, unsigned OpNo,
     auto DB = AArch64DB::lookupDBByEncoding(Val);
     Name = DB ? DB->Name : "";
   }
+  if (!Name.empty())
+    O << Name;
+  else
+    O << "#" << Val;
+}
+
+void AArch64InstPrinter::printBarriernXSOption(const MCInst *MI, unsigned OpNo,
+                                               const MCSubtargetInfo &STI,
+                                               raw_ostream &O) {
+  unsigned Val = MI->getOperand(OpNo).getImm();
+  assert(MI->getOpcode() == AArch64::DSBnXS);
+
+  StringRef Name;
+  auto DB = AArch64DBnXS::lookupDBnXSByEncoding(Val);
+  Name = DB ? DB->Name : "";
+
   if (!Name.empty())
     O << Name;
   else
@@ -1621,4 +1643,11 @@ void AArch64InstPrinter::printGPR64as32(const MCInst *MI, unsigned OpNum,
                                         raw_ostream &O) {
   unsigned Reg = MI->getOperand(OpNum).getReg();
   O << getRegisterName(getWRegFromXReg(Reg));
+}
+
+void AArch64InstPrinter::printGPR64x8(const MCInst *MI, unsigned OpNum,
+                                      const MCSubtargetInfo &STI,
+                                      raw_ostream &O) {
+  unsigned Reg = MI->getOperand(OpNum).getReg();
+  O << getRegisterName(MRI.getSubReg(Reg, AArch64::x8sub_0));
 }

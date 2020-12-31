@@ -19,6 +19,7 @@
 #include "NVPTXTargetObjectFile.h"
 #include "NVPTXUtilities.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/Analysis.h"
@@ -31,7 +32,6 @@
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -1243,7 +1243,7 @@ NVPTXTargetLowering::LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const {
 std::string NVPTXTargetLowering::getPrototype(
     const DataLayout &DL, Type *retTy, const ArgListTy &Args,
     const SmallVectorImpl<ISD::OutputArg> &Outs, MaybeAlign retAlignment,
-    ImmutableCallSite CS) const {
+    const CallBase &CB) const {
   auto PtrVT = getPointerTy(DL);
 
   bool isABI = (STI.getSmVersion() >= 20);
@@ -1300,7 +1300,7 @@ std::string NVPTXTargetLowering::getPrototype(
     if (!Outs[OIdx].Flags.isByVal()) {
       if (Ty->isAggregateType() || Ty->isVectorTy() || Ty->isIntegerTy(128)) {
         unsigned align = 0;
-        const CallInst *CallI = cast<CallInst>(CS.getInstruction());
+        const CallInst *CallI = cast<CallInst>(&CB);
         // +1 because index 0 is reserved for return type alignment
         if (!getAlign(*CallI, i + 1, align))
           align = DL.getABITypeAlignment(Ty);
@@ -1353,30 +1353,28 @@ std::string NVPTXTargetLowering::getPrototype(
 }
 
 Align NVPTXTargetLowering::getArgumentAlignment(SDValue Callee,
-                                                ImmutableCallSite CS, Type *Ty,
+                                                const CallBase *CB, Type *Ty,
                                                 unsigned Idx,
                                                 const DataLayout &DL) const {
-  if (!CS) {
+  if (!CB) {
     // CallSite is zero, fallback to ABI type alignment
     return DL.getABITypeAlign(Ty);
   }
 
   unsigned Alignment = 0;
-  const Value *DirectCallee = CS.getCalledFunction();
+  const Function *DirectCallee = CB->getCalledFunction();
 
   if (!DirectCallee) {
     // We don't have a direct function symbol, but that may be because of
     // constant cast instructions in the call.
-    const Instruction *CalleeI = CS.getInstruction();
-    assert(CalleeI && "Call target is not a function or derived value?");
 
     // With bitcast'd call targets, the instruction will be the call
-    if (isa<CallInst>(CalleeI)) {
+    if (const auto *CI = dyn_cast<CallInst>(CB)) {
       // Check if we have call alignment metadata
-      if (getAlign(*cast<CallInst>(CalleeI), Idx, Alignment))
+      if (getAlign(*CI, Idx, Alignment))
         return Align(Alignment);
 
-      const Value *CalleeV = cast<CallInst>(CalleeI)->getCalledValue();
+      const Value *CalleeV = CI->getCalledOperand();
       // Ignore any bitcast instructions
       while (isa<ConstantExpr>(CalleeV)) {
         const ConstantExpr *CE = cast<ConstantExpr>(CalleeV);
@@ -1388,15 +1386,15 @@ Align NVPTXTargetLowering::getArgumentAlignment(SDValue Callee,
 
       // We have now looked past all of the bitcasts.  Do we finally have a
       // Function?
-      if (isa<Function>(CalleeV))
-        DirectCallee = CalleeV;
+      if (const auto *CalleeF = dyn_cast<Function>(CalleeV))
+        DirectCallee = CalleeF;
     }
   }
 
   // Check for function alignment information if we found that the
   // ultimate target is a Function
   if (DirectCallee)
-    if (getAlign(*cast<Function>(DirectCallee), Idx, Alignment))
+    if (getAlign(*DirectCallee, Idx, Alignment))
       return Align(Alignment);
 
   // Call is indirect or alignment information is not available, fall back to
@@ -1416,7 +1414,7 @@ SDValue NVPTXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   bool &isTailCall = CLI.IsTailCall;
   ArgListTy &Args = CLI.getArgs();
   Type *RetTy = CLI.RetTy;
-  ImmutableCallSite CS = CLI.CS;
+  const CallBase *CB = CLI.CB;
   const DataLayout &DL = DAG.getDataLayout();
 
   bool isABI = (STI.getSmVersion() >= 20);
@@ -1449,7 +1447,7 @@ SDValue NVPTXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
       SmallVector<EVT, 16> VTs;
       SmallVector<uint64_t, 16> Offsets;
       ComputePTXValueVTs(*this, DL, Ty, VTs, &Offsets);
-      Align ArgAlign = getArgumentAlignment(Callee, CS, Ty, paramCount + 1, DL);
+      Align ArgAlign = getArgumentAlignment(Callee, CB, Ty, paramCount + 1, DL);
       unsigned AllocSize = DL.getTypeAllocSize(Ty);
       SDVTList DeclareParamVTs = DAG.getVTList(MVT::Other, MVT::Glue);
       bool NeedAlign; // Does argument declaration specify alignment?
@@ -1641,7 +1639,7 @@ SDValue NVPTXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
                           DeclareRetOps);
       InFlag = Chain.getValue(1);
     } else {
-      retAlignment = getArgumentAlignment(Callee, CS, RetTy, 0, DL);
+      retAlignment = getArgumentAlignment(Callee, CB, RetTy, 0, DL);
       assert(retAlignment && "retAlignment is guaranteed to be set");
       SDVTList DeclareRetVTs = DAG.getVTList(MVT::Other, MVT::Glue);
       SDValue DeclareRetOps[] = {
@@ -1657,7 +1655,7 @@ SDValue NVPTXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   // Both indirect calls and libcalls have nullptr Func. In order to distinguish
   // between them we must rely on the call site value which is valid for
   // indirect calls but is always null for libcalls.
-  bool isIndirectCall = !Func && CS;
+  bool isIndirectCall = !Func && CB;
 
   if (isa<ExternalSymbolSDNode>(Callee)) {
     Function* CalleeFunc = nullptr;
@@ -1680,7 +1678,7 @@ SDValue NVPTXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     // The prototype is embedded in a string and put as the operand for a
     // CallPrototype SDNode which will print out to the value of the string.
     SDVTList ProtoVTs = DAG.getVTList(MVT::Other, MVT::Glue);
-    std::string Proto = getPrototype(DL, RetTy, Args, Outs, retAlignment, CS);
+    std::string Proto = getPrototype(DL, RetTy, Args, Outs, retAlignment, *CB);
     const char *ProtoStr =
       nvTM->getManagedStrPool()->getManagedString(Proto.c_str())->c_str();
     SDValue ProtoOps[] = {
@@ -1753,7 +1751,7 @@ SDValue NVPTXTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     ComputePTXValueVTs(*this, DL, RetTy, VTs, &Offsets, 0);
     assert(VTs.size() == Ins.size() && "Bad value decomposition");
 
-    Align RetAlign = getArgumentAlignment(Callee, CS, RetTy, 0, DL);
+    Align RetAlign = getArgumentAlignment(Callee, CB, RetTy, 0, DL);
     auto VectorInfo = VectorizePTXValueVTs(VTs, Offsets, RetAlign);
 
     SmallVector<EVT, 6> LoadVTs;
@@ -2305,10 +2303,10 @@ NVPTXTargetLowering::LowerSTOREVector(SDValue Op, SelectionDAG &DAG) const {
     MemSDNode *MemSD = cast<MemSDNode>(N);
     const DataLayout &TD = DAG.getDataLayout();
 
-    unsigned Align = MemSD->getAlignment();
-    unsigned PrefAlign =
-        TD.getPrefTypeAlignment(ValVT.getTypeForEVT(*DAG.getContext()));
-    if (Align < PrefAlign) {
+    Align Alignment = MemSD->getAlign();
+    Align PrefAlign =
+        TD.getPrefTypeAlign(ValVT.getTypeForEVT(*DAG.getContext()));
+    if (Alignment < PrefAlign) {
       // This store is not sufficiently aligned, so bail out and let this vector
       // store be scalarized.  Note that we may still be able to emit smaller
       // vector stores.  For example, if we are storing a <4 x float> with an
@@ -2441,8 +2439,7 @@ static bool isImageOrSamplerVal(const Value *arg, const Module *context) {
   if (!STy || STy->isLiteral())
     return false;
 
-  return std::find(std::begin(specialTypes), std::end(specialTypes),
-                   STy->getName()) != std::end(specialTypes);
+  return llvm::is_contained(specialTypes, STy->getName());
 }
 
 SDValue NVPTXTargetLowering::LowerFormalArguments(
@@ -2593,7 +2590,8 @@ SDValue NVPTXTargetLowering::LowerFormalArguments(
             // Extend the element if necessary (e.g. an i8 is loaded
             // into an i16 register)
             if (Ins[InsIdx].VT.isInteger() &&
-                Ins[InsIdx].VT.getSizeInBits() > LoadVT.getSizeInBits()) {
+                Ins[InsIdx].VT.getFixedSizeInBits() >
+                    LoadVT.getFixedSizeInBits()) {
               unsigned Extend = Ins[InsIdx].Flags.isSExt() ? ISD::SIGN_EXTEND
                                                            : ISD::ZERO_EXTEND;
               Elt = DAG.getNode(Extend, dl, Ins[InsIdx].VT, Elt);
@@ -3783,8 +3781,7 @@ bool NVPTXTargetLowering::getTgtMemIntrinsic(
     Info.ptrVal = I.getArgOperand(0);
     Info.offset = 0;
     Info.flags = MachineMemOperand::MOLoad;
-    Info.align =
-        MaybeAlign(cast<ConstantInt>(I.getArgOperand(1))->getZExtValue());
+    Info.align = cast<ConstantInt>(I.getArgOperand(1))->getMaybeAlignValue();
 
     return true;
   }
@@ -3803,8 +3800,7 @@ bool NVPTXTargetLowering::getTgtMemIntrinsic(
     Info.ptrVal = I.getArgOperand(0);
     Info.offset = 0;
     Info.flags = MachineMemOperand::MOLoad;
-    Info.align =
-        MaybeAlign(cast<ConstantInt>(I.getArgOperand(1))->getZExtValue());
+    Info.align = cast<ConstantInt>(I.getArgOperand(1))->getMaybeAlignValue();
 
     return true;
   }
@@ -4569,13 +4565,13 @@ static bool IsMulWideOperandDemotable(SDValue Op,
   if (Op.getOpcode() == ISD::SIGN_EXTEND ||
       Op.getOpcode() == ISD::SIGN_EXTEND_INREG) {
     EVT OrigVT = Op.getOperand(0).getValueType();
-    if (OrigVT.getSizeInBits() <= OptSize) {
+    if (OrigVT.getFixedSizeInBits() <= OptSize) {
       S = Signed;
       return true;
     }
   } else if (Op.getOpcode() == ISD::ZERO_EXTEND) {
     EVT OrigVT = Op.getOperand(0).getValueType();
-    if (OrigVT.getSizeInBits() <= OptSize) {
+    if (OrigVT.getFixedSizeInBits() <= OptSize) {
       S = Unsigned;
       return true;
     }
@@ -4794,11 +4790,10 @@ static void ReplaceLoadVector(SDNode *N, SelectionDAG &DAG,
 
   LoadSDNode *LD = cast<LoadSDNode>(N);
 
-  unsigned Align = LD->getAlignment();
+  Align Alignment = LD->getAlign();
   auto &TD = DAG.getDataLayout();
-  unsigned PrefAlign =
-      TD.getPrefTypeAlignment(ResVT.getTypeForEVT(*DAG.getContext()));
-  if (Align < PrefAlign) {
+  Align PrefAlign = TD.getPrefTypeAlign(ResVT.getTypeForEVT(*DAG.getContext()));
+  if (Alignment < PrefAlign) {
     // This load is not sufficiently aligned, so bail out and let this vector
     // load be scalarized.  Note that we may still be able to emit smaller
     // vector loads.  For example, if we are loading a <4 x float> with an

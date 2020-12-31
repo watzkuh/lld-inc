@@ -15,6 +15,7 @@
 #define LLVM_ANALYSIS_LOOPNESTANALYSIS_H
 
 #include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/Analysis/LoopInfo.h"
 
 namespace llvm {
 
@@ -126,6 +127,8 @@ public:
     return llvm::all_of(Loops,
                         [](const Loop *L) { return L->isLoopSimplifyForm(); });
   }
+
+  StringRef getName() const { return Loops.front()->getName(); }
 
 protected:
   const unsigned MaxPerfectDepth; // maximum perfect nesting depth level.

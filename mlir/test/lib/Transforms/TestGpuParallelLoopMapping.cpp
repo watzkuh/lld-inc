@@ -25,15 +25,17 @@ class TestGpuGreedyParallelLoopMappingPass
   void runOnOperation() override {
     Operation *op = getOperation();
     for (Region &region : op->getRegions())
-      greedilyMapParallelLoopsToGPU(region);
+      greedilyMapParallelSCFToGPU(region);
   }
 };
-} // end namespace
+} // namespace
 
 namespace mlir {
+namespace test {
 void registerTestGpuParallelLoopMappingPass() {
   PassRegistration<TestGpuGreedyParallelLoopMappingPass> registration(
       "test-gpu-greedy-parallel-loop-mapping",
       "Greedily maps all parallel loops to gpu hardware ids.");
 }
+} // namespace test
 } // namespace mlir

@@ -369,10 +369,7 @@ static void initSlots2Values(const Function &F,
 const Value* PerFunctionMIParsingState::getIRValue(unsigned Slot) {
   if (Slots2Values.empty())
     initSlots2Values(MF.getFunction(), Slots2Values);
-  auto ValueInfo = Slots2Values.find(Slot);
-  if (ValueInfo == Slots2Values.end())
-    return nullptr;
-  return ValueInfo->second;
+  return Slots2Values.lookup(Slot);
 }
 
 namespace {
@@ -495,7 +492,7 @@ public:
   bool parseOffset(int64_t &Offset);
   bool parseAlignment(unsigned &Alignment);
   bool parseAddrspace(unsigned &Addrspace);
-  bool parseMBBS(MachineBasicBlockSection &T);
+  bool parseSectionID(Optional<MBBSectionID> &SID);
   bool parseOperandsOffset(MachineOperand &Op);
   bool parseIRValue(const Value *&V);
   bool parseMemoryOperandFlag(MachineMemOperand::Flags &Flags);
@@ -563,7 +560,7 @@ MIParser::MIParser(PerFunctionMIParsingState &PFS, SMDiagnostic &Error,
 
 void MIParser::lex(unsigned SkipChar) {
   CurrentSource = lexMIToken(
-      CurrentSource.data() + SkipChar, Token,
+      CurrentSource.slice(SkipChar, StringRef::npos), Token,
       [this](StringRef::iterator Loc, const Twine &Msg) { error(Loc, Msg); });
 }
 
@@ -620,21 +617,24 @@ bool MIParser::consumeIfPresent(MIToken::TokenKind TokenKind) {
   return true;
 }
 
-// Parse Machine Basic Block Section Type.
-bool MIParser::parseMBBS(MachineBasicBlockSection &T) {
+// Parse Machine Basic Block Section ID.
+bool MIParser::parseSectionID(Optional<MBBSectionID> &SID) {
   assert(Token.is(MIToken::kw_bbsections));
   lex();
-  const StringRef &S = Token.stringValue();
-  if (S == "Entry")
-    T = MBBS_Entry;
-  else if (S == "Exception")
-    T = MBBS_Exception;
-  else if (S == "Cold")
-    T = MBBS_Cold;
-  else if (S == "Unique")
-    T = MBBS_Unique;
-  else
-    return error("Unknown Section Type");
+  if (Token.is(MIToken::IntegerLiteral)) {
+    unsigned Value = 0;
+    if (getUnsigned(Value))
+      return error("Unknown Section ID");
+    SID = MBBSectionID{Value};
+  } else {
+    const StringRef &S = Token.stringValue();
+    if (S == "Exception")
+      SID = MBBSectionID::ExceptionSectionID;
+    else if (S == "Cold")
+      SID = MBBSectionID::ColdSectionID;
+    else
+      return error("Unknown Section ID");
+  }
   lex();
   return false;
 }
@@ -651,7 +651,7 @@ bool MIParser::parseBasicBlockDefinition(
   bool HasAddressTaken = false;
   bool IsLandingPad = false;
   bool IsEHFuncletEntry = false;
-  MachineBasicBlockSection SectionType = MBBS_None;
+  Optional<MBBSectionID> SectionID;
   unsigned Alignment = 0;
   BasicBlock *BB = nullptr;
   if (consumeIfPresent(MIToken::lparen)) {
@@ -681,7 +681,7 @@ bool MIParser::parseBasicBlockDefinition(
         lex();
         break;
       case MIToken::kw_bbsections:
-        if (parseMBBS(SectionType))
+        if (parseSectionID(SectionID))
           return true;
         break;
       default:
@@ -714,8 +714,8 @@ bool MIParser::parseBasicBlockDefinition(
     MBB->setHasAddressTaken();
   MBB->setIsEHPad(IsLandingPad);
   MBB->setIsEHFuncletEntry(IsEHFuncletEntry);
-  if (SectionType != MBBS_None) {
-    MBB->setSectionType(SectionType);
+  if (SectionID.hasValue()) {
+    MBB->setSectionID(SectionID.getValue());
     MF.setBBSectionsType(BasicBlockSection::List);
   }
   return false;
@@ -981,6 +981,7 @@ bool MIParser::parse(MachineInstr *&MI) {
          Token.isNot(MIToken::kw_post_instr_symbol) &&
          Token.isNot(MIToken::kw_heap_alloc_marker) &&
          Token.isNot(MIToken::kw_debug_location) &&
+         Token.isNot(MIToken::kw_debug_instr_number) &&
          Token.isNot(MIToken::coloncolon) && Token.isNot(MIToken::lbrace)) {
     auto Loc = Token.location();
     Optional<unsigned> TiedDefIdx;
@@ -1010,6 +1011,19 @@ bool MIParser::parse(MachineInstr *&MI) {
   if (Token.is(MIToken::kw_heap_alloc_marker))
     if (parseHeapAllocMarker(HeapAllocMarker))
       return true;
+
+  unsigned InstrNum = 0;
+  if (Token.is(MIToken::kw_debug_instr_number)) {
+    lex();
+    if (Token.isNot(MIToken::IntegerLiteral))
+      return error("expected an integer literal after 'debug-instr-number'");
+    if (getUnsigned(InstrNum))
+      return true;
+    lex();
+    // Lex past trailing comma if present.
+    if (Token.is(MIToken::comma))
+      lex();
+  }
 
   DebugLoc DebugLocation;
   if (Token.is(MIToken::kw_debug_location)) {
@@ -1067,6 +1081,8 @@ bool MIParser::parse(MachineInstr *&MI) {
     MI->setHeapAllocMarker(MF, HeapAllocMarker);
   if (!MemOperands.empty())
     MI->setMemRefs(MF, MemOperands);
+  if (InstrNum)
+    MI->setDebugInstrNum(InstrNum);
   return false;
 }
 
@@ -2239,9 +2255,8 @@ bool MIParser::parseCFIOperand(MachineOperand &Dest) {
   case MIToken::kw_cfi_def_cfa_offset:
     if (parseCFIOffset(Offset))
       return true;
-    // NB: MCCFIInstruction::createDefCfaOffset negates the offset.
-    CFIIndex = MF.addFrameInst(
-        MCCFIInstruction::createDefCfaOffset(nullptr, -Offset));
+    CFIIndex =
+        MF.addFrameInst(MCCFIInstruction::cfiDefCfaOffset(nullptr, Offset));
     break;
   case MIToken::kw_cfi_adjust_cfa_offset:
     if (parseCFIOffset(Offset))
@@ -2253,9 +2268,8 @@ bool MIParser::parseCFIOperand(MachineOperand &Dest) {
     if (parseCFIRegister(Reg) || expectAndConsume(MIToken::comma) ||
         parseCFIOffset(Offset))
       return true;
-    // NB: MCCFIInstruction::createDefCfa negates the offset.
     CFIIndex =
-        MF.addFrameInst(MCCFIInstruction::createDefCfa(nullptr, Reg, -Offset));
+        MF.addFrameInst(MCCFIInstruction::cfiDefCfa(nullptr, Reg, Offset));
     break;
   case MIToken::kw_cfi_remember_state:
     CFIIndex = MF.addFrameInst(MCCFIInstruction::createRememberState(nullptr));
@@ -3152,10 +3166,7 @@ static void initSlots2BasicBlocks(
 static const BasicBlock *getIRBlockFromSlot(
     unsigned Slot,
     const DenseMap<unsigned, const BasicBlock *> &Slots2BasicBlocks) {
-  auto BlockInfo = Slots2BasicBlocks.find(Slot);
-  if (BlockInfo == Slots2BasicBlocks.end())
-    return nullptr;
-  return BlockInfo->second;
+  return Slots2BasicBlocks.lookup(Slot);
 }
 
 const BasicBlock *MIParser::getIRBlock(unsigned Slot) {

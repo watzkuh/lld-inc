@@ -50,6 +50,7 @@ class EventAPITestCase(TestBase):
 
         # Now launch the process, and do not stop at the entry point.
         error = lldb.SBError()
+        flags = target.GetLaunchInfo().GetLaunchFlags()
         process = target.Launch(listener,
                                 None,      # argv
                                 None,      # envp
@@ -57,7 +58,7 @@ class EventAPITestCase(TestBase):
                                 None,      # stdout_path
                                 None,      # stderr_path
                                 None,      # working directory
-                                0,         # launch flags
+                                flags,     # launch flags
                                 False,     # Stop at entry
                                 error)     # error
 
@@ -135,7 +136,7 @@ class EventAPITestCase(TestBase):
 
         # Now create a breakpoint on main.c by name 'c'.
         breakpoint = target.BreakpointCreateByName('c', 'a.out')
-        #print("breakpoint:", breakpoint)
+        self.trace("breakpoint:", breakpoint)
         self.assertTrue(breakpoint and
                         breakpoint.GetNumLocations() == 1,
                         VALID_BREAKPOINT)
@@ -145,6 +146,7 @@ class EventAPITestCase(TestBase):
 
         # Now launch the process, and do not stop at entry point.
         error = lldb.SBError()
+        flags = target.GetLaunchInfo().GetLaunchFlags()
         process = target.Launch(listener,
                                 None,      # argv
                                 None,      # envp
@@ -152,7 +154,7 @@ class EventAPITestCase(TestBase):
                                 None,      # stdout_path
                                 None,      # stderr_path
                                 None,      # working directory
-                                0,         # launch flags
+                                flags,     # launch flags
                                 False,     # Stop at entry
                                 error)     # error
         self.assertTrue(error.Success() and process, PROCESS_IS_VALID)
@@ -171,9 +173,9 @@ class EventAPITestCase(TestBase):
                 # Let's only try at most 3 times to retrieve any kind of event.
                 while not count > 3:
                     if listener.WaitForEvent(5, event):
-                        #print("Got a valid event:", event)
-                        #print("Event data flavor:", event.GetDataFlavor())
-                        #print("Event type:", lldbutil.state_type_to_str(event.GetType()))
+                        self.trace("Got a valid event:", event)
+                        self.trace("Event data flavor:", event.GetDataFlavor())
+                        self.trace("Event type:", lldbutil.state_type_to_str(event.GetType()))
                         listener.Clear()
                         return
                     count = count + 1
@@ -195,13 +197,13 @@ class EventAPITestCase(TestBase):
         self.assertTrue(event,
                         "My listening thread successfully received an event")
 
-    @skipIfFreeBSD  # llvm.org/pr21325
     @add_test_categories(['pyapi'])
     @expectedFailureAll(
         oslist=["linux"],
         bugnumber="llvm.org/pr23617 Flaky, fails ~1/10 cases")
     @skipIfWindows # This is flakey on Windows AND when it fails, it hangs: llvm.org/pr38373
-    @expectedFlakeyNetBSD
+    @expectedFailureAll(oslist=["freebsd"], bugnumber="llvm.org/pr48417")
+    @expectedFailureNetBSD
     def test_add_listener_to_broadcaster(self):
         """Exercise some SBBroadcaster APIs."""
         self.build()
@@ -215,7 +217,7 @@ class EventAPITestCase(TestBase):
 
         # Now create a breakpoint on main.c by name 'c'.
         breakpoint = target.BreakpointCreateByName('c', 'a.out')
-        #print("breakpoint:", breakpoint)
+        self.trace("breakpoint:", breakpoint)
         self.assertTrue(breakpoint and
                         breakpoint.GetNumLocations() == 1,
                         VALID_BREAKPOINT)
@@ -224,6 +226,7 @@ class EventAPITestCase(TestBase):
 
         # Now launch the process, and do not stop at the entry point.
         error = lldb.SBError()
+        flags = target.GetLaunchInfo().GetLaunchFlags()
         process = target.Launch(listener,
                                 None,      # argv
                                 None,      # envp
@@ -231,7 +234,7 @@ class EventAPITestCase(TestBase):
                                 None,      # stdout_path
                                 None,      # stderr_path
                                 None,      # working directory
-                                0,         # launch flags
+                                flags,     # launch flags
                                 False,     # Stop at entry
                                 error)     # error
 
@@ -256,7 +259,7 @@ class EventAPITestCase(TestBase):
         class MyListeningThread(threading.Thread):
 
             def run(self):
-                #print("Running MyListeningThread:", self)
+                self.trace("Running MyListeningThread:", self)
 
                 # Regular expression pattern for the event description.
                 pattern = re.compile("data = {.*, state = (.*)}$")
@@ -266,7 +269,7 @@ class EventAPITestCase(TestBase):
                 while True:
                     if listener.WaitForEvent(5, event):
                         desc = lldbutil.get_description(event)
-                        #print("Event description:", desc)
+                        self.trace("Event description:", desc)
                         match = pattern.search(desc)
                         if not match:
                             break

@@ -14,12 +14,12 @@
 #define LLVM_ANALYSIS_VECTORUTILS_H
 
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Support/CheckedArithmetic.h"
 
 namespace llvm {
+class TargetLibraryInfo;
 
 /// Describes the type of Parameters
 enum class VFParamKind {
@@ -63,7 +63,7 @@ struct VFParameter {
   unsigned ParamPos;         // Parameter Position in Scalar Function.
   VFParamKind ParamKind;     // Kind of Parameter.
   int LinearStepOrPos = 0;   // Step or Position of the Parameter.
-  Align Alignment = Align(); // Optional aligment in bytes, defaulted to 1.
+  Align Alignment = Align(); // Optional alignment in bytes, defaulted to 1.
 
   // Comparison operator.
   bool operator==(const VFParameter &Other) const {
@@ -82,7 +82,7 @@ struct VFParameter {
 struct VFShape {
   unsigned VF;     // Vectorization factor.
   bool IsScalable; // True if the function is a scalable function.
-  SmallVector<VFParameter, 8> Parameters; // List of parameter informations.
+  SmallVector<VFParameter, 8> Parameters; // List of parameter information.
   // Comparison operator.
   bool operator==(const VFShape &Other) const {
     return std::tie(VF, IsScalable, Parameters) ==
@@ -94,6 +94,13 @@ struct VFShape {
     assert(P.ParamPos < Parameters.size() && "Invalid parameter position.");
     Parameters[P.ParamPos] = P;
     assert(hasValidParameterList() && "Invalid parameter list");
+  }
+
+  // Retrieve the VFShape that can be used to map a (scalar) function to itself,
+  // with VF = 1.
+  static VFShape getScalarShape(const CallInst &CI) {
+    return VFShape::get(CI, ElementCount::getFixed(1),
+                        /*HasGlobalPredicate*/ false);
   }
 
   // Retrieve the basic vectorization shape of the function, where all
@@ -108,7 +115,7 @@ struct VFShape {
       Parameters.push_back(
           VFParameter({CI.arg_size(), VFParamKind::GlobalPredicate}));
 
-    return {EC.Min, EC.Scalable, Parameters};
+    return {EC.getKnownMinValue(), EC.isScalable(), Parameters};
   }
   /// Sanity check on the Parameters in the VFShape.
   bool hasValidParameterList() const;
@@ -139,14 +146,14 @@ static constexpr char const *_LLVM_ = "_LLVM_";
 /// it once vectorization is done.
 static constexpr char const *_LLVM_Scalarize_ = "_LLVM_Scalarize_";
 
-/// Function to contruct a VFInfo out of a mangled names in the
+/// Function to construct a VFInfo out of a mangled names in the
 /// following format:
 ///
 /// <VFABI_name>{(<redirection>)}
 ///
 /// where <VFABI_name> is the name of the vector function, mangled according
 /// to the rules described in the Vector Function ABI of the target vector
-/// extentsion (or <isa> from now on). The <VFABI_name> is in the following
+/// extension (or <isa> from now on). The <VFABI_name> is in the following
 /// format:
 ///
 /// _ZGV<isa><mask><vlen><parameters>_<scalarname>[(<redirection>)]
@@ -160,12 +167,31 @@ static constexpr char const *_LLVM_Scalarize_ = "_LLVM_Scalarize_";
 ///
 /// \param MangledName -> input string in the format
 /// _ZGV<isa><mask><vlen><parameters>_<scalarname>[(<redirection>)].
-/// \param M -> Module used to retrive informations about the vector
+/// \param M -> Module used to retrieve informations about the vector
 /// function that are not possible to retrieve from the mangled
-/// name. At the moment, this parameter is needed only to retrive the
+/// name. At the moment, this parameter is needed only to retrieve the
 /// Vectorization Factor of scalable vector functions from their
 /// respective IR declarations.
 Optional<VFInfo> tryDemangleForVFABI(StringRef MangledName, const Module &M);
+
+/// This routine mangles the given VectorName according to the LangRef
+/// specification for vector-function-abi-variant attribute and is specific to
+/// the TLI mappings. It is the responsibility of the caller to make sure that
+/// this is only used if all parameters in the vector function are vector type.
+/// This returned string holds scalar-to-vector mapping:
+///    _ZGV<isa><mask><vlen><vparams>_<scalarname>(<vectorname>)
+///
+/// where:
+///
+/// <isa> = "_LLVM_"
+/// <mask> = "N". Note: TLI does not support masked interfaces.
+/// <vlen> = Number of concurrent lanes, stored in the `VectorizationFactor`
+///          field of the `VecDesc` struct.
+/// <vparams> = "v", as many as are the numArgs.
+/// <scalarname> = the name of the scalar function.
+/// <vectorname> = the name of the vector function.
+std::string mangleTLIVectorName(StringRef VectorName, StringRef ScalarName,
+                                unsigned numArgs, unsigned VF);
 
 /// Retrieve the `VFParamKind` from a string token.
 VFParamKind getVFParamKindFromString(const StringRef Token);
@@ -174,7 +200,10 @@ VFParamKind getVFParamKindFromString(const StringRef Token);
 static constexpr char const *MappingsAttrName = "vector-function-abi-variant";
 
 /// Populates a set of strings representing the Vector Function ABI variants
-/// associated to the CallInst CI.
+/// associated to the CallInst CI. If the CI does not contain the
+/// vector-function-abi-variant attribute, we return without populating
+/// VariantMappings, i.e. callers of getVectorVariantNames need not check for
+/// the presence of the attribute (see InjectTLIMappings).
 void getVectorVariantNames(const CallInst &CI,
                            SmallVectorImpl<std::string> &VariantMappings);
 } // end namespace VFABI
@@ -186,23 +215,27 @@ void getVectorVariantNames(const CallInst &CI,
 class VFDatabase {
   /// The Module of the CallInst CI.
   const Module *M;
-  /// List of vector functions descritors associated to the call
+  /// The CallInst instance being queried for scalar to vector mappings.
+  const CallInst &CI;
+  /// List of vector functions descriptors associated to the call
   /// instruction.
   const SmallVector<VFInfo, 8> ScalarToVectorMappings;
 
-  /// Retreive the scalar-to-vector mappings associated to the rule of
+  /// Retrieve the scalar-to-vector mappings associated to the rule of
   /// a vector Function ABI.
   static void getVFABIMappings(const CallInst &CI,
                                SmallVectorImpl<VFInfo> &Mappings) {
-    const StringRef ScalarName = CI.getCalledFunction()->getName();
-    const StringRef S =
-        CI.getAttribute(AttributeList::FunctionIndex, VFABI::MappingsAttrName)
-            .getValueAsString();
-    if (S.empty())
+    if (!CI.getCalledFunction())
       return;
 
+    const StringRef ScalarName = CI.getCalledFunction()->getName();
+
     SmallVector<std::string, 8> ListOfStrings;
+    // The check for the vector-function-abi-variant attribute is done when
+    // retrieving the vector variant names here.
     VFABI::getVectorVariantNames(CI, ListOfStrings);
+    if (ListOfStrings.empty())
+      return;
     for (const auto &MangledName : ListOfStrings) {
       const Optional<VFInfo> Shape =
           VFABI::tryDemangleForVFABI(MangledName, *(CI.getModule()));
@@ -233,13 +266,16 @@ public:
 
   /// Constructor, requires a CallInst instance.
   VFDatabase(CallInst &CI)
-      : M(CI.getModule()), ScalarToVectorMappings(VFDatabase::getMappings(CI)) {
-  }
+      : M(CI.getModule()), CI(CI),
+        ScalarToVectorMappings(VFDatabase::getMappings(CI)) {}
   /// \defgroup VFDatabase query interface.
   ///
   /// @{
   /// Retrieve the Function with VFShape \p Shape.
   Function *getVectorizedFunction(const VFShape &Shape) const {
+    if (Shape == VFShape::getScalarShape(CI))
+      return CI.getCalledFunction();
+
     for (const auto &Info : ScalarToVectorMappings)
       if (Info.Shape == Shape)
         return M->getFunction(Info.VectorName);
@@ -264,13 +300,17 @@ namespace Intrinsic {
 typedef unsigned ID;
 }
 
-/// A helper function for converting Scalar types to vector types.
-/// If the incoming type is void, we return void. If the VF is 1, we return
-/// the scalar type.
-inline Type *ToVectorTy(Type *Scalar, unsigned VF, bool isScalable = false) {
-  if (Scalar->isVoidTy() || VF == 1)
+/// A helper function for converting Scalar types to vector types. If
+/// the incoming type is void, we return void. If the EC represents a
+/// scalar, we return the scalar type.
+inline Type *ToVectorTy(Type *Scalar, ElementCount EC) {
+  if (Scalar->isVoidTy() || EC.isScalar())
     return Scalar;
-  return VectorType::get(Scalar, {VF, isScalable});
+  return VectorType::get(Scalar, EC);
+}
+
+inline Type *ToVectorTy(Type *Scalar, unsigned VF) {
+  return ToVectorTy(Scalar, ElementCount::getFixed(VF));
 }
 
 /// Identify if the intrinsic is trivially vectorizable.
@@ -318,7 +358,7 @@ int getSplatIndex(ArrayRef<int> Mask);
 /// Get splat value if the input is a splat vector or return nullptr.
 /// The value may be extracted from a splat constants vector or from
 /// a sequence of instructions that broadcast a single value into a vector.
-const Value *getSplatValue(const Value *V);
+Value *getSplatValue(const Value *V);
 
 /// Return true if each element of the vector value \p V is poisoned or equal to
 /// every other non-poisoned element. If an index element is specified, either
@@ -450,8 +490,8 @@ Constant *createBitMaskForGaps(IRBuilderBase &Builder, unsigned VF,
 /// For example, the mask for \p ReplicationFactor=3 and \p VF=4 is:
 ///
 ///   <0,0,0,1,1,1,2,2,2,3,3,3>
-Constant *createReplicatedMask(IRBuilderBase &Builder,
-                               unsigned ReplicationFactor, unsigned VF);
+llvm::SmallVector<int, 16> createReplicatedMask(unsigned ReplicationFactor,
+                                                unsigned VF);
 
 /// Create an interleave shuffle mask.
 ///
@@ -464,8 +504,7 @@ Constant *createReplicatedMask(IRBuilderBase &Builder,
 /// For example, the mask for VF = 4 and NumVecs = 2 is:
 ///
 ///   <0, 4, 1, 5, 2, 6, 3, 7>.
-Constant *createInterleaveMask(IRBuilderBase &Builder, unsigned VF,
-                               unsigned NumVecs);
+llvm::SmallVector<int, 16> createInterleaveMask(unsigned VF, unsigned NumVecs);
 
 /// Create a stride shuffle mask.
 ///
@@ -479,8 +518,8 @@ Constant *createInterleaveMask(IRBuilderBase &Builder, unsigned VF,
 /// For example, the mask for Start = 0, Stride = 2, and VF = 4 is:
 ///
 ///   <0, 2, 4, 6>
-Constant *createStrideMask(IRBuilderBase &Builder, unsigned Start,
-                           unsigned Stride, unsigned VF);
+llvm::SmallVector<int, 16> createStrideMask(unsigned Start, unsigned Stride,
+                                            unsigned VF);
 
 /// Create a sequential shuffle mask.
 ///
@@ -493,8 +532,8 @@ Constant *createStrideMask(IRBuilderBase &Builder, unsigned Start,
 /// For example, the mask for Start = 0, NumInsts = 4, and NumUndefs = 4 is:
 ///
 ///   <0, 1, 2, 3, undef, undef, undef, undef>
-Constant *createSequentialMask(IRBuilderBase &Builder, unsigned Start,
-                               unsigned NumInts, unsigned NumUndefs);
+llvm::SmallVector<int, 16>
+createSequentialMask(unsigned Start, unsigned NumInts, unsigned NumUndefs);
 
 /// Concatenate a list of vectors.
 ///
@@ -505,20 +544,20 @@ Constant *createSequentialMask(IRBuilderBase &Builder, unsigned Start,
 /// elements, it will be padded with undefs.
 Value *concatenateVectors(IRBuilderBase &Builder, ArrayRef<Value *> Vecs);
 
-/// Given a mask vector of the form <Y x i1>, Return true if all of the
-/// elements of this predicate mask are false or undef.  That is, return true
-/// if all lanes can be assumed inactive. 
+/// Given a mask vector of i1, Return true if all of the elements of this
+/// predicate mask are known to be false or undef.  That is, return true if all
+/// lanes can be assumed inactive.
 bool maskIsAllZeroOrUndef(Value *Mask);
 
-/// Given a mask vector of the form <Y x i1>, Return true if all of the
-/// elements of this predicate mask are true or undef.  That is, return true
-/// if all lanes can be assumed active. 
+/// Given a mask vector of i1, Return true if all of the elements of this
+/// predicate mask are known to be true or undef.  That is, return true if all
+/// lanes can be assumed active.
 bool maskIsAllOneOrUndef(Value *Mask);
 
 /// Given a mask vector of the form <Y x i1>, return an APInt (of bitwidth Y)
 /// for each lane which may be active.
 APInt possiblyDemandedEltsInMask(Value *Mask);
-  
+
 /// The group of interleaved loads/stores sharing the same stride and
 /// close to each other.
 ///
@@ -616,11 +655,7 @@ public:
   /// \returns nullptr if contains no such member.
   InstTy *getMember(uint32_t Index) const {
     int32_t Key = SmallestKey + Index;
-    auto Member = Members.find(Key);
-    if (Member == Members.end())
-      return nullptr;
-
-    return Member->second;
+    return Members.lookup(Key);
   }
 
   /// Get the index for the given member. Unlike the key in the member
@@ -699,7 +734,7 @@ public:
                         const LoopAccessInfo *LAI)
       : PSE(PSE), TheLoop(L), DT(DT), LI(LI), LAI(LAI) {}
 
-  ~InterleavedAccessInfo() { reset(); }
+  ~InterleavedAccessInfo() { invalidateGroups(); }
 
   /// Analyze the interleaved accesses and collect them in interleave
   /// groups. Substitute symbolic strides using \p Strides.
@@ -710,15 +745,23 @@ public:
   /// Invalidate groups, e.g., in case all blocks in loop will be predicated
   /// contrary to original assumption. Although we currently prevent group
   /// formation for predicated accesses, we may be able to relax this limitation
-  /// in the future once we handle more complicated blocks.
-  void reset() {
+  /// in the future once we handle more complicated blocks. Returns true if any
+  /// groups were invalidated.
+  bool invalidateGroups() {
+    if (InterleaveGroups.empty()) {
+      assert(
+          !RequiresScalarEpilogue &&
+          "RequiresScalarEpilog should not be set without interleave groups");
+      return false;
+    }
+
     InterleaveGroupMap.clear();
     for (auto *Ptr : InterleaveGroups)
       delete Ptr;
     InterleaveGroups.clear();
     RequiresScalarEpilogue = false;
+    return true;
   }
-
 
   /// Check if \p Instr belongs to any interleave group.
   bool isInterleaved(Instruction *Instr) const {
@@ -730,9 +773,7 @@ public:
   /// \returns nullptr if doesn't have such group.
   InterleaveGroup<Instruction> *
   getInterleaveGroup(const Instruction *Instr) const {
-    if (InterleaveGroupMap.count(Instr))
-      return InterleaveGroupMap.find(Instr)->second;
-    return nullptr;
+    return InterleaveGroupMap.lookup(Instr);
   }
 
   iterator_range<SmallPtrSetIterator<llvm::InterleaveGroup<Instruction> *>>

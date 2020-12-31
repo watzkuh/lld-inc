@@ -144,7 +144,7 @@ def read_options(header):
         comment += clean_comment_line(line)
       elif line.startswith('enum'):
         state = State.InEnum
-        name = re.sub(r'enum\s+(\w+)\s*\{', '\\1', line)
+        name = re.sub(r'enum\s+(\w+)\s*(:((\s*\w+)+)\s*)?\{', '\\1', line)
         enum = Enum(name, comment)
       elif line.startswith('struct'):
         state = State.InNestedStruct
@@ -225,4 +225,4 @@ contents = open(DOC_FILE).read()
 contents = substitute(contents, 'FORMAT_STYLE_OPTIONS', options_text)
 
 with open(DOC_FILE, 'wb') as output:
-  output.write(contents)
+  output.write(contents.encode())

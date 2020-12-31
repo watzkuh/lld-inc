@@ -20,27 +20,27 @@ namespace edsc {
 class BoundsCapture {
 public:
   unsigned rank() const { return lbs.size(); }
-  ValueHandle lb(unsigned idx) { return lbs[idx]; }
-  ValueHandle ub(unsigned idx) { return ubs[idx]; }
-  int64_t step(unsigned idx) { return steps[idx]; }
-  std::tuple<ValueHandle, ValueHandle, int64_t> range(unsigned idx) {
+  Value lb(unsigned idx) const { return lbs[idx]; }
+  Value ub(unsigned idx) const { return ubs[idx]; }
+  int64_t step(unsigned idx) const { return steps[idx]; }
+  std::tuple<Value, Value, int64_t> range(unsigned idx) const {
     return std::make_tuple(lbs[idx], ubs[idx], steps[idx]);
   }
   void swapRanges(unsigned i, unsigned j) {
     if (i == j)
       return;
-    lbs[i].swap(lbs[j]);
-    ubs[i].swap(ubs[j]);
+    std::swap(lbs[i], lbs[j]);
+    std::swap(ubs[i], ubs[j]);
     std::swap(steps[i], steps[j]);
   }
 
-  ArrayRef<ValueHandle> getLbs() { return lbs; }
-  ArrayRef<ValueHandle> getUbs() { return ubs; }
-  ArrayRef<int64_t> getSteps() { return steps; }
+  ArrayRef<Value> getLbs() const { return lbs; }
+  ArrayRef<Value> getUbs() const { return ubs; }
+  ArrayRef<int64_t> getSteps() const { return steps; }
 
 protected:
-  SmallVector<ValueHandle, 8> lbs;
-  SmallVector<ValueHandle, 8> ubs;
+  SmallVector<Value, 8> lbs;
+  SmallVector<Value, 8> ubs;
   SmallVector<int64_t, 8> steps;
 };
 
@@ -48,17 +48,15 @@ protected:
 /// MemRef. It has placeholders for non-contiguous tensors that fit within the
 /// Fortran subarray model.
 /// At the moment it can only capture a MemRef with an identity layout map.
-// TODO(ntv): Support MemRefs with layoutMaps.
+// TODO: Support MemRefs with layoutMaps.
 class MemRefBoundsCapture : public BoundsCapture {
 public:
   explicit MemRefBoundsCapture(Value v);
-  MemRefBoundsCapture(const MemRefBoundsCapture &) = default;
-  MemRefBoundsCapture &operator=(const MemRefBoundsCapture &) = default;
 
   unsigned fastestVarying() const { return rank() - 1; }
 
 private:
-  ValueHandle base;
+  Value base;
 };
 
 /// A VectorBoundsCapture represents the information required to step through a
@@ -68,11 +66,10 @@ private:
 class VectorBoundsCapture : public BoundsCapture {
 public:
   explicit VectorBoundsCapture(Value v);
-  VectorBoundsCapture(const VectorBoundsCapture &) = default;
-  VectorBoundsCapture &operator=(const VectorBoundsCapture &) = default;
+  explicit VectorBoundsCapture(VectorType t);
 
 private:
-  ValueHandle base;
+  Value base;
 };
 
 } // namespace edsc

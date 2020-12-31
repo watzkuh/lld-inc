@@ -32,17 +32,18 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CodeMetrics.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LazyBlockFrequencyInfo.h"
 #include "llvm/Analysis/LegacyDivergenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
+#include "llvm/Analysis/MustExecute.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -217,6 +218,10 @@ namespace {
     /// loop preheaders be inserted into the CFG.
     ///
     void getAnalysisUsage(AnalysisUsage &AU) const override {
+      // Lazy BFI and BPI are marked as preserved here so Loop Unswitching
+      // can remain part of the same loop pass as LICM
+      AU.addPreserved<LazyBlockFrequencyInfoPass>();
+      AU.addPreserved<LazyBranchProbabilityInfoPass>();
       AU.addRequired<AssumptionCacheTracker>();
       AU.addRequired<TargetTransformInfoWrapperPass>();
       if (EnableMSSALoopDependency) {
@@ -661,7 +666,7 @@ bool LoopUnswitch::processCurrentLoop() {
   // FIXME: Use Function::hasOptSize().
   if (OptimizeForSize ||
       LoopHeader->getParent()->hasFnAttribute(Attribute::OptimizeForSize))
-    return false;
+    return Changed;
 
   // Run through the instructions in the loop, keeping track of three things:
   //
@@ -681,13 +686,14 @@ bool LoopUnswitch::processCurrentLoop() {
 
   for (const auto BB : CurrentLoop->blocks()) {
     for (auto &I : *BB) {
-      auto CS = CallSite(&I);
-      if (!CS) continue;
-      if (CS.isConvergent())
-        return false;
+      auto *CB = dyn_cast<CallBase>(&I);
+      if (!CB)
+        continue;
+      if (CB->isConvergent())
+        return Changed;
       if (auto *II = dyn_cast<InvokeInst>(&I))
         if (!II->getUnwindDest()->canSplitPredecessors())
-          return false;
+          return Changed;
       if (auto *II = dyn_cast<IntrinsicInst>(&I))
         if (II->getIntrinsicID() == Intrinsic::experimental_guard)
           Guards.push_back(II);
@@ -1232,7 +1238,7 @@ void LoopUnswitch::unswitchNontrivialCondition(Value *LIC, Constant *Val,
   LoopBlocks.push_back(NewPreheader);
 
   // We want the loop to come after the preheader, but before the exit blocks.
-  LoopBlocks.insert(LoopBlocks.end(), L->block_begin(), L->block_end());
+  llvm::append_range(LoopBlocks, L->blocks());
 
   SmallVector<BasicBlock*, 8> ExitBlocks;
   L->getUniqueExitBlocks(ExitBlocks);
@@ -1246,7 +1252,7 @@ void LoopUnswitch::unswitchNontrivialCondition(Value *LIC, Constant *Val,
   L->getUniqueExitBlocks(ExitBlocks);
 
   // Add exit blocks to the loop blocks.
-  LoopBlocks.insert(LoopBlocks.end(), ExitBlocks.begin(), ExitBlocks.end());
+  llvm::append_range(LoopBlocks, ExitBlocks);
 
   // Next step, clone all of the basic blocks that make up the loop (including
   // the loop preheader and exit blocks), keeping track of the mapping between
@@ -1380,9 +1386,7 @@ void LoopUnswitch::unswitchNontrivialCondition(Value *LIC, Constant *Val,
 /// Remove all instances of I from the worklist vector specified.
 static void removeFromWorklist(Instruction *I,
                                std::vector<Instruction *> &Worklist) {
-
-  Worklist.erase(std::remove(Worklist.begin(), Worklist.end(), I),
-                 Worklist.end());
+  llvm::erase_value(Worklist, I);
 }
 
 /// When we find that I really equals V, remove I from the

@@ -30,6 +30,37 @@
 // RUN:   -triple thumbv7-a15-linux \
 // RUN:   -verify
 
+// RUN: %clang_analyze_cc1 %s \
+// RUN:   -analyzer-checker=core \
+// RUN:   -analyzer-checker=apiModeling.StdCLibraryFunctions \
+// RUN:   -analyzer-config apiModeling.StdCLibraryFunctions:DisplayLoadedSummaries=true \
+// RUN:   -analyzer-checker=debug.ExprInspection \
+// RUN:   -analyzer-config eagerly-assume=false \
+// RUN:   -triple i686-unknown-linux 2>&1 | FileCheck %s
+
+//      CHECK: Loaded summary for: int isalnum(int)
+// CHECK-NEXT: Loaded summary for: int isalpha(int)
+// CHECK-NEXT: Loaded summary for: int isascii(int)
+// CHECK-NEXT: Loaded summary for: int isblank(int)
+// CHECK-NEXT: Loaded summary for: int isdigit(int)
+// CHECK-NEXT: Loaded summary for: int isgraph(int)
+// CHECK-NEXT: Loaded summary for: int islower(int)
+// CHECK-NEXT: Loaded summary for: int isprint(int)
+// CHECK-NEXT: Loaded summary for: int ispunct(int)
+// CHECK-NEXT: Loaded summary for: int isspace(int)
+// CHECK-NEXT: Loaded summary for: int isupper(int)
+// CHECK-NEXT: Loaded summary for: int isxdigit(int)
+// CHECK-NEXT: Loaded summary for: int getc(FILE *)
+// CHECK-NEXT: Loaded summary for: int fgetc(FILE *)
+// CHECK-NEXT: Loaded summary for: int getchar()
+// CHECK-NEXT: Loaded summary for: unsigned int fread(void *restrict, size_t, size_t, FILE *restrict)
+// CHECK-NEXT: Loaded summary for: unsigned int fwrite(const void *restrict, size_t, size_t, FILE *restrict)
+// CHECK-NEXT: Loaded summary for: ssize_t read(int, void *, size_t)
+// CHECK-NEXT: Loaded summary for: ssize_t write(int, const void *, size_t)
+// CHECK-NEXT: Loaded summary for: ssize_t getline(char **restrict, size_t *restrict, FILE *restrict)
+// CHECK-NEXT: Loaded summary for: ssize_t getdelim(char **restrict, size_t *restrict, int, FILE *restrict)
+
+
 void clang_analyzer_eval(int);
 
 int glob;
@@ -75,7 +106,7 @@ void test_read_write(int fd, char *buf) {
   }
 }
 
-size_t fread(void *restrict, size_t, size_t, FILE *);
+size_t fread(void *restrict, size_t, size_t, FILE *restrict);
 size_t fwrite(const void *restrict, size_t, size_t, FILE *restrict);
 void test_fread_fwrite(FILE *fp, int *buf) {
 
@@ -97,7 +128,8 @@ void test_fread_uninitialized(void) {
   (void)fread(ptr, sz, nmem, fp); // expected-warning {{1st function call argument is an uninitialized value}}
 }
 
-ssize_t getline(char **, size_t *, FILE *);
+ssize_t getline(char **restrict, size_t *restrict, FILE *restrict);
+ssize_t getdelim(char **restrict, size_t *restrict, int, FILE *restrict);
 void test_getline(FILE *fp) {
   char *line = 0;
   size_t n = 0;

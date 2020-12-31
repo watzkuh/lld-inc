@@ -76,6 +76,10 @@ void WebAssemblyInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     CopyOpcode = WebAssembly::COPY_F64;
   else if (RC == &WebAssembly::V128RegClass)
     CopyOpcode = WebAssembly::COPY_V128;
+  else if (RC == &WebAssembly::FUNCREFRegClass)
+    CopyOpcode = WebAssembly::COPY_FUNCREF;
+  else if (RC == &WebAssembly::EXTERNREFRegClass)
+    CopyOpcode = WebAssembly::COPY_EXTERNREF;
   else if (RC == &WebAssembly::EXNREFRegClass)
     CopyOpcode = WebAssembly::COPY_EXNREF;
   else
@@ -235,8 +239,9 @@ bool WebAssemblyInstrInfo::reverseBranchCondition(
 ArrayRef<std::pair<int, const char *>>
 WebAssemblyInstrInfo::getSerializableTargetIndices() const {
   static const std::pair<int, const char *> TargetIndices[] = {
-      {WebAssembly::TI_LOCAL_START, "wasm-local-start"},
-      {WebAssembly::TI_GLOBAL_START, "wasm-global-start"},
-      {WebAssembly::TI_OPERAND_STACK_START, "wasm-operator-stack-start"}};
+      {WebAssembly::TI_LOCAL, "wasm-local"},
+      {WebAssembly::TI_GLOBAL_FIXED, "wasm-global-fixed"},
+      {WebAssembly::TI_OPERAND_STACK, "wasm-operand-stack"},
+      {WebAssembly::TI_GLOBAL_RELOC, "wasm-global-reloc"}};
   return makeArrayRef(TargetIndices);
 }

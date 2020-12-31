@@ -16,9 +16,8 @@
 using namespace llvm;
 using namespace llvm::support::endian;
 using namespace llvm::ELF;
-
-namespace lld {
-namespace elf {
+using namespace lld;
+using namespace lld::elf;
 
 namespace {
 class X86 : public TargetInfo {
@@ -38,8 +37,7 @@ public:
   void relocate(uint8_t *loc, const Relocation &rel,
                 uint64_t val) const override;
 
-  RelExpr adjustRelaxExpr(RelType type, const uint8_t *data,
-                          RelExpr expr) const override;
+  RelExpr adjustTlsExpr(RelType type, RelExpr expr) const override;
   void relaxTlsGdToIe(uint8_t *loc, const Relocation &rel,
                       uint64_t val) const override;
   void relaxTlsGdToLe(uint8_t *loc, const Relocation &rel,
@@ -150,9 +148,9 @@ RelExpr X86::getRelExpr(RelType type, const Symbol &s,
   case R_386_GOTOFF:
     return R_GOTPLTREL;
   case R_386_TLS_LE:
-    return R_TLS;
+    return R_TPREL;
   case R_386_TLS_LE_32:
-    return R_NEG_TLS;
+    return R_TPREL_NEG;
   case R_386_NONE:
     return R_NONE;
   default:
@@ -162,8 +160,7 @@ RelExpr X86::getRelExpr(RelType type, const Symbol &s,
   }
 }
 
-RelExpr X86::adjustRelaxExpr(RelType type, const uint8_t *data,
-                             RelExpr expr) const {
+RelExpr X86::adjustTlsExpr(RelType type, RelExpr expr) const {
   switch (expr) {
   default:
     return expr;
@@ -615,7 +612,7 @@ void RetpolineNoPic::writePlt(uint8_t *buf, const Symbol &sym,
   write32le(buf + 22, -off - 26);
 }
 
-TargetInfo *getX86TargetInfo() {
+TargetInfo *elf::getX86TargetInfo() {
   if (config->zRetpolineplt) {
     if (config->isPic) {
       static RetpolinePic t;
@@ -633,6 +630,3 @@ TargetInfo *getX86TargetInfo() {
   static X86 t;
   return &t;
 }
-
-} // namespace elf
-} // namespace lld

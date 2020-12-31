@@ -12,8 +12,11 @@
 #ifndef FORTRAN_COMMON_UINT128_H_
 #define FORTRAN_COMMON_UINT128_H_
 
+// Define AVOID_NATIVE_UINT128_T to force the use of UnsignedInt128 below
+// instead of the C++ compiler's native 128-bit unsigned integer type, if
+// it has one.
 #ifndef AVOID_NATIVE_UINT128_T
-#define AVOID_NATIVE_UINT128_T 1 // always use this code for now for testing
+#define AVOID_NATIVE_UINT128_T 0
 #endif
 
 #include "leading-zero-bit-count.h"
@@ -50,6 +53,7 @@ public:
   constexpr bool operator!() const { return !low_ && !high_; }
   constexpr explicit operator bool() const { return low_ || high_; }
   constexpr explicit operator std::uint64_t() const { return low_; }
+  constexpr explicit operator std::int64_t() const { return low_; }
   constexpr explicit operator int() const { return static_cast<int>(low_); }
 
   constexpr std::uint64_t high() const { return high_; }

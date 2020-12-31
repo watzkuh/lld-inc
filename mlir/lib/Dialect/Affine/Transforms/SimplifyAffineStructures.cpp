@@ -6,14 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements a pass to simplify affine structures.
+// This file implements a pass to simplify affine structures in operations.
 //
 //===----------------------------------------------------------------------===//
 
 #include "PassDetail.h"
 #include "mlir/Analysis/Utils.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/IR/IntegerSet.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Utils.h"
 
 #define DEBUG_TYPE "simplify-affine-structure"
@@ -77,21 +79,22 @@ mlir::createSimplifyAffineStructuresPass() {
 void SimplifyAffineStructures::runOnFunction() {
   auto func = getFunction();
   simplifiedAttributes.clear();
-  func.walk([&](Operation *opInst) {
-    for (auto attr : opInst->getAttrs()) {
+  OwningRewritePatternList patterns;
+  AffineForOp::getCanonicalizationPatterns(patterns, func.getContext());
+  AffineIfOp::getCanonicalizationPatterns(patterns, func.getContext());
+  AffineApplyOp::getCanonicalizationPatterns(patterns, func.getContext());
+  FrozenRewritePatternList frozenPatterns(std::move(patterns));
+  func.walk([&](Operation *op) {
+    for (auto attr : op->getAttrs()) {
       if (auto mapAttr = attr.second.dyn_cast<AffineMapAttr>())
-        simplifyAndUpdateAttribute(opInst, attr.first, mapAttr);
+        simplifyAndUpdateAttribute(op, attr.first, mapAttr);
       else if (auto setAttr = attr.second.dyn_cast<IntegerSetAttr>())
-        simplifyAndUpdateAttribute(opInst, attr.first, setAttr);
+        simplifyAndUpdateAttribute(op, attr.first, setAttr);
     }
-  });
 
-  // Turn memrefs' non-identity layouts maps into ones with identity. Collect
-  // alloc ops first and then process since normalizeMemRef replaces/erases ops
-  // during memref rewriting.
-  SmallVector<AllocOp, 4> allocOps;
-  func.walk([&](AllocOp op) { allocOps.push_back(op); });
-  for (auto allocOp : allocOps) {
-    normalizeMemRef(allocOp);
-  }
+    // The simplification of the attribute will likely simplify the op. Try to
+    // fold / apply canonicalization patterns when we have affine dialect ops.
+    if (isa<AffineForOp, AffineIfOp, AffineApplyOp>(op))
+      applyOpPatternsAndFold(op, frozenPatterns);
+  });
 }

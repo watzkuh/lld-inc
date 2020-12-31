@@ -20,7 +20,6 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/IR/Attributes.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -128,7 +127,7 @@ public:
                                 const CallBase &Call,
                                 unsigned FixedArgs = ~0U) {
       RetTy = ResultTy;
-      Callee = Call.getCalledValue();
+      Callee = Call.getCalledOperand();
       Symbol = Target;
 
       IsInReg = Call.hasRetAttr(Attribute::InReg);
@@ -511,18 +510,6 @@ protected:
                    unsigned NumArgs);
   bool lowerCallTo(CallLoweringInfo &CLI);
 
-  bool isCommutativeIntrinsic(IntrinsicInst const *II) {
-    switch (II->getIntrinsicID()) {
-    case Intrinsic::sadd_with_overflow:
-    case Intrinsic::uadd_with_overflow:
-    case Intrinsic::smul_with_overflow:
-    case Intrinsic::umul_with_overflow:
-      return true;
-    default:
-      return false;
-    }
-  }
-
   bool lowerCall(const CallInst *I);
   /// Select and emit code for a binary operator instruction, which has
   /// an opcode which directly corresponds to the given ISD opcode.
@@ -537,7 +524,6 @@ protected:
   bool selectFreeze(const User *I);
   bool selectCast(const User *I, unsigned Opcode);
   bool selectExtractValue(const User *U);
-  bool selectInsertValue(const User *I);
   bool selectXRayCustomEvent(const CallInst *II);
   bool selectXRayTypedEvent(const CallInst *II);
 

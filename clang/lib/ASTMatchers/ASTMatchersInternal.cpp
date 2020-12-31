@@ -29,6 +29,8 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/Regex.h"
+#include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -47,26 +49,54 @@ AST_MATCHER_P(ObjCMessageExpr, hasAnySelectorMatcher, std::vector<std::string>,
 
 namespace internal {
 
-bool NotUnaryOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
-                      BoundNodesTreeBuilder *Builder,
-                      ArrayRef<DynTypedMatcher> InnerMatchers);
+static bool notUnaryOperator(const DynTypedNode &DynNode,
+                             ASTMatchFinder *Finder,
+                             BoundNodesTreeBuilder *Builder,
+                             ArrayRef<DynTypedMatcher> InnerMatchers);
 
-bool AllOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
-                           BoundNodesTreeBuilder *Builder,
-                           ArrayRef<DynTypedMatcher> InnerMatchers);
+static bool allOfVariadicOperator(const DynTypedNode &DynNode,
+                                  ASTMatchFinder *Finder,
+                                  BoundNodesTreeBuilder *Builder,
+                                  ArrayRef<DynTypedMatcher> InnerMatchers);
 
-bool EachOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
-                            BoundNodesTreeBuilder *Builder,
-                            ArrayRef<DynTypedMatcher> InnerMatchers);
+static bool eachOfVariadicOperator(const DynTypedNode &DynNode,
+                                   ASTMatchFinder *Finder,
+                                   BoundNodesTreeBuilder *Builder,
+                                   ArrayRef<DynTypedMatcher> InnerMatchers);
 
-bool AnyOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
-                           BoundNodesTreeBuilder *Builder,
-                           ArrayRef<DynTypedMatcher> InnerMatchers);
+static bool anyOfVariadicOperator(const DynTypedNode &DynNode,
+                                  ASTMatchFinder *Finder,
+                                  BoundNodesTreeBuilder *Builder,
+                                  ArrayRef<DynTypedMatcher> InnerMatchers);
 
-bool OptionallyVariadicOperator(const DynTypedNode &DynNode,
-                                ASTMatchFinder *Finder,
-                                BoundNodesTreeBuilder *Builder,
-                                ArrayRef<DynTypedMatcher> InnerMatchers);
+static bool optionallyVariadicOperator(const DynTypedNode &DynNode,
+                                       ASTMatchFinder *Finder,
+                                       BoundNodesTreeBuilder *Builder,
+                                       ArrayRef<DynTypedMatcher> InnerMatchers);
+
+bool matchesAnyBase(const CXXRecordDecl &Node,
+                    const Matcher<CXXBaseSpecifier> &BaseSpecMatcher,
+                    ASTMatchFinder *Finder, BoundNodesTreeBuilder *Builder) {
+  if (!Node.hasDefinition())
+    return false;
+
+  CXXBasePaths Paths;
+  Paths.setOrigin(&Node);
+
+  const auto basePredicate =
+      [Finder, Builder, &BaseSpecMatcher](const CXXBaseSpecifier *BaseSpec,
+                                          CXXBasePath &IgnoredParam) {
+        BoundNodesTreeBuilder Result(*Builder);
+        if (BaseSpecMatcher.matches(*BaseSpec, Finder, Builder)) {
+          *Builder = std::move(Result);
+          return true;
+        }
+        return false;
+      };
+
+  return Node.lookupInBases(basePredicate, Paths,
+                            /*LookupInDependent =*/true);
+}
 
 void BoundNodesTreeBuilder::visitMatches(Visitor *ResultVisitor) {
   if (Bindings.empty())
@@ -120,15 +150,9 @@ private:
 };
 
 /// A matcher that always returns true.
-///
-/// We only ever need one instance of this matcher, so we create a global one
-/// and reuse it to reduce the overhead of the matcher and increase the chance
-/// of cache hits.
 class TrueMatcherImpl : public DynMatcherInterface {
 public:
-  TrueMatcherImpl() {
-    Retain(); // Reference count will never become zero.
-  }
+  TrueMatcherImpl() = default;
 
   bool dynMatches(const DynTypedNode &, ASTMatchFinder *,
                   BoundNodesTreeBuilder *) const override {
@@ -136,9 +160,37 @@ public:
   }
 };
 
+/// A matcher that specifies a particular \c TraversalKind.
+///
+/// The kind provided to the constructor overrides any kind that may be
+/// specified by the `InnerMatcher`.
+class DynTraversalMatcherImpl : public DynMatcherInterface {
+public:
+  explicit DynTraversalMatcherImpl(
+      clang::TraversalKind TK,
+      IntrusiveRefCntPtr<DynMatcherInterface> InnerMatcher)
+      : TK(TK), InnerMatcher(std::move(InnerMatcher)) {}
+
+  bool dynMatches(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
+                  BoundNodesTreeBuilder *Builder) const override {
+    return this->InnerMatcher->dynMatches(DynNode, Finder, Builder);
+  }
+
+  llvm::Optional<clang::TraversalKind> TraversalKind() const override {
+    return TK;
+  }
+
+private:
+  clang::TraversalKind TK;
+  IntrusiveRefCntPtr<DynMatcherInterface> InnerMatcher;
+};
+
 } // namespace
 
-static llvm::ManagedStatic<TrueMatcherImpl> TrueMatcherInstance;
+bool ASTMatchFinder::isTraversalIgnoringImplicitNodes() const {
+  return getASTContext().getParentMapContext().getTraversalKind() ==
+         TK_IgnoreUnlessSpelledInSource;
+}
 
 DynTypedMatcher
 DynTypedMatcher::constructVariadic(DynTypedMatcher::VariadicOperator Op,
@@ -169,21 +221,21 @@ DynTypedMatcher::constructVariadic(DynTypedMatcher::VariadicOperator Op,
     }
     return DynTypedMatcher(
         SupportedKind, RestrictKind,
-        new VariadicMatcher<AllOfVariadicOperator>(std::move(InnerMatchers)));
+        new VariadicMatcher<allOfVariadicOperator>(std::move(InnerMatchers)));
 
   case VO_AnyOf:
     return DynTypedMatcher(
         SupportedKind, RestrictKind,
-        new VariadicMatcher<AnyOfVariadicOperator>(std::move(InnerMatchers)));
+        new VariadicMatcher<anyOfVariadicOperator>(std::move(InnerMatchers)));
 
   case VO_EachOf:
     return DynTypedMatcher(
         SupportedKind, RestrictKind,
-        new VariadicMatcher<EachOfVariadicOperator>(std::move(InnerMatchers)));
+        new VariadicMatcher<eachOfVariadicOperator>(std::move(InnerMatchers)));
 
   case VO_Optionally:
     return DynTypedMatcher(SupportedKind, RestrictKind,
-                           new VariadicMatcher<OptionallyVariadicOperator>(
+                           new VariadicMatcher<optionallyVariadicOperator>(
                                std::move(InnerMatchers)));
 
   case VO_UnaryNot:
@@ -191,7 +243,7 @@ DynTypedMatcher::constructVariadic(DynTypedMatcher::VariadicOperator Op,
     // vector.
     return DynTypedMatcher(
         SupportedKind, RestrictKind,
-        new VariadicMatcher<NotUnaryOperator>(std::move(InnerMatchers)));
+        new VariadicMatcher<notUnaryOperator>(std::move(InnerMatchers)));
   }
   llvm_unreachable("Invalid Op value.");
 }
@@ -204,8 +256,20 @@ DynTypedMatcher::constructRestrictedWrapper(const DynTypedMatcher &InnerMatcher,
   return Copy;
 }
 
+DynTypedMatcher DynTypedMatcher::withTraversalKind(TraversalKind TK) {
+  auto Copy = *this;
+  Copy.Implementation =
+      new DynTraversalMatcherImpl(TK, std::move(Copy.Implementation));
+  return Copy;
+}
+
 DynTypedMatcher DynTypedMatcher::trueMatcher(ASTNodeKind NodeKind) {
-  return DynTypedMatcher(NodeKind, NodeKind, &*TrueMatcherInstance);
+  // We only ever need one instance of TrueMatcherImpl, so we create a static
+  // instance and reuse it to reduce the overhead of the matcher and increase
+  // the chance of cache hits.
+  static const llvm::IntrusiveRefCntPtr<TrueMatcherImpl> Instance =
+      new TrueMatcherImpl();
+  return DynTypedMatcher(NodeKind, NodeKind, Instance);
 }
 
 bool DynTypedMatcher::canMatchNodesOfKind(ASTNodeKind Kind) const {
@@ -224,6 +288,10 @@ bool DynTypedMatcher::matches(const DynTypedNode &DynNode,
                               BoundNodesTreeBuilder *Builder) const {
   TraversalKindScope RAII(Finder->getASTContext(),
                           Implementation->TraversalKind());
+
+  if (Finder->isTraversalIgnoringImplicitNodes() &&
+      Finder->IsMatchingInASTNodeNotSpelledInSource())
+    return false;
 
   auto N =
       Finder->getASTContext().getParentMapContext().traverseIgnored(DynNode);
@@ -244,6 +312,10 @@ bool DynTypedMatcher::matchesNoKindCheck(const DynTypedNode &DynNode,
                                          BoundNodesTreeBuilder *Builder) const {
   TraversalKindScope raii(Finder->getASTContext(),
                           Implementation->TraversalKind());
+
+  if (Finder->isTraversalIgnoringImplicitNodes() &&
+      Finder->IsMatchingInASTNodeNotSpelledInSource())
+    return false;
 
   auto N =
       Finder->getASTContext().getParentMapContext().traverseIgnored(DynNode);
@@ -282,9 +354,10 @@ void BoundNodesTreeBuilder::addMatch(const BoundNodesTreeBuilder &Other) {
   Bindings.append(Other.Bindings.begin(), Other.Bindings.end());
 }
 
-bool NotUnaryOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
-                      BoundNodesTreeBuilder *Builder,
-                      ArrayRef<DynTypedMatcher> InnerMatchers) {
+static bool notUnaryOperator(const DynTypedNode &DynNode,
+                             ASTMatchFinder *Finder,
+                             BoundNodesTreeBuilder *Builder,
+                             ArrayRef<DynTypedMatcher> InnerMatchers) {
   if (InnerMatchers.size() != 1)
     return false;
 
@@ -302,9 +375,10 @@ bool NotUnaryOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
   return !InnerMatchers[0].matches(DynNode, Finder, &Discard);
 }
 
-bool AllOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
-                           BoundNodesTreeBuilder *Builder,
-                           ArrayRef<DynTypedMatcher> InnerMatchers) {
+static bool allOfVariadicOperator(const DynTypedNode &DynNode,
+                                  ASTMatchFinder *Finder,
+                                  BoundNodesTreeBuilder *Builder,
+                                  ArrayRef<DynTypedMatcher> InnerMatchers) {
   // allOf leads to one matcher for each alternative in the first
   // matcher combined with each alternative in the second matcher.
   // Thus, we can reuse the same Builder.
@@ -313,9 +387,10 @@ bool AllOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
   });
 }
 
-bool EachOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
-                            BoundNodesTreeBuilder *Builder,
-                            ArrayRef<DynTypedMatcher> InnerMatchers) {
+static bool eachOfVariadicOperator(const DynTypedNode &DynNode,
+                                   ASTMatchFinder *Finder,
+                                   BoundNodesTreeBuilder *Builder,
+                                   ArrayRef<DynTypedMatcher> InnerMatchers) {
   BoundNodesTreeBuilder Result;
   bool Matched = false;
   for (const DynTypedMatcher &InnerMatcher : InnerMatchers) {
@@ -329,9 +404,10 @@ bool EachOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
   return Matched;
 }
 
-bool AnyOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
-                           BoundNodesTreeBuilder *Builder,
-                           ArrayRef<DynTypedMatcher> InnerMatchers) {
+static bool anyOfVariadicOperator(const DynTypedNode &DynNode,
+                                  ASTMatchFinder *Finder,
+                                  BoundNodesTreeBuilder *Builder,
+                                  ArrayRef<DynTypedMatcher> InnerMatchers) {
   for (const DynTypedMatcher &InnerMatcher : InnerMatchers) {
     BoundNodesTreeBuilder Result = *Builder;
     if (InnerMatcher.matches(DynNode, Finder, &Result)) {
@@ -342,10 +418,10 @@ bool AnyOfVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
   return false;
 }
 
-bool OptionallyVariadicOperator(const DynTypedNode &DynNode,
-                                ASTMatchFinder *Finder,
-                                BoundNodesTreeBuilder *Builder,
-                                ArrayRef<DynTypedMatcher> InnerMatchers) {
+static bool
+optionallyVariadicOperator(const DynTypedNode &DynNode, ASTMatchFinder *Finder,
+                           BoundNodesTreeBuilder *Builder,
+                           ArrayRef<DynTypedMatcher> InnerMatchers) {
   if (InnerMatchers.size() != 1)
     return false;
 
@@ -559,13 +635,10 @@ bool HasNameMatcher::matchesNodeFullSlow(const NamedDecl &Node) const {
     llvm::SmallString<128> NodeName = StringRef("::");
     llvm::raw_svector_ostream OS(NodeName);
 
-    if (SkipUnwritten) {
-      PrintingPolicy Policy = Node.getASTContext().getPrintingPolicy();
-      Policy.SuppressUnwrittenScope = true;
-      Node.printQualifiedName(OS, Policy);
-    } else {
-      Node.printQualifiedName(OS);
-    }
+    PrintingPolicy Policy = Node.getASTContext().getPrintingPolicy();
+    Policy.SuppressUnwrittenScope = SkipUnwritten;
+    Policy.SuppressInlineNamespace = SkipUnwritten;
+    Node.printQualifiedName(OS, Policy);
 
     const StringRef FullName = OS.str();
 
@@ -625,6 +698,19 @@ getExpansionLocOfMacro(StringRef MacroName, SourceLocation Loc,
   return llvm::None;
 }
 
+std::shared_ptr<llvm::Regex> createAndVerifyRegex(StringRef Regex,
+                                                  llvm::Regex::RegexFlags Flags,
+                                                  StringRef MatcherID) {
+  assert(!Regex.empty() && "Empty regex string");
+  auto SharedRegex = std::make_shared<llvm::Regex>(Regex, Flags);
+  std::string Error;
+  if (!SharedRegex->isValid(Error)) {
+    llvm::WithColor::error()
+        << "building matcher '" << MatcherID << "': " << Error << "\n";
+    llvm::WithColor::note() << " input was '" << Regex << "'\n";
+  }
+  return SharedRegex;
+}
 } // end namespace internal
 
 const internal::VariadicDynCastAllOfMatcher<Stmt, ObjCAutoreleasePoolStmt>
@@ -638,6 +724,7 @@ const internal::VariadicDynCastAllOfMatcher<Decl, TypeAliasDecl> typeAliasDecl;
 const internal::VariadicDynCastAllOfMatcher<Decl, TypeAliasTemplateDecl>
     typeAliasTemplateDecl;
 const internal::VariadicAllOfMatcher<Decl> decl;
+const internal::VariadicAllOfMatcher<DecompositionDecl> decompositionDecl;
 const internal::VariadicDynCastAllOfMatcher<Decl, LinkageSpecDecl>
     linkageSpecDecl;
 const internal::VariadicDynCastAllOfMatcher<Decl, NamedDecl> namedDecl;
@@ -662,11 +749,15 @@ const internal::VariadicDynCastAllOfMatcher<Decl, AccessSpecDecl>
     accessSpecDecl;
 const internal::VariadicAllOfMatcher<CXXCtorInitializer> cxxCtorInitializer;
 const internal::VariadicAllOfMatcher<TemplateArgument> templateArgument;
+const internal::VariadicAllOfMatcher<TemplateArgumentLoc> templateArgumentLoc;
 const internal::VariadicAllOfMatcher<TemplateName> templateName;
 const internal::VariadicDynCastAllOfMatcher<Decl, NonTypeTemplateParmDecl>
     nonTypeTemplateParmDecl;
 const internal::VariadicDynCastAllOfMatcher<Decl, TemplateTypeParmDecl>
     templateTypeParmDecl;
+const internal::VariadicDynCastAllOfMatcher<Decl, TemplateTemplateParmDecl>
+    templateTemplateParmDecl;
+
 const internal::VariadicAllOfMatcher<QualType> qualType;
 const internal::VariadicAllOfMatcher<Type> type;
 const internal::VariadicAllOfMatcher<TypeLoc> typeLoc;
@@ -804,6 +895,8 @@ const internal::VariadicDynCastAllOfMatcher<Stmt, IntegerLiteral>
     integerLiteral;
 const internal::VariadicDynCastAllOfMatcher<Stmt, FloatingLiteral> floatLiteral;
 const internal::VariadicDynCastAllOfMatcher<Stmt, ImaginaryLiteral> imaginaryLiteral;
+const internal::VariadicDynCastAllOfMatcher<Stmt, FixedPointLiteral>
+    fixedPointLiteral;
 const internal::VariadicDynCastAllOfMatcher<Stmt, UserDefinedLiteral>
     userDefinedLiteral;
 const internal::VariadicDynCastAllOfMatcher<Stmt, CompoundLiteralExpr>
@@ -812,6 +905,8 @@ const internal::VariadicDynCastAllOfMatcher<Stmt, CXXNullPtrLiteralExpr>
     cxxNullPtrLiteralExpr;
 const internal::VariadicDynCastAllOfMatcher<Stmt, ChooseExpr> chooseExpr;
 const internal::VariadicDynCastAllOfMatcher<Stmt, GNUNullExpr> gnuNullExpr;
+const internal::VariadicDynCastAllOfMatcher<Stmt, GenericSelectionExpr>
+    genericSelectionExpr;
 const internal::VariadicDynCastAllOfMatcher<Stmt, AtomicExpr> atomicExpr;
 const internal::VariadicDynCastAllOfMatcher<Stmt, StmtExpr> stmtExpr;
 const internal::VariadicDynCastAllOfMatcher<Stmt, BinaryOperator>

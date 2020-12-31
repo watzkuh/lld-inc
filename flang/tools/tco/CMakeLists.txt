@@ -1,8 +1,7 @@
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 
 set(LIBS
-  FIRDialect
-  FIRSupport
+  FIROptimizer
   ${dialect_libs}
   MLIRIR
   MLIRLLVMIR
@@ -11,7 +10,7 @@ set(LIBS
   MLIRTransforms
   MLIRAffineToStandard
   MLIRAnalysis
-  MLIRLoopToStandard
+  MLIRSCFToStandard
   MLIREDSC
   MLIRParser
   MLIRStandardToLLVM
@@ -19,6 +18,5 @@ set(LIBS
   MLIRVectorToLLVM
 )
 
-add_llvm_tool(tco tco.cpp)
-llvm_update_compile_flags(tco)
+add_flang_tool(tco tco.cpp)
 target_link_libraries(tco PRIVATE ${LIBS})

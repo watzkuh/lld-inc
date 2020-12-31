@@ -1,4 +1,4 @@
-add_mlir_dialect_library(MLIRLinalgOps
+add_mlir_dialect_library(MLIRLinalg
   LinalgOps.cpp
   LinalgTypes.cpp
 
@@ -6,16 +6,15 @@ add_mlir_dialect_library(MLIRLinalgOps
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Linalg
 
   DEPENDS
-  intrinsics_gen
-  )
-add_dependencies(MLIRLinalgOps
   MLIRLinalgOpsIncGen
   MLIRLinalgStructuredOpsIncGen
   MLIRLinalgStructuredOpsInterfaceIncGen
-  )
-target_link_libraries(MLIRLinalgOps
-  PUBLIC
+
+  LINK_LIBS PUBLIC
+  MLIRAffine
   MLIRIR
-  MLIRSideEffects
-  MLIRStandardOps
+  MLIRSideEffectInterfaces
+  MLIRViewLikeInterface
+  MLIRStandard
+  MLIRTensor
   )

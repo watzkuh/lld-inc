@@ -1,4 +1,5 @@
-# RUN: gdb -q -batch -n -iex 'source %llvm_src_root/utils/gdb-scripts/prettyprinters.py' -x %s %llvm_tools_dir/check-gdb-llvm-support | FileCheck %s --dump-input-on-failure
+# RUN: gdb -q -batch -n -iex 'source %llvm_src_root/utils/gdb-scripts/prettyprinters.py' -x %s %llvm_tools_dir/check-gdb-llvm-support | FileCheck %s
+# REQUIRES: debug-info
 
 break main
 run
@@ -38,6 +39,9 @@ p StringRef
 
 # CHECK: "\"foo\"\"bar\""
 p Twine
+
+# CHECK: llvm::StringMap with 2 elements = {["foo"] = 123, ["bar"] = 456}
+p StringMap
 
 # CHECK: {pointer = 0xabc, value = 1}
 p PointerIntPair

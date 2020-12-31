@@ -18,11 +18,13 @@
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/IR/AffineValueMap.h"
-#include "mlir/Dialect/LoopOps/LoopOps.h"
+#include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BlockAndValueMapping.h"
-#include "mlir/IR/Function.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IntegerSet.h"
+#include "mlir/Support/MathExtras.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "mlir/Transforms/Utils.h"
 #include "llvm/ADT/DenseMap.h"
@@ -102,7 +104,8 @@ static void getCleanupLoopLowerBound(AffineForOp forOp, unsigned unrollFactor,
   operands.clear();
   operands.push_back(lb);
   operands.append(bumpValues.begin(), bumpValues.end());
-  map = AffineMap::get(1 + tripCountMap.getNumResults(), 0, newUbExprs);
+  map = AffineMap::get(1 + tripCountMap.getNumResults(), 0, newUbExprs,
+                       b.getContext());
   // Simplify the map + operands.
   fullyComposeAffineMapAndOperands(&map, &operands);
   map = simplifyAffineMap(map);
@@ -116,9 +119,37 @@ static void getCleanupLoopLowerBound(AffineForOp forOp, unsigned unrollFactor,
     lb.erase();
 }
 
+// Build the IR that performs ceil division of a positive value by a constant:
+//    ceildiv(a, B) = divis(a + (B-1), B)
+// where divis is rounding-to-zero division.
+static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
+                             int64_t divisor) {
+  assert(divisor > 0 && "expected positive divisor");
+  assert(dividend.getType().isIndex() && "expected index-typed value");
+
+  Value divisorMinusOneCst = builder.create<ConstantIndexOp>(loc, divisor - 1);
+  Value divisorCst = builder.create<ConstantIndexOp>(loc, divisor);
+  Value sum = builder.create<AddIOp>(loc, dividend, divisorMinusOneCst);
+  return builder.create<SignedDivIOp>(loc, sum, divisorCst);
+}
+
+// Build the IR that performs ceil division of a positive value by another
+// positive value:
+//    ceildiv(a, b) = divis(a + (b - 1), b)
+// where divis is rounding-to-zero division.
+static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
+                             Value divisor) {
+  assert(dividend.getType().isIndex() && "expected index-typed value");
+
+  Value cstOne = builder.create<ConstantIndexOp>(loc, 1);
+  Value divisorMinusOne = builder.create<SubIOp>(loc, divisor, cstOne);
+  Value sum = builder.create<AddIOp>(loc, dividend, divisorMinusOne);
+  return builder.create<SignedDivIOp>(loc, sum, divisor);
+}
+
 /// Promotes the loop body of a forOp to its containing block if the forOp
 /// was known to have a single iteration.
-// TODO(bondhugula): extend this for arbitrary affine bounds.
+// TODO: extend this for arbitrary affine bounds.
 LogicalResult mlir::promoteIfSingleIteration(AffineForOp forOp) {
   Optional<uint64_t> tripCount = getConstantTripCount(forOp);
   if (!tripCount || tripCount.getValue() != 1)
@@ -129,10 +160,10 @@ LogicalResult mlir::promoteIfSingleIteration(AffineForOp forOp) {
 
   // Replaces all IV uses to its single iteration value.
   auto iv = forOp.getInductionVar();
-  auto *parentBlock = forOp.getOperation()->getBlock();
+  auto *parentBlock = forOp->getBlock();
   if (!iv.use_empty()) {
     if (forOp.hasConstantLowerBound()) {
-      OpBuilder topBuilder(forOp.getParentOfType<FuncOp>().getBody());
+      OpBuilder topBuilder(forOp->getParentOfType<FuncOp>().getBody());
       auto constOp = topBuilder.create<ConstantIndexOp>(
           forOp.getLoc(), forOp.getConstantLowerBound());
       iv.replaceAllUsesWith(constOp);
@@ -159,11 +190,54 @@ LogicalResult mlir::promoteIfSingleIteration(AffineForOp forOp) {
   return success();
 }
 
+/// Promotes the loop body of a forOp to its containing block if the forOp
+/// it can be determined that the loop has a single iteration.
+LogicalResult mlir::promoteIfSingleIteration(scf::ForOp forOp) {
+  auto lbCstOp = forOp.lowerBound().getDefiningOp<ConstantIndexOp>();
+  auto ubCstOp = forOp.upperBound().getDefiningOp<ConstantIndexOp>();
+  auto stepCstOp = forOp.step().getDefiningOp<ConstantIndexOp>();
+  if (!lbCstOp || !ubCstOp || !stepCstOp || lbCstOp.getValue() < 0 ||
+      ubCstOp.getValue() < 0 || stepCstOp.getValue() < 0)
+    return failure();
+  int64_t tripCount = mlir::ceilDiv(ubCstOp.getValue() - lbCstOp.getValue(),
+                                    stepCstOp.getValue());
+  if (tripCount != 1)
+    return failure();
+  auto iv = forOp.getInductionVar();
+  iv.replaceAllUsesWith(lbCstOp);
+
+  // Replace uses of iterArgs with iterOperands.
+  auto iterOperands = forOp.getIterOperands();
+  auto iterArgs = forOp.getRegionIterArgs();
+  for (auto e : llvm::zip(iterOperands, iterArgs))
+    std::get<1>(e).replaceAllUsesWith(std::get<0>(e));
+
+  // Replace uses of loop results with the values yielded by the loop.
+  auto outerResults = forOp.getResults();
+  auto innerResults = forOp.getBody()->getTerminator()->getOperands();
+  for (auto e : llvm::zip(outerResults, innerResults))
+    std::get<0>(e).replaceAllUsesWith(std::get<1>(e));
+
+  // Move the loop body operations, except for its terminator, to the loop's
+  // containing block.
+  auto *parentBlock = forOp->getBlock();
+  forOp.getBody()->getTerminator()->erase();
+  parentBlock->getOperations().splice(Block::iterator(forOp),
+                                      forOp.getBody()->getOperations());
+  forOp.erase();
+  return success();
+}
+
 /// Promotes all single iteration 'for' ops in `f`, i.e., moves
 /// their body into the containing Block.
 void mlir::promoteSingleIterationLoops(FuncOp f) {
   // Gathers all innermost loops through a post order pruned walk.
-  f.walk([](AffineForOp forOp) { promoteIfSingleIteration(forOp); });
+  f.walk([](Operation *op) {
+    if (auto forOp = dyn_cast<AffineForOp>(op))
+      promoteIfSingleIteration(forOp);
+    else if (auto forOp = dyn_cast<scf::ForOp>(op))
+      promoteIfSingleIteration(forOp);
+  });
 }
 
 /// Generates an affine.for op with the specified lower and upper bounds
@@ -190,7 +264,7 @@ static AffineForOp generateShiftedLoop(
 
   BlockAndValueMapping operandMap;
 
-  OpBuilder bodyBuilder = loopChunk.getBodyBuilder();
+  auto bodyBuilder = OpBuilder::atBlockTerminator(loopChunk.getBody());
   for (auto it = opGroupQueue.begin() + offset, e = opGroupQueue.end(); it != e;
        ++it) {
     uint64_t shift = it->first;
@@ -312,9 +386,19 @@ LogicalResult mlir::affineForOpBodySkew(AffineForOp forOp,
                                   opGroupQueue, /*offset=*/0, forOp, b);
         lbShift = d * step;
       }
-      if (!prologue && res)
-        prologue = res;
-      epilogue = res;
+
+      if (res) {
+        // Simplify/canonicalize the affine.for.
+        OwningRewritePatternList patterns;
+        AffineForOp::getCanonicalizationPatterns(patterns, res.getContext());
+        bool erased;
+        applyOpPatternsAndFold(res, std::move(patterns), &erased);
+
+        if (!erased && !prologue)
+          prologue = res;
+        if (!erased)
+          epilogue = res;
+      }
     } else {
       // Start of first interval.
       lbShift = d * step;
@@ -346,10 +430,559 @@ LogicalResult mlir::affineForOpBodySkew(AffineForOp forOp,
   return success();
 }
 
-// Collect perfectly nested loops starting from `rootForOps`.  Loops are
-// perfectly nested if each loop is the first and only non-terminator operation
-// in the parent loop.  Collect at most `maxLoops` loops and append them to
-// `forOps`.
+/// Checks the legality of tiling of a hyper-rectangular loop nest by simply
+/// checking if there is a 'negative' dependence in the memrefs present in
+/// the loop nest. If yes then tiling is invalid.
+static bool
+checkTilingLegalityImpl(MutableArrayRef<mlir::AffineForOp> origLoops) {
+  assert(!origLoops.empty() && "no original loops provided");
+
+  // We first find out all dependences we intend to check.
+  SmallVector<Operation *, 8> loadAndStoreOps;
+  origLoops[0]->walk([&](Operation *op) {
+    if (isa<AffineReadOpInterface, AffineWriteOpInterface>(op))
+      loadAndStoreOps.push_back(op);
+  });
+
+  unsigned numOps = loadAndStoreOps.size();
+  unsigned numLoops = origLoops.size();
+  FlatAffineConstraints dependenceConstraints;
+  for (unsigned d = 1; d <= numLoops + 1; ++d) {
+    for (unsigned i = 0; i < numOps; ++i) {
+      Operation *srcOp = loadAndStoreOps[i];
+      MemRefAccess srcAccess(srcOp);
+      for (unsigned j = 0; j < numOps; ++j) {
+        Operation *dstOp = loadAndStoreOps[j];
+        MemRefAccess dstAccess(dstOp);
+
+        SmallVector<DependenceComponent, 2> depComps;
+        dependenceConstraints.reset();
+        DependenceResult result = checkMemrefAccessDependence(
+            srcAccess, dstAccess, d, &dependenceConstraints, &depComps);
+
+        // Skip if there is no dependence in this case.
+        if (!hasDependence(result))
+          continue;
+
+        // Check whether there is any negative direction vector in the
+        // dependence components found above, which means that dependence is
+        // violated by the default hyper-rect tiling method.
+        LLVM_DEBUG(llvm::dbgs() << "Checking whether tiling legality violated "
+                                   "for dependence at depth: "
+                                << Twine(d) << " between:\n";);
+        LLVM_DEBUG(srcAccess.opInst->dump(););
+        LLVM_DEBUG(dstAccess.opInst->dump(););
+        for (unsigned k = 0, e = depComps.size(); k < e; k++) {
+          DependenceComponent depComp = depComps[k];
+          if (depComp.lb.hasValue() && depComp.ub.hasValue() &&
+              depComp.lb.getValue() < depComp.ub.getValue() &&
+              depComp.ub.getValue() < 0) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "Dependence component lb = "
+                       << Twine(depComp.lb.getValue())
+                       << " ub = " << Twine(depComp.ub.getValue())
+                       << " is negative  at depth: " << Twine(d)
+                       << " and thus violates the legality rule.\n");
+            return false;
+          }
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+/// Checks whether hyper-rectangular loop tiling of the nest
+/// represented by `origLoops` is valid. The validity condition is from Irigoin
+/// and Triolet, which states that two tiles cannot depend on each other. We
+/// simplify such condition to just checking whether there is any negative
+/// dependence direction, since we have the prior knowledge that the tiling
+/// results will be hyper-rectangles, which are scheduled in the
+/// lexicographically increasing order on the vector of loop indices. This
+/// function will return failure when any dependence component is negative along
+/// any of `origLoops`.
+LogicalResult
+checkTilingLegality(MutableArrayRef<mlir::AffineForOp> origLoops) {
+  return success(checkTilingLegalityImpl(origLoops));
+}
+
+/// Check if the input data is valid and wheter tiled code will be legal or not.
+template <typename t>
+void performPreTilingChecks(MutableArrayRef<AffineForOp> input,
+                            ArrayRef<t> tileSizes) {
+  // Check if the supplied for op's are all successively nested.
+  assert(!input.empty() && "no loops in input band");
+  assert(input.size() == tileSizes.size() && "Too few/many tile sizes");
+
+  assert(isPerfectlyNested(input) && "input loops not perfectly nested");
+
+  // Perform tiling legality test.
+  if (failed(checkTilingLegality(input)))
+    input[0].emitRemark("tiled code is illegal due to dependences");
+}
+
+/// Move the loop body of AffineForOp 'src' from 'src' into the specified
+/// location in destination's body, ignoring the terminator.
+static void moveLoopBodyImpl(AffineForOp src, AffineForOp dest,
+                             Block::iterator loc) {
+  auto &ops = src.getBody()->getOperations();
+  dest.getBody()->getOperations().splice(loc, ops, ops.begin(),
+                                         std::prev(ops.end()));
+}
+
+/// Move the loop body of AffineForOp 'src' from 'src' to the start of dest
+/// body.
+void moveLoopBody(AffineForOp src, AffineForOp dest) {
+  moveLoopBodyImpl(src, dest, dest.getBody()->begin());
+}
+
+/// Constructs tiled loop nest, without setting the loop bounds and move the
+/// body of the original loop nest to the tiled loop nest.
+void constructTiledLoopNest(MutableArrayRef<AffineForOp> origLoops,
+                            AffineForOp rootAffineForOp, unsigned width,
+                            MutableArrayRef<AffineForOp> tiledLoops) {
+  Location loc = rootAffineForOp.getLoc();
+
+  // The outermost among the loops as we add more..
+  Operation *topLoop = rootAffineForOp.getOperation();
+  AffineForOp innermostPointLoop;
+
+  // Add intra-tile (or point) loops.
+  for (unsigned i = 0; i < width; i++) {
+    OpBuilder b(topLoop);
+    // Loop bounds will be set later.
+    AffineForOp pointLoop = b.create<AffineForOp>(loc, 0, 0);
+    pointLoop.getBody()->getOperations().splice(
+        pointLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
+        topLoop);
+    tiledLoops[2 * width - 1 - i] = pointLoop;
+    topLoop = pointLoop.getOperation();
+    if (i == 0)
+      innermostPointLoop = pointLoop;
+  }
+
+  // Add tile space loops;
+  for (unsigned i = width; i < 2 * width; i++) {
+    OpBuilder b(topLoop);
+    // Loop bounds will be set later.
+    AffineForOp tileSpaceLoop = b.create<AffineForOp>(loc, 0, 0);
+    tileSpaceLoop.getBody()->getOperations().splice(
+        tileSpaceLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
+        topLoop);
+    tiledLoops[2 * width - i - 1] = tileSpaceLoop;
+    topLoop = tileSpaceLoop.getOperation();
+  }
+
+  // Move the loop body of the original nest to the new one.
+  moveLoopBody(origLoops.back(), innermostPointLoop);
+}
+
+/// Checks whether a loop nest is hyper-rectangular or not.
+LogicalResult checkIfHyperRectangular(MutableArrayRef<AffineForOp> input,
+                                      AffineForOp rootAffineForOp,
+                                      unsigned width) {
+  FlatAffineConstraints cst;
+  SmallVector<Operation *, 8> ops(input.begin(), input.end());
+  getIndexSet(ops, &cst);
+  if (!cst.isHyperRectangular(0, width)) {
+    rootAffineForOp.emitError("tiled code generation unimplemented for the "
+                              "non-hyperrectangular case");
+    return failure();
+  }
+  return success();
+}
+
+/// Set lower and upper bounds of intra-tile loops for parametric tiling.
+//  TODO: Handle non-constant lower bounds.
+static void setIntraTileBoundsParametric(OpBuilder &b, AffineForOp origLoop,
+                                         AffineForOp newInterTileLoop,
+                                         AffineForOp newIntraTileLoop,
+                                         Value tileSize) {
+  // The lower bound for the intra-tile loop is represented by an affine map
+  // as (%i, %t0)->((%i - %origlb) * %t0 + %origlb). Similarly, the upper bound
+  // for the intra-tile loop is represented by an affine map as (%i, %t0)->((%i
+  // - %origlb) * %t0) + (%t0 * %origLoopStep) + %origlb), where %i is loop IV
+  // of the corresponding inter-tile loop, %t0 is the corresponding tiling
+  // parameter, %origlb is lower bound and %origLoopStep is the loop step of the
+  // corresponding inter-tile loop.
+
+  assert(origLoop.hasConstantLowerBound() &&
+         "expected input loops to have constant lower bound.");
+
+  // Get lower bound of original loop as an affine expression.
+  AffineExpr origLowerBoundExpr;
+  origLowerBoundExpr =
+      b.getAffineConstantExpr(origLoop.getConstantLowerBound());
+
+  // Add dim operands from original lower/upper bound.
+  SmallVector<Value, 4> lbOperands, ubOperands;
+  AffineBound lb = origLoop.getLowerBound();
+  AffineBound ub = origLoop.getUpperBound();
+  lbOperands.reserve(lb.getNumOperands() + 2);
+  ubOperands.reserve(ub.getNumOperands() + 2);
+  AffineMap origLbMap = lb.getMap();
+  AffineMap origUbMap = ub.getMap();
+  for (unsigned j = 0, e = origLbMap.getNumDims(); j < e; ++j)
+    lbOperands.push_back(lb.getOperand(j));
+  for (unsigned j = 0, e = origUbMap.getNumDims(); j < e; ++j)
+    ubOperands.push_back(ub.getOperand(j));
+
+  // Add a new dim operand in lb/ubOperands corresponding to the origLoop
+  // IV.
+  lbOperands.push_back(newInterTileLoop.getInductionVar());
+  ubOperands.push_back(newInterTileLoop.getInductionVar());
+
+  // Get loop IV as an affine expression for lower/upper bound. Size of
+  // lb/ubOperands is guaranteed to be atleast one.
+  AffineExpr lbLoopIvExpr = b.getAffineDimExpr(lbOperands.size() - 1);
+  AffineExpr ubLoopIvExpr = b.getAffineDimExpr(ubOperands.size() - 1);
+
+  // Add symbol operands from original lower/upper bound.
+  for (unsigned j = 0, e = origLbMap.getNumSymbols(); j < e; ++j)
+    lbOperands.push_back(lb.getOperand(origLbMap.getNumDims() + j));
+  for (unsigned j = 0, e = origUbMap.getNumSymbols(); j < e; ++j)
+    ubOperands.push_back(ub.getOperand(origUbMap.getNumDims() + j));
+
+  // Add a new symbol operand which is the tile size for this loop.
+  lbOperands.push_back(tileSize);
+  ubOperands.push_back(tileSize);
+
+  SmallVector<AffineExpr, 4> lbBoundExprs;
+  SmallVector<AffineExpr, 4> ubBoundExprs;
+  lbBoundExprs.reserve(origLbMap.getNumResults());
+  ubBoundExprs.reserve(origUbMap.getNumResults());
+
+  // Get tiling parameter as an affine expression for lb/ub.
+  AffineExpr lbTileParameter = b.getAffineSymbolExpr(origLbMap.getNumSymbols());
+  AffineExpr ubTileParameter = b.getAffineSymbolExpr(origUbMap.getNumSymbols());
+
+  // Insert lb as inter-tile ((loop IV - origlb) * tilingParameter) + origlb.
+  lbBoundExprs.push_back(
+      ((lbLoopIvExpr - origLowerBoundExpr) * lbTileParameter) +
+      origLowerBoundExpr);
+
+  // Get the origLoopStep as an affine expression.
+  AffineExpr origLoopStep = b.getAffineConstantExpr(origLoop.getStep());
+
+  // Insert ub as inter-tile ((loop IV - origlb) * tilingParameter) +
+  // (tilingParameter * origLoopStep) + origlb.
+  ubBoundExprs.push_back(
+      ((ubLoopIvExpr - origLowerBoundExpr) * ubTileParameter) +
+      (ubTileParameter * origLoopStep) + origLowerBoundExpr);
+
+  ubBoundExprs.append(origUbMap.getResults().begin(),
+                      origUbMap.getResults().end());
+
+  AffineMap lbMap =
+      AffineMap::get(origLbMap.getNumDims() + 1, origLbMap.getNumSymbols() + 1,
+                     lbBoundExprs, b.getContext());
+  newIntraTileLoop.setLowerBound(lbOperands, lbMap);
+
+  AffineMap ubMap =
+      AffineMap::get(origUbMap.getNumDims() + 1, origUbMap.getNumSymbols() + 1,
+                     ubBoundExprs, b.getContext());
+  newIntraTileLoop.setUpperBound(ubOperands, ubMap);
+
+  // Original loop step must be preserved.
+  newIntraTileLoop.setStep(origLoop.getStep());
+}
+
+/// Set lower and upper bounds of inter-tile loops for parametric tiling.
+//  TODO: Handle non-constant lower bounds.
+static void setInterTileBoundsParametric(OpBuilder &b, AffineForOp origLoop,
+                                         AffineForOp newLoop, Value tileSize) {
+  OperandRange newLbOperands = origLoop.getLowerBoundOperands();
+
+  // The lower bounds for inter-tile loops are same as the corresponding lower
+  // bounds of original loops.
+  newLoop.setLowerBound(newLbOperands, origLoop.getLowerBoundMap());
+
+  // The new upper bound map for inter-tile loops, assuming constant lower
+  // bounds, are now originalLowerBound + ceildiv((originalUpperBound -
+  // originalLowerBound), tiling parameter); where tiling parameter is the
+  // respective tile size for that loop. For e.g. if the original ubmap was
+  // ()->(1024), the new map will be
+  // ()[s0]->(ceildiv((1024 -lb) % s0)), where s0 is the tiling parameter.
+  // Therefore a new symbol operand is inserted in the map and the result
+  // expression is overwritten.
+
+  assert(origLoop.hasConstantLowerBound() &&
+         "expected input loops to have constant lower bound.");
+
+  // Get lower bound of original loop as an affine expression.
+  AffineExpr origLowerBoundExpr;
+  origLowerBoundExpr =
+      b.getAffineConstantExpr(origLoop.getConstantLowerBound());
+
+  // Add dim operands from original upper bound.
+  SmallVector<Value, 4> ubOperands;
+  AffineBound ub = origLoop.getUpperBound();
+  ubOperands.reserve(ub.getNumOperands() + 1);
+  AffineMap origUbMap = ub.getMap();
+  for (unsigned j = 0, e = origUbMap.getNumDims(); j < e; ++j)
+    ubOperands.push_back(ub.getOperand(j));
+
+  // Add symbol operands from original upper bound.
+  for (unsigned j = 0, e = origUbMap.getNumSymbols(); j < e; ++j)
+    ubOperands.push_back(ub.getOperand(origUbMap.getNumDims() + j));
+
+  // Add a new symbol operand which is the tile size for this loop.
+  ubOperands.push_back(tileSize);
+
+  // Get tiling parameter as an affine expression.
+  AffineExpr tileParameter = b.getAffineSymbolExpr(origUbMap.getNumSymbols());
+
+  SmallVector<AffineExpr, 4> boundExprs;
+  boundExprs.reserve(origUbMap.getNumResults());
+  int64_t origUpperBound;
+  AffineExpr origUpperBoundExpr;
+
+  // If upper bound for the original loop is constant, then the constant can
+  // be obtained as an affine expression straight away.
+  if (origLoop.hasConstantUpperBound()) {
+    origUpperBound = origLoop.getConstantUpperBound();
+
+    // Get original constant upper bound as an affine expression.
+    origUpperBoundExpr = b.getAffineConstantExpr(origUpperBound);
+
+    // Insert the bound as originalLowerBoundceildiv((originalUpperBound -
+    // originalLowerBound), tilingParameter).
+    boundExprs.push_back(
+        origLowerBoundExpr +
+        (origUpperBoundExpr - origLowerBoundExpr).ceilDiv(tileParameter));
+  } else {
+    // If upper bound for the original loop is not constant then two cases
+    // are possible, although there handeling is the same, 1.) The result of
+    // ubmap has only one result expression. For e.g.
+    //    affine.for %i = 5 to %ub
+    //
+    // A symbol operand is added which represents the tiling parameter. The
+    // new loop bounds here will be like ()[s0, s1] -> ((s0 - 5) ceildiv s1 + 5)
+    // where 's0' is the original upper bound and 's1' is the tiling
+    // parameter. 2.) When ubMap has more than one result expression. For e.g.
+    //    #map0 = affine_map<()[s0, s1] -> (s0, s1)
+    //    affine.for %i = 5 to min #map0()[%s0, %s1]
+    //
+    // A symbol operand is added which represents the tiling parameter. The
+    // new loop bounds will be like ()[s0, s1, s2] -> ((s0 - 5) ceildiv s2 + 5,
+    // (s1 -5) ceildiv s2 + 5), where s2 is the tiling parameter.
+
+    // Insert the bounds as originalLowerBound + ceildiv((originalUpperBound -
+    // originalLowerBound), tilingParameter).
+    for (AffineExpr origUpperBoundExpr : origUbMap.getResults())
+      boundExprs.push_back(
+          origLowerBoundExpr +
+          (origUpperBoundExpr - origLowerBoundExpr).ceilDiv(tileParameter));
+  }
+
+  AffineMap ubMap =
+      AffineMap::get(origUbMap.getNumDims(), origUbMap.getNumSymbols() + 1,
+                     boundExprs, b.getContext());
+  newLoop.setUpperBound(ubOperands, ubMap);
+
+  // Original loop step must be preserved.
+  newLoop.setStep(origLoop.getStep());
+}
+
+/// Constructs and sets new loop bounds after tiling for the case of
+/// hyper-rectangular index sets, where the bounds of one dimension do not
+/// depend on other dimensions and tiling parameters are captured from SSA
+/// values. Bounds of each dimension can thus be treated independently,
+/// and deriving the new bounds is much simpler and faster than for the case of
+/// tiling arbitrary polyhedral shapes.
+static void constructParametricallyTiledIndexSetHyperRect(
+    MutableArrayRef<AffineForOp> origLoops,
+    MutableArrayRef<AffineForOp> newLoops, ArrayRef<Value> tileSizes) {
+  assert(!origLoops.empty() && "expected atleast one loop in band");
+  assert(origLoops.size() == tileSizes.size() &&
+         "expected tiling parameter for each loop in band.");
+
+  OpBuilder b(origLoops[0].getOperation());
+  unsigned width = origLoops.size();
+
+  // Set bounds for tile space loops.
+  for (unsigned i = 0; i < width; ++i) {
+    setInterTileBoundsParametric(b, origLoops[i], newLoops[i], tileSizes[i]);
+  }
+
+  // Set bounds for intra-tile loops.
+  for (unsigned i = 0; i < width; ++i) {
+    setIntraTileBoundsParametric(b, origLoops[i], newLoops[i],
+                                 newLoops[i + width], tileSizes[i]);
+  }
+}
+
+/// Constructs and sets new loop bounds after tiling for the case of
+/// hyper-rectangular index sets, where the bounds of one dimension do not
+/// depend on other dimensions. Bounds of each dimension can thus be treated
+/// independently, and deriving the new bounds is much simpler and faster
+/// than for the case of tiling arbitrary polyhedral shapes.
+static void
+constructTiledIndexSetHyperRect(MutableArrayRef<AffineForOp> origLoops,
+                                MutableArrayRef<AffineForOp> newLoops,
+                                ArrayRef<unsigned> tileSizes) {
+  assert(!origLoops.empty());
+  assert(origLoops.size() == tileSizes.size());
+
+  OpBuilder b(origLoops[0].getOperation());
+  unsigned width = origLoops.size();
+
+  // Bounds for tile space loops.
+  for (unsigned i = 0; i < width; i++) {
+    OperandRange newLbOperands = origLoops[i].getLowerBoundOperands();
+    OperandRange newUbOperands = origLoops[i].getUpperBoundOperands();
+    newLoops[i].setLowerBound(newLbOperands, origLoops[i].getLowerBoundMap());
+    newLoops[i].setUpperBound(newUbOperands, origLoops[i].getUpperBoundMap());
+    newLoops[i].setStep(tileSizes[i]);
+  }
+  // Bounds for intra-tile loops.
+  for (unsigned i = 0; i < width; i++) {
+    int64_t largestDiv = getLargestDivisorOfTripCount(origLoops[i]);
+    Optional<uint64_t> mayBeConstantCount = getConstantTripCount(origLoops[i]);
+    // The lower bound is just the tile-space loop.
+    AffineMap lbMap = b.getDimIdentityMap();
+    newLoops[width + i].setLowerBound(
+        /*operands=*/newLoops[i].getInductionVar(), lbMap);
+
+    // Set the upper bound.
+    if (mayBeConstantCount && mayBeConstantCount.getValue() < tileSizes[i]) {
+      // Trip count is less than the tile size: upper bound is lower bound +
+      // trip count.
+      AffineMap ubMap =
+          b.getSingleDimShiftAffineMap(mayBeConstantCount.getValue());
+      newLoops[width + i].setUpperBound(
+          /*operands=*/newLoops[i].getInductionVar(), ubMap);
+    } else if (largestDiv % tileSizes[i] != 0) {
+      // Intra-tile loop ii goes from i to min(i + tileSize, ub_i).
+      // Construct the upper bound map; the operands are the original operands
+      // with 'i' (tile-space loop) appended to it. The new upper bound map is
+      // the original one with an additional expression i + tileSize appended.
+
+      // Add dim operands from original upper bound.
+      SmallVector<Value, 4> ubOperands;
+      AffineBound ub = origLoops[i].getUpperBound();
+      ubOperands.reserve(ub.getNumOperands() + 1);
+      AffineMap origUbMap = ub.getMap();
+      for (unsigned j = 0, e = origUbMap.getNumDims(); j < e; ++j)
+        ubOperands.push_back(ub.getOperand(j));
+
+      // Add dim operand for new loop upper bound.
+      ubOperands.push_back(newLoops[i].getInductionVar());
+
+      // Add symbol operands from original upper bound.
+      for (unsigned j = 0, e = origUbMap.getNumSymbols(); j < e; ++j)
+        ubOperands.push_back(ub.getOperand(origUbMap.getNumDims() + j));
+
+      SmallVector<AffineExpr, 4> boundExprs;
+      boundExprs.reserve(1 + origUbMap.getNumResults());
+      AffineExpr dim = b.getAffineDimExpr(origUbMap.getNumDims());
+      // The new upper bound map is the original one with an additional
+      // expression i + tileSize appended.
+      boundExprs.push_back(dim + tileSizes[i]);
+      boundExprs.append(origUbMap.getResults().begin(),
+                        origUbMap.getResults().end());
+      AffineMap ubMap =
+          AffineMap::get(origUbMap.getNumDims() + 1, origUbMap.getNumSymbols(),
+                         boundExprs, b.getContext());
+      newLoops[width + i].setUpperBound(/*operands=*/ubOperands, ubMap);
+    } else {
+      // No need of the min expression.
+      AffineExpr dim = b.getAffineDimExpr(0);
+      AffineMap ubMap = AffineMap::get(1, 0, dim + tileSizes[i]);
+      newLoops[width + i].setUpperBound(newLoops[i].getInductionVar(), ubMap);
+    }
+  }
+}
+
+/// Tiles the specified band of perfectly nested loops creating tile-space loops
+/// and intra-tile loops. A band is a contiguous set of loops.
+//  TODO: handle non hyper-rectangular spaces.
+LogicalResult
+mlir::tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
+                          ArrayRef<unsigned> tileSizes,
+                          SmallVectorImpl<AffineForOp> *tiledNest) {
+  performPreTilingChecks(input, tileSizes);
+
+  MutableArrayRef<AffineForOp> origLoops = input;
+  AffineForOp rootAffineForOp = origLoops[0];
+  // Note that width is at least one since band isn't empty.
+  unsigned width = input.size();
+  SmallVector<AffineForOp, 6> tiledLoops(2 * width);
+
+  // Construct a tiled loop nest without setting their bounds. Bounds are
+  // set later.
+  constructTiledLoopNest(origLoops, rootAffineForOp, width, tiledLoops);
+
+  SmallVector<Value, 8> origLoopIVs;
+  extractForInductionVars(input, &origLoopIVs);
+
+  if (failed(checkIfHyperRectangular(input, rootAffineForOp, width)))
+    return failure();
+
+  // Set loop bounds for the tiled loop nest.
+  constructTiledIndexSetHyperRect(origLoops, tiledLoops, tileSizes);
+
+  // Replace original IVs with intra-tile loop IVs.
+  for (unsigned i = 0; i < width; i++)
+    origLoopIVs[i].replaceAllUsesWith(tiledLoops[i + width].getInductionVar());
+
+  // Erase the old loop nest.
+  rootAffineForOp.erase();
+
+  if (tiledNest)
+    *tiledNest = std::move(tiledLoops);
+
+  return success();
+}
+
+/// Tiles the specified band of perfectly nested loops creating tile-space
+/// loops and intra-tile loops, using SSA values as tiling parameters. A band
+/// is a contiguous set of loops.
+//  TODO: handle non hyper-rectangular spaces.
+LogicalResult
+mlir::tilePerfectlyNestedParametric(MutableArrayRef<AffineForOp> input,
+                                    ArrayRef<Value> tileSizes,
+                                    SmallVectorImpl<AffineForOp> *tiledNest) {
+  performPreTilingChecks(input, tileSizes);
+
+  MutableArrayRef<AffineForOp> origLoops = input;
+  AffineForOp rootAffineForOp = origLoops[0];
+  // Note that width is at least one since band isn't empty.
+  unsigned width = input.size();
+  SmallVector<AffineForOp, 6> tiledLoops(2 * width);
+
+  // Construct a tiled loop nest without setting their bounds. Bounds are
+  // set later.
+  constructTiledLoopNest(origLoops, rootAffineForOp, width, tiledLoops);
+
+  SmallVector<Value, 8> origLoopIVs;
+  extractForInductionVars(input, &origLoopIVs);
+
+  if (failed(checkIfHyperRectangular(input, rootAffineForOp, width)))
+    return failure();
+
+  // Set loop bounds for the tiled loop nest.
+  constructParametricallyTiledIndexSetHyperRect(origLoops, tiledLoops,
+                                                tileSizes);
+
+  // Replace original IVs with intra-tile loop IVs.
+  for (unsigned i = 0; i < width; i++)
+    origLoopIVs[i].replaceAllUsesWith(tiledLoops[i + width].getInductionVar());
+
+  // Erase the old loop nest.
+  rootAffineForOp.erase();
+
+  if (tiledNest)
+    *tiledNest = std::move(tiledLoops);
+
+  return success();
+}
+
+/// Collect perfectly nested loops starting from `rootForOps`.  Loops are
+/// perfectly nested if each loop is the first and only non-terminator operation
+/// in the parent loop.  Collect at most `maxLoops` loops and append them to
+/// `forOps`.
 template <typename T>
 static void getPerfectlyNestedLoopsImpl(
     SmallVectorImpl<T> &forOps, T rootForOp,
@@ -375,9 +1008,23 @@ void mlir::getPerfectlyNestedLoops(SmallVectorImpl<AffineForOp> &nestedLoops,
   getPerfectlyNestedLoopsImpl(nestedLoops, root);
 }
 
-void mlir::getPerfectlyNestedLoops(SmallVectorImpl<loop::ForOp> &nestedLoops,
-                                   loop::ForOp root) {
+void mlir::getPerfectlyNestedLoops(SmallVectorImpl<scf::ForOp> &nestedLoops,
+                                   scf::ForOp root) {
   getPerfectlyNestedLoopsImpl(nestedLoops, root);
+}
+
+/// Identify valid and profitable bands of loops to tile. This is currently just
+/// a temporary placeholder to test the mechanics of tiled code generation.
+/// Returns all maximal outermost perfect loop nests to tile.
+void mlir::getTileableBands(FuncOp f,
+                            std::vector<SmallVector<AffineForOp, 6>> *bands) {
+  // Get maximal perfect nest of 'affine.for' insts starting from root
+  // (inclusive).
+  for (AffineForOp forOp : f.getOps<AffineForOp>()) {
+    SmallVector<AffineForOp, 6> band;
+    getPerfectlyNestedLoops(band, forOp);
+    bands->push_back(band);
+  }
 }
 
 /// Unrolls this loop completely.
@@ -397,11 +1044,54 @@ LogicalResult mlir::loopUnrollFull(AffineForOp forOp) {
 LogicalResult mlir::loopUnrollUpToFactor(AffineForOp forOp,
                                          uint64_t unrollFactor) {
   Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
-
   if (mayBeConstantTripCount.hasValue() &&
       mayBeConstantTripCount.getValue() < unrollFactor)
     return loopUnrollByFactor(forOp, mayBeConstantTripCount.getValue());
   return loopUnrollByFactor(forOp, unrollFactor);
+}
+
+/// Generates unrolled copies of AffineForOp or scf::ForOp 'loopBodyBlock', with
+/// associated 'forOpIV' by 'unrollFactor', calling 'ivRemapFn' to remap
+/// 'forOpIV' for each unrolled body.
+static void
+generateUnrolledLoop(Block *loopBodyBlock, Value forOpIV, uint64_t unrollFactor,
+                     function_ref<Value(unsigned, Value, OpBuilder)> ivRemapFn,
+                     ValueRange iterArgs, ValueRange yieldedValues) {
+  // Builder to insert unrolled bodies just before the terminator of the body of
+  // 'forOp'.
+  auto builder = OpBuilder::atBlockTerminator(loopBodyBlock);
+
+  // Keep a pointer to the last non-terminator operation in the original block
+  // so that we know what to clone (since we are doing this in-place).
+  Block::iterator srcBlockEnd = std::prev(loopBodyBlock->end(), 2);
+
+  // Unroll the contents of 'forOp' (append unrollFactor - 1 additional copies).
+  SmallVector<Value, 4> lastYielded(yieldedValues);
+
+  for (unsigned i = 1; i < unrollFactor; i++) {
+    BlockAndValueMapping operandMap;
+
+    // Prepare operand map.
+    operandMap.map(iterArgs, lastYielded);
+
+    // If the induction variable is used, create a remapping to the value for
+    // this unrolled instance.
+    if (!forOpIV.use_empty()) {
+      Value ivUnroll = ivRemapFn(i, forOpIV, builder);
+      operandMap.map(forOpIV, ivUnroll);
+    }
+
+    // Clone the original body of 'forOp'.
+    for (auto it = loopBodyBlock->begin(); it != std::next(srcBlockEnd); it++)
+      builder.clone(*it, operandMap);
+
+    // Update yielded values.
+    for (unsigned i = 0, e = lastYielded.size(); i < e; i++)
+      lastYielded[i] = operandMap.lookup(yieldedValues[i]);
+  }
+
+  // Update operands of the yield statement.
+  loopBodyBlock->getTerminator()->setOperands(lastYielded);
 }
 
 /// Unrolls this loop by the specified factor. Returns success if the loop
@@ -414,7 +1104,7 @@ LogicalResult mlir::loopUnrollByFactor(AffineForOp forOp,
     return promoteIfSingleIteration(forOp);
 
   // Nothing in the loop body other than the terminator.
-  if (has_single_element(forOp.getBody()->getOperations()))
+  if (llvm::hasSingleElement(forOp.getBody()->getOperations()))
     return success();
 
   // Loops where the lower bound is a max expression isn't supported for
@@ -426,7 +1116,7 @@ LogicalResult mlir::loopUnrollByFactor(AffineForOp forOp,
     return failure();
 
   // If the trip count is lower than the unroll factor, no unrolled body.
-  // TODO(bondhugula): option to specify cleanup loop unrolling.
+  // TODO: option to specify cleanup loop unrolling.
   Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
   if (mayBeConstantTripCount.hasValue() &&
       mayBeConstantTripCount.getValue() < unrollFactor)
@@ -434,8 +1124,7 @@ LogicalResult mlir::loopUnrollByFactor(AffineForOp forOp,
 
   // Generate the cleanup loop if trip count isn't a multiple of unrollFactor.
   if (getLargestDivisorOfTripCount(forOp) % unrollFactor != 0) {
-    OpBuilder builder(forOp.getOperation()->getBlock(),
-                      std::next(Block::iterator(forOp)));
+    OpBuilder builder(forOp->getBlock(), std::next(Block::iterator(forOp)));
     auto cleanupForOp = cast<AffineForOp>(builder.clone(*forOp));
     AffineMap cleanupMap;
     SmallVector<Value, 4> cleanupOperands;
@@ -455,38 +1144,128 @@ LogicalResult mlir::loopUnrollByFactor(AffineForOp forOp,
   // Scale the step of loop being unrolled by unroll factor.
   int64_t step = forOp.getStep();
   forOp.setStep(step * unrollFactor);
+  generateUnrolledLoop(forOp.getBody(), forOp.getInductionVar(), unrollFactor,
+                       [&](unsigned i, Value iv, OpBuilder b) {
+                         // iv' = iv + i * step
+                         auto d0 = b.getAffineDimExpr(0);
+                         auto bumpMap = AffineMap::get(1, 0, d0 + i * step);
+                         return b.create<AffineApplyOp>(forOp.getLoc(), bumpMap,
+                                                        iv);
+                       },
+                       /*iterArgs=*/{}, /*yieldedValues=*/{});
 
-  // Builder to insert unrolled bodies just before the terminator of the body of
-  // 'forOp'.
-  OpBuilder builder = forOp.getBodyBuilder();
+  // Promote the loop body up if this has turned into a single iteration loop.
+  promoteIfSingleIteration(forOp);
+  return success();
+}
 
-  // Keep a pointer to the last non-terminator operation in the original block
-  // so that we know what to clone (since we are doing this in-place).
-  Block::iterator srcBlockEnd = std::prev(forOp.getBody()->end(), 2);
+/// Unrolls 'forOp' by 'unrollFactor', returns success if the loop is unrolled.
+LogicalResult mlir::loopUnrollByFactor(scf::ForOp forOp,
+                                       uint64_t unrollFactor) {
+  assert(unrollFactor > 0 && "expected positive unroll factor");
+  if (unrollFactor == 1)
+    return promoteIfSingleIteration(forOp);
 
-  // Unroll the contents of 'forOp' (append unrollFactor - 1 additional copies).
-  auto forOpIV = forOp.getInductionVar();
-  for (unsigned i = 1; i < unrollFactor; i++) {
-    BlockAndValueMapping operandMap;
+  // Return if the loop body is empty.
+  if (llvm::hasSingleElement(forOp.getBody()->getOperations()))
+    return success();
 
-    // If the induction variable is used, create a remapping to the value for
-    // this unrolled instance.
-    if (!forOpIV.use_empty()) {
-      // iv' = iv + 1/2/3...unrollFactor-1;
-      auto d0 = builder.getAffineDimExpr(0);
-      auto bumpMap = AffineMap::get(1, 0, {d0 + i * step});
-      auto ivUnroll =
-          builder.create<AffineApplyOp>(forOp.getLoc(), bumpMap, forOpIV);
-      operandMap.map(forOpIV, ivUnroll);
-    }
+  // Compute tripCount = ceilDiv((upperBound - lowerBound), step) and populate
+  // 'upperBoundUnrolled' and 'stepUnrolled' for static and dynamic cases.
+  OpBuilder boundsBuilder(forOp);
+  auto loc = forOp.getLoc();
+  auto step = forOp.step();
+  Value upperBoundUnrolled;
+  Value stepUnrolled;
+  bool generateEpilogueLoop = true;
 
-    // Clone the original body of 'forOp'.
-    for (auto it = forOp.getBody()->begin(); it != std::next(srcBlockEnd);
-         it++) {
-      builder.clone(*it, operandMap);
-    }
+  auto lbCstOp = forOp.lowerBound().getDefiningOp<ConstantIndexOp>();
+  auto ubCstOp = forOp.upperBound().getDefiningOp<ConstantIndexOp>();
+  auto stepCstOp = forOp.step().getDefiningOp<ConstantIndexOp>();
+  if (lbCstOp && ubCstOp && stepCstOp) {
+    // Constant loop bounds computation.
+    int64_t lbCst = lbCstOp.getValue();
+    int64_t ubCst = ubCstOp.getValue();
+    int64_t stepCst = stepCstOp.getValue();
+    assert(lbCst >= 0 && ubCst >= 0 && stepCst >= 0 &&
+           "expected positive loop bounds and step");
+    int64_t tripCount = mlir::ceilDiv(ubCst - lbCst, stepCst);
+    int64_t tripCountEvenMultiple = tripCount - (tripCount % unrollFactor);
+    int64_t upperBoundUnrolledCst = lbCst + tripCountEvenMultiple * stepCst;
+    assert(upperBoundUnrolledCst <= ubCst);
+    int64_t stepUnrolledCst = stepCst * unrollFactor;
+
+    // Create constant for 'upperBoundUnrolled' and set epilogue loop flag.
+    generateEpilogueLoop = upperBoundUnrolledCst < ubCst;
+    if (generateEpilogueLoop)
+      upperBoundUnrolled =
+          boundsBuilder.create<ConstantIndexOp>(loc, upperBoundUnrolledCst);
+    else
+      upperBoundUnrolled = ubCstOp;
+
+    // Create constant for 'stepUnrolled'.
+    stepUnrolled =
+        stepCst == stepUnrolledCst
+            ? step
+            : boundsBuilder.create<ConstantIndexOp>(loc, stepUnrolledCst);
+  } else {
+    // Dynamic loop bounds computation.
+    // TODO: Add dynamic asserts for negative lb/ub/step, or
+    // consider using ceilDiv from AffineApplyExpander.
+    auto lowerBound = forOp.lowerBound();
+    auto upperBound = forOp.upperBound();
+    Value diff = boundsBuilder.create<SubIOp>(loc, upperBound, lowerBound);
+    Value tripCount = ceilDivPositive(boundsBuilder, loc, diff, step);
+    Value unrollFactorCst =
+        boundsBuilder.create<ConstantIndexOp>(loc, unrollFactor);
+    Value tripCountRem =
+        boundsBuilder.create<SignedRemIOp>(loc, tripCount, unrollFactorCst);
+    // Compute tripCountEvenMultiple = tripCount - (tripCount % unrollFactor)
+    Value tripCountEvenMultiple =
+        boundsBuilder.create<SubIOp>(loc, tripCount, tripCountRem);
+    // Compute upperBoundUnrolled = lowerBound + tripCountEvenMultiple * step
+    upperBoundUnrolled = boundsBuilder.create<AddIOp>(
+        loc, lowerBound,
+        boundsBuilder.create<MulIOp>(loc, tripCountEvenMultiple, step));
+    // Scale 'step' by 'unrollFactor'.
+    stepUnrolled = boundsBuilder.create<MulIOp>(loc, step, unrollFactorCst);
   }
 
+  // Create epilogue clean up loop starting at 'upperBoundUnrolled'.
+  if (generateEpilogueLoop) {
+    OpBuilder epilogueBuilder(forOp->getBlock(),
+                              std::next(Block::iterator(forOp)));
+    auto epilogueForOp = cast<scf::ForOp>(epilogueBuilder.clone(*forOp));
+    epilogueForOp.setLowerBound(upperBoundUnrolled);
+
+    // Update uses of loop results.
+    auto results = forOp.getResults();
+    auto epilogueResults = epilogueForOp.getResults();
+    auto epilogueIterOperands = epilogueForOp.getIterOperands();
+
+    for (auto e : llvm::zip(results, epilogueResults, epilogueIterOperands)) {
+      std::get<0>(e).replaceAllUsesWith(std::get<1>(e));
+      epilogueForOp->replaceUsesOfWith(std::get<2>(e), std::get<0>(e));
+    }
+    promoteIfSingleIteration(epilogueForOp);
+  }
+
+  // Create unrolled loop.
+  forOp.setUpperBound(upperBoundUnrolled);
+  forOp.setStep(stepUnrolled);
+
+  auto iterArgs = ValueRange(forOp.getRegionIterArgs());
+  auto yieldedValues = forOp.getBody()->getTerminator()->getOperands();
+
+  generateUnrolledLoop(
+      forOp.getBody(), forOp.getInductionVar(), unrollFactor,
+      [&](unsigned i, Value iv, OpBuilder b) {
+        // iv' = iv + step * i;
+        auto stride =
+            b.create<MulIOp>(loc, step, b.create<ConstantIndexOp>(loc, i));
+        return b.create<AddIOp>(loc, iv, stride);
+      },
+      iterArgs, yieldedValues);
   // Promote the loop body up if this has turned into a single iteration loop.
   promoteIfSingleIteration(forOp);
   return success();
@@ -538,13 +1317,13 @@ LogicalResult mlir::loopUnrollJamByFactor(AffineForOp forOp,
     return promoteIfSingleIteration(forOp);
 
   // Nothing in the loop body other than the terminator.
-  if (has_single_element(forOp.getBody()->getOperations()))
+  if (llvm::hasSingleElement(forOp.getBody()->getOperations()))
     return success();
 
   // Loops where both lower and upper bounds are multi-result maps won't be
   // unrolled (since the trip can't be expressed as an affine function in
   // general).
-  // TODO(mlir-team): this may not be common, but we could support the case
+  // TODO: this may not be common, but we could support the case
   // where the lower bound is a multi-result map and the ub is a single result
   // one.
   if (forOp.getLowerBoundMap().getNumResults() != 1)
@@ -567,8 +1346,7 @@ LogicalResult mlir::loopUnrollJamByFactor(AffineForOp forOp,
   // unrollJamFactor.
   if (getLargestDivisorOfTripCount(forOp) % unrollJamFactor != 0) {
     // Insert the cleanup loop right after 'forOp'.
-    OpBuilder builder(forOp.getOperation()->getBlock(),
-                      std::next(Block::iterator(forOp)));
+    OpBuilder builder(forOp->getBlock(), std::next(Block::iterator(forOp)));
     auto cleanupAffineForOp = cast<AffineForOp>(builder.clone(*forOp));
     // Adjust the lower bound of the cleanup loop; its upper bound is the same
     // as the original loop's upper bound.
@@ -605,7 +1383,7 @@ LogicalResult mlir::loopUnrollJamByFactor(AffineForOp forOp,
       if (!forOpIV.use_empty()) {
         // iv' = iv + i, i = 1 to unrollJamFactor-1.
         auto d0 = builder.getAffineDimExpr(0);
-        auto bumpMap = AffineMap::get(1, 0, {d0 + i * step});
+        auto bumpMap = AffineMap::get(1, 0, d0 + i * step);
         auto ivUnroll =
             builder.create<AffineApplyOp>(forOp.getLoc(), bumpMap, forOpIV);
         operandMap.map(forOpIV, ivUnroll);
@@ -631,16 +1409,15 @@ void mlir::interchangeLoops(AffineForOp forOpA, AffineForOp forOpB) {
   // 1) Splice forOpA's non-terminator operations (which is just forOpB) just
   // before forOpA (in ForOpA's parent's block) this should leave 'forOpA's
   // body containing only the terminator.
-  forOpA.getOperation()->getBlock()->getOperations().splice(
-      Block::iterator(forOpA), forOpABody, forOpABody.begin(),
-      std::prev(forOpABody.end()));
+  forOpA->getBlock()->getOperations().splice(Block::iterator(forOpA),
+                                             forOpABody, forOpABody.begin(),
+                                             std::prev(forOpABody.end()));
   // 2) Splice forOpB's non-terminator operations into the beginning of forOpA's
   // body (this leaves forOpB's body containing only the terminator).
   forOpABody.splice(forOpABody.begin(), forOpBBody, forOpBBody.begin(),
                     std::prev(forOpBBody.end()));
   // 3) Splice forOpA into the beginning of forOpB's body.
-  forOpBBody.splice(forOpBBody.begin(),
-                    forOpA.getOperation()->getBlock()->getOperations(),
+  forOpBBody.splice(forOpBBody.begin(), forOpA->getBlock()->getOperations(),
                     Block::iterator(forOpA));
 }
 
@@ -693,16 +1470,25 @@ bool mlir::isValidLoopInterchangePermutation(ArrayRef<AffineForOp> loops,
   return checkLoopInterchangeDependences(depCompsVec, loops, loopPermMap);
 }
 
-/// Return true if `loops` is a perfect nest.
-static bool LLVM_ATTRIBUTE_UNUSED isPerfectlyNested(ArrayRef<AffineForOp> loops) {
-  auto outerLoop = loops.front();
+/// Returns true if `loops` is a perfectly nested loop nest, where loops appear
+/// in it from outermost to innermost.
+bool LLVM_ATTRIBUTE_UNUSED
+mlir::isPerfectlyNested(ArrayRef<AffineForOp> loops) {
+  assert(!loops.empty() && "no loops provided");
+
+  // We already know that the block can't be empty.
+  auto hasTwoElements = [](Block *block) {
+    auto secondOpIt = std::next(block->begin());
+    return secondOpIt != block->end() && &*secondOpIt == &block->back();
+  };
+
+  auto enclosingLoop = loops.front();
   for (auto loop : loops.drop_front()) {
-    auto parentForOp = dyn_cast<AffineForOp>(loop.getParentOp());
+    auto parentForOp = dyn_cast<AffineForOp>(loop->getParentOp());
     // parentForOp's body should be just this loop and the terminator.
-    if (parentForOp != outerLoop ||
-        parentForOp.getBody()->getOperations().size() != 2)
+    if (parentForOp != enclosingLoop || !hasTwoElements(parentForOp.getBody()))
       return false;
-    outerLoop = loop;
+    enclosingLoop = loop;
   }
   return true;
 }
@@ -753,11 +1539,10 @@ unsigned mlir::permuteLoops(MutableArrayRef<AffineForOp> input,
       if (i == 0)
         continue;
       // Make input[i] the new outermost loop moving it into parentBlock.
-      auto *parentBlock = input[0].getOperation()->getBlock();
-      parentBlock->getOperations().splice(
-          Block::iterator(input[0]),
-          input[i].getOperation()->getBlock()->getOperations(),
-          Block::iterator(input[i]));
+      auto *parentBlock = input[0]->getBlock();
+      parentBlock->getOperations().splice(Block::iterator(input[0]),
+                                          input[i]->getBlock()->getOperations(),
+                                          Block::iterator(input[i]));
       continue;
     }
 
@@ -769,9 +1554,9 @@ unsigned mlir::permuteLoops(MutableArrayRef<AffineForOp> input,
 
     // Move input[i] to its surrounding loop in the transformed nest.
     auto *destBody = input[parentPosInInput].getBody();
-    destBody->getOperations().splice(
-        destBody->begin(), input[i].getOperation()->getBlock()->getOperations(),
-        Block::iterator(input[i]));
+    destBody->getOperations().splice(destBody->begin(),
+                                     input[i]->getBlock()->getOperations(),
+                                     Block::iterator(input[i]));
   }
 
   return invPermMap[0].second;
@@ -847,7 +1632,8 @@ static void augmentMapAndBounds(OpBuilder &b, Value iv, AffineMap *map,
   auto bounds = llvm::to_vector<4>(map->getResults());
   bounds.push_back(b.getAffineDimExpr(map->getNumDims()) + offset);
   operands->insert(operands->begin() + map->getNumDims(), iv);
-  *map = AffineMap::get(map->getNumDims() + 1, map->getNumSymbols(), bounds);
+  *map = AffineMap::get(map->getNumDims() + 1, map->getNumSymbols(), bounds,
+                        b.getContext());
   canonicalizeMapAndOperands(map, operands);
 }
 
@@ -866,8 +1652,7 @@ stripmineSink(AffineForOp forOp, uint64_t factor,
   auto scaledStep = originalStep * factor;
   forOp.setStep(scaledStep);
 
-  OpBuilder b(forOp.getOperation()->getBlock(),
-              std::next(Block::iterator(forOp)));
+  OpBuilder b(forOp->getBlock(), std::next(Block::iterator(forOp)));
 
   // Lower-bound map creation.
   auto lbMap = forOp.getLowerBoundMap();
@@ -884,7 +1669,7 @@ stripmineSink(AffineForOp forOp, uint64_t factor,
   SmallVector<AffineForOp, 8> innerLoops;
   for (auto t : targets) {
     // Insert newForOp before the terminator of `t`.
-    OpBuilder b = t.getBodyBuilder();
+    auto b = OpBuilder::atBlockTerminator(t.getBody());
     auto newForOp = b.create<AffineForOp>(t.getLoc(), lbOperands, lbMap,
                                           ubOperands, ubMap, originalStep);
     auto begin = t.getBody()->begin();
@@ -901,8 +1686,8 @@ stripmineSink(AffineForOp forOp, uint64_t factor,
   return innerLoops;
 }
 
-static Loops stripmineSink(loop::ForOp forOp, Value factor,
-                           ArrayRef<loop::ForOp> targets) {
+static Loops stripmineSink(scf::ForOp forOp, Value factor,
+                           ArrayRef<scf::ForOp> targets) {
   auto originalStep = forOp.step();
   auto iv = forOp.getInductionVar();
 
@@ -916,7 +1701,7 @@ static Loops stripmineSink(loop::ForOp forOp, Value factor,
     auto nOps = t.getBody()->getOperations().size();
 
     // Insert newForOp before the terminator of `t`.
-    OpBuilder b(t.getBodyBuilder());
+    auto b = OpBuilder::atBlockTerminator((t.getBody()));
     Value stepped = b.create<AddIOp>(t.getLoc(), iv, forOp.step());
     Value less = b.create<CmpIOp>(t.getLoc(), CmpIPredicate::slt,
                                   forOp.upperBound(), stepped);
@@ -924,7 +1709,7 @@ static Loops stripmineSink(loop::ForOp forOp, Value factor,
         b.create<SelectOp>(t.getLoc(), less, forOp.upperBound(), stepped);
 
     // Splice [begin, begin + nOps - 1) into `newForOp` and replace uses.
-    auto newForOp = b.create<loop::ForOp>(t.getLoc(), iv, ub, originalStep);
+    auto newForOp = b.create<scf::ForOp>(t.getLoc(), iv, ub, originalStep);
     newForOp.getBody()->getOperations().splice(
         newForOp.getBody()->getOperations().begin(),
         t.getBody()->getOperations(), begin, std::next(begin, nOps - 1));
@@ -941,7 +1726,7 @@ static Loops stripmineSink(loop::ForOp forOp, Value factor,
 // Returns the new AffineForOps, nested immediately under `target`.
 template <typename ForType, typename SizeType>
 static ForType stripmineSink(ForType forOp, SizeType factor, ForType target) {
-  // TODO(ntv): Use cheap structural assertions that targets are nested under
+  // TODO: Use cheap structural assertions that targets are nested under
   // forOp and that targets are not nested under each other when DominanceInfo
   // exposes the capability. It seems overkill to construct a whole function
   // dominance tree at this point.
@@ -970,9 +1755,9 @@ mlir::tile(ArrayRef<AffineForOp> forOps, ArrayRef<uint64_t> sizes,
   return tileImpl(forOps, sizes, targets);
 }
 
-SmallVector<Loops, 8> mlir::tile(ArrayRef<loop::ForOp> forOps,
+SmallVector<Loops, 8> mlir::tile(ArrayRef<scf::ForOp> forOps,
                                  ArrayRef<Value> sizes,
-                                 ArrayRef<loop::ForOp> targets) {
+                                 ArrayRef<scf::ForOp> targets) {
   return tileImpl(forOps, sizes, targets);
 }
 
@@ -993,15 +1778,15 @@ SmallVector<AffineForOp, 8> mlir::tile(ArrayRef<AffineForOp> forOps,
   return tileImpl(forOps, sizes, target);
 }
 
-Loops mlir::tile(ArrayRef<loop::ForOp> forOps, ArrayRef<Value> sizes,
-                 loop::ForOp target) {
+Loops mlir::tile(ArrayRef<scf::ForOp> forOps, ArrayRef<Value> sizes,
+                 scf::ForOp target) {
   return tileImpl(forOps, sizes, target);
 }
 
-Loops mlir::tilePerfectlyNested(loop::ForOp rootForOp, ArrayRef<Value> sizes) {
+Loops mlir::tilePerfectlyNested(scf::ForOp rootForOp, ArrayRef<Value> sizes) {
   // Collect perfectly nested loops.  If more size values provided than nested
   // loops available, truncate `sizes`.
-  SmallVector<loop::ForOp, 4> forOps;
+  SmallVector<scf::ForOp, 4> forOps;
   forOps.reserve(sizes.size());
   getPerfectlyNestedLoopsImpl(forOps, rootForOp, sizes.size());
   if (forOps.size() < sizes.size())
@@ -1010,40 +1795,12 @@ Loops mlir::tilePerfectlyNested(loop::ForOp rootForOp, ArrayRef<Value> sizes) {
   return ::tile(forOps, sizes, forOps.back());
 }
 
-// Build the IR that performs ceil division of a positive value by a constant:
-//    ceildiv(a, B) = divis(a + (B-1), B)
-// where divis is rounding-to-zero division.
-static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
-                             int64_t divisor) {
-  assert(divisor > 0 && "expected positive divisor");
-  assert(dividend.getType().isIndex() && "expected index-typed value");
-
-  Value divisorMinusOneCst = builder.create<ConstantIndexOp>(loc, divisor - 1);
-  Value divisorCst = builder.create<ConstantIndexOp>(loc, divisor);
-  Value sum = builder.create<AddIOp>(loc, dividend, divisorMinusOneCst);
-  return builder.create<SignedDivIOp>(loc, sum, divisorCst);
-}
-
-// Build the IR that performs ceil division of a positive value by another
-// positive value:
-//    ceildiv(a, b) = divis(a + (b - 1), b)
-// where divis is rounding-to-zero division.
-static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
-                             Value divisor) {
-  assert(dividend.getType().isIndex() && "expected index-typed value");
-
-  Value cstOne = builder.create<ConstantIndexOp>(loc, 1);
-  Value divisorMinusOne = builder.create<SubIOp>(loc, divisor, cstOne);
-  Value sum = builder.create<AddIOp>(loc, dividend, divisorMinusOne);
-  return builder.create<SignedDivIOp>(loc, sum, divisor);
-}
-
 // Hoist the ops within `outer` that appear before `inner`.
 // Such ops include the ops that have been introduced by parametric tiling.
 // Ops that come from triangular loops (i.e. that belong to the program slice
 // rooted at `outer`) and ops that have side effects cannot be hoisted.
 // Return failure when any op fails to hoist.
-static LogicalResult hoistOpsBetween(loop::ForOp outer, loop::ForOp inner) {
+static LogicalResult hoistOpsBetween(scf::ForOp outer, scf::ForOp inner) {
   SetVector<Operation *> forwardSlice;
   getForwardSlice(outer.getOperation(), &forwardSlice, [&inner](Operation *op) {
     return op != inner.getOperation();
@@ -1059,7 +1816,7 @@ static LogicalResult hoistOpsBetween(loop::ForOp outer, loop::ForOp inner) {
       status = failure();
       continue;
     }
-    // Skip loop::ForOp, these are not considered a failure.
+    // Skip scf::ForOp, these are not considered a failure.
     if (op.getNumRegions() > 0)
       continue;
     // Skip other ops with regions.
@@ -1068,7 +1825,7 @@ static LogicalResult hoistOpsBetween(loop::ForOp outer, loop::ForOp inner) {
       continue;
     }
     // Skip if op has side effects.
-    // TODO(ntv): loads to immutable memory regions are ok.
+    // TODO: loads to immutable memory regions are ok.
     if (!MemoryEffectOpInterface::hasNoEffect(&op)) {
       status = failure();
       continue;
@@ -1087,8 +1844,8 @@ static LogicalResult hoistOpsBetween(loop::ForOp outer, loop::ForOp inner) {
 // be formed.
 static LogicalResult tryIsolateBands(const TileLoops &tileLoops) {
   LogicalResult status = success();
-  auto &interTile = tileLoops.first;
-  auto &intraTile = tileLoops.second;
+  const Loops &interTile = tileLoops.first;
+  const Loops &intraTile = tileLoops.second;
   auto size = interTile.size();
   assert(size == intraTile.size());
   if (size <= 1)
@@ -1102,11 +1859,11 @@ static LogicalResult tryIsolateBands(const TileLoops &tileLoops) {
   return status;
 }
 
-TileLoops mlir::extractFixedOuterLoops(loop::ForOp rootForOp,
+TileLoops mlir::extractFixedOuterLoops(scf::ForOp rootForOp,
                                        ArrayRef<int64_t> sizes) {
   // Collect perfectly nested loops.  If more size values provided than nested
   // loops available, truncate `sizes`.
-  SmallVector<loop::ForOp, 4> forOps;
+  SmallVector<scf::ForOp, 4> forOps;
   forOps.reserve(sizes.size());
   getPerfectlyNestedLoopsImpl(forOps, rootForOp, sizes.size());
   if (forOps.size() < sizes.size())
@@ -1136,23 +1893,12 @@ TileLoops mlir::extractFixedOuterLoops(loop::ForOp rootForOp,
   auto intraTile = tile(forOps, tileSizes, forOps.back());
   TileLoops tileLoops = std::make_pair(forOps, intraTile);
 
-  // TODO(ntv, zinenko) for now we just ignore the result of band isolation.
+  // TODO: for now we just ignore the result of band isolation.
   // In the future, mapping decisions may be impacted by the ability to
   // isolate perfectly nested bands.
   tryIsolateBands(tileLoops);
 
   return tileLoops;
-}
-
-// Replaces all uses of `orig` with `replacement` except if the user is listed
-// in `exceptions`.
-static void
-replaceAllUsesExcept(Value orig, Value replacement,
-                     const SmallPtrSetImpl<Operation *> &exceptions) {
-  for (auto &use : llvm::make_early_inc_range(orig.getUses())) {
-    if (exceptions.count(use.getOwner()) == 0)
-      use.set(replacement);
-  }
 }
 
 /// Return the new lower bound, upper bound, and step in that order. Insert any
@@ -1165,18 +1911,17 @@ static LoopParams normalizeLoop(OpBuilder &boundsBuilder,
   // Check if the loop is already known to have a constant zero lower bound or
   // a constant one step.
   bool isZeroBased = false;
-  if (auto ubCst =
-          dyn_cast_or_null<ConstantIndexOp>(lowerBound.getDefiningOp()))
+  if (auto ubCst = lowerBound.getDefiningOp<ConstantIndexOp>())
     isZeroBased = ubCst.getValue() == 0;
 
   bool isStepOne = false;
-  if (auto stepCst = dyn_cast_or_null<ConstantIndexOp>(step.getDefiningOp()))
+  if (auto stepCst = step.getDefiningOp<ConstantIndexOp>())
     isStepOne = stepCst.getValue() == 1;
 
   // Compute the number of iterations the loop executes: ceildiv(ub - lb, step)
   // assuming the step is strictly positive.  Update the bounds and the step
   // of the loop to go from 0 to the number of iterations, if necessary.
-  // TODO(zinenko): introduce support for negative steps or emit dynamic asserts
+  // TODO: introduce support for negative steps or emit dynamic asserts
   // on step positivity, whatever gets implemented first.
   if (isZeroBased && isStepOne)
     return {/*lowerBound=*/lowerBound, /*upperBound=*/upperBound,
@@ -1201,7 +1946,7 @@ static LoopParams normalizeLoop(OpBuilder &boundsBuilder,
 
   SmallPtrSet<Operation *, 2> preserve{scaled.getDefiningOp(),
                                        shifted.getDefiningOp()};
-  replaceAllUsesExcept(inductionVar, shifted, preserve);
+  inductionVar.replaceAllUsesExcept(shifted, preserve);
   return {/*lowerBound=*/newLowerBound, /*upperBound=*/newUpperBound,
           /*step=*/newStep};
 }
@@ -1215,8 +1960,7 @@ static LoopParams normalizeLoop(OpBuilder &boundsBuilder,
 /// expected to be either `loop` or another loop perfectly nested under `loop`.
 /// Insert the definition of new bounds immediate before `outer`, which is
 /// expected to be either `loop` or its parent in the loop nest.
-static void normalizeLoop(loop::ForOp loop, loop::ForOp outer,
-                          loop::ForOp inner) {
+static void normalizeLoop(scf::ForOp loop, scf::ForOp outer, scf::ForOp inner) {
   OpBuilder builder(outer);
   OpBuilder innerBuilder = OpBuilder::atBlockBegin(inner.getBody());
   auto loopPieces =
@@ -1228,12 +1972,12 @@ static void normalizeLoop(loop::ForOp loop, loop::ForOp outer,
   loop.setStep(loopPieces.step);
 }
 
-void mlir::coalesceLoops(MutableArrayRef<loop::ForOp> loops) {
+void mlir::coalesceLoops(MutableArrayRef<scf::ForOp> loops) {
   if (loops.size() < 2)
     return;
 
-  loop::ForOp innermost = loops.back();
-  loop::ForOp outermost = loops.front();
+  scf::ForOp innermost = loops.back();
+  scf::ForOp outermost = loops.front();
 
   // 1. Make sure all loops iterate from 0 to upperBound with step 1.  This
   // allows the following code to assume upperBound is the number of iterations.
@@ -1275,7 +2019,7 @@ void mlir::coalesceLoops(MutableArrayRef<loop::ForOp> loops) {
 
   // 4. Move the operations from the innermost just above the second-outermost
   // loop, delete the extra terminator and the second-outermost loop.
-  loop::ForOp second = loops[1];
+  scf::ForOp second = loops[1];
   innermost.getBody()->back().erase();
   outermost.getBody()->getOperations().splice(
       Block::iterator(second.getOperation()),
@@ -1284,8 +2028,7 @@ void mlir::coalesceLoops(MutableArrayRef<loop::ForOp> loops) {
 }
 
 void mlir::collapseParallelLoops(
-    loop::ParallelOp loops,
-    ArrayRef<std::vector<unsigned>> combinedDimensions) {
+    scf::ParallelOp loops, ArrayRef<std::vector<unsigned>> combinedDimensions) {
   OpBuilder outsideBuilder(loops);
   Location loc = loops.getLoc();
 
@@ -1328,33 +2071,34 @@ void mlir::collapseParallelLoops(
   // value. The remainders then determine based on that range, which iteration
   // of the original induction value this represents. This is a normalized value
   // that is un-normalized already by the previous logic.
-  auto newPloop = outsideBuilder.create<loop::ParallelOp>(loc, lowerBounds,
-                                                          upperBounds, steps);
-  OpBuilder insideBuilder(newPloop.region());
-  for (unsigned i = 0, e = combinedDimensions.size(); i < e; ++i) {
-    Value previous = newPloop.getBody()->getArgument(i);
-    unsigned numberCombinedDimensions = combinedDimensions[i].size();
-    // Iterate over all except the last induction value.
-    for (unsigned j = 0, e = numberCombinedDimensions - 1; j < e; ++j) {
-      unsigned idx = combinedDimensions[i][j];
+  auto newPloop = outsideBuilder.create<scf::ParallelOp>(
+      loc, lowerBounds, upperBounds, steps,
+      [&](OpBuilder &insideBuilder, Location, ValueRange ploopIVs) {
+        for (unsigned i = 0, e = combinedDimensions.size(); i < e; ++i) {
+          Value previous = ploopIVs[i];
+          unsigned numberCombinedDimensions = combinedDimensions[i].size();
+          // Iterate over all except the last induction value.
+          for (unsigned j = 0, e = numberCombinedDimensions - 1; j < e; ++j) {
+            unsigned idx = combinedDimensions[i][j];
 
-      // Determine the current induction value's current loop iteration
-      Value iv = insideBuilder.create<SignedRemIOp>(loc, previous,
-                                                    normalizedUpperBounds[idx]);
-      replaceAllUsesInRegionWith(loops.getBody()->getArgument(idx), iv,
-                                 loops.region());
+            // Determine the current induction value's current loop iteration
+            Value iv = insideBuilder.create<SignedRemIOp>(
+                loc, previous, normalizedUpperBounds[idx]);
+            replaceAllUsesInRegionWith(loops.getBody()->getArgument(idx), iv,
+                                       loops.region());
 
-      // Remove the effect of the current induction value to prepare for the
-      // next value.
-      previous = insideBuilder.create<SignedDivIOp>(
-          loc, previous, normalizedUpperBounds[idx + 1]);
-    }
+            // Remove the effect of the current induction value to prepare for
+            // the next value.
+            previous = insideBuilder.create<SignedDivIOp>(
+                loc, previous, normalizedUpperBounds[idx]);
+          }
 
-    // The final induction value is just the remaining value.
-    unsigned idx = combinedDimensions[i][numberCombinedDimensions - 1];
-    replaceAllUsesInRegionWith(loops.getBody()->getArgument(idx), previous,
-                               loops.region());
-  }
+          // The final induction value is just the remaining value.
+          unsigned idx = combinedDimensions[i][numberCombinedDimensions - 1];
+          replaceAllUsesInRegionWith(loops.getBody()->getArgument(idx),
+                                     previous, loops.region());
+        }
+      });
 
   // Replace the old loop with the new loop.
   loops.getBody()->back().erase();
@@ -1364,7 +2108,7 @@ void mlir::collapseParallelLoops(
   loops.erase();
 }
 
-void mlir::mapLoopToProcessorIds(loop::ForOp forOp, ArrayRef<Value> processorId,
+void mlir::mapLoopToProcessorIds(scf::ForOp forOp, ArrayRef<Value> processorId,
                                  ArrayRef<Value> numProcessors) {
   assert(processorId.size() == numProcessors.size());
   if (processorId.empty())
@@ -1407,7 +2151,7 @@ findHighestBlockForPlacement(const MemRefRegion &region, Block &block,
   // symbolic/variant.
   auto it = enclosingFors.rbegin();
   for (auto e = enclosingFors.rend(); it != e; ++it) {
-    // TODO(bondhugula): also need to be checking this for regions symbols that
+    // TODO: also need to be checking this for regions symbols that
     // aren't loop IVs, whether we are within their resp. defs' dominance scope.
     if (llvm::is_contained(symbols, it->getInductionVar()))
       break;
@@ -1417,7 +2161,7 @@ findHighestBlockForPlacement(const MemRefRegion &region, Block &block,
     auto lastInvariantIV = *std::prev(it);
     *copyInPlacementStart = Block::iterator(lastInvariantIV.getOperation());
     *copyOutPlacementStart = std::next(*copyInPlacementStart);
-    *copyPlacementBlock = lastInvariantIV.getOperation()->getBlock();
+    *copyPlacementBlock = lastInvariantIV->getBlock();
   } else {
     *copyInPlacementStart = begin;
     *copyOutPlacementStart = end;
@@ -1435,7 +2179,7 @@ struct StrideInfo {
 /// potentially multiple striding levels from outermost to innermost. For an
 /// n-dimensional region, there can be at most n-1 levels of striding
 /// successively nested.
-//  TODO(bondhugula): make this work with non-identity layout maps.
+//  TODO: make this work with non-identity layout maps.
 static void getMultiLevelStrides(const MemRefRegion &region,
                                  ArrayRef<int64_t> bufferShape,
                                  SmallVectorImpl<StrideInfo> *strideInfos) {
@@ -1492,16 +2236,17 @@ generatePointWiseCopy(Location loc, Value memref, Value fastMemRef,
   SmallVector<AffineExpr, 4> fastBufExprs;
   SmallVector<Value, 4> fastBufMapOperands;
   AffineForOp copyNestRoot;
+  SmallVector<AffineApplyOp, 4> mayBeDeadApplys;
   for (unsigned d = 0; d < rank; ++d) {
     auto forOp = createCanonicalizedAffineForOp(b, loc, lbOperands, lbMaps[d],
                                                 ubOperands, ubMaps[d]);
     if (d == 0)
       copyNestRoot = forOp;
 
-    b = forOp.getBodyBuilder();
+    b = OpBuilder::atBlockTerminator(forOp.getBody());
 
     auto fastBufOffsetMap =
-        AffineMap::get(lbOperands.size(), 0, {fastBufOffsets[d]});
+        AffineMap::get(lbOperands.size(), 0, fastBufOffsets[d]);
     auto offset = b.create<AffineApplyOp>(loc, fastBufOffsetMap, lbOperands);
 
     // Construct the subscript for the fast memref being copied into/from:
@@ -1510,15 +2255,22 @@ generatePointWiseCopy(Location loc, Value memref, Value fastMemRef,
                            b.getAffineDimExpr(2 * d));
     fastBufMapOperands.push_back(offset);
     fastBufMapOperands.push_back(forOp.getInductionVar());
+    mayBeDeadApplys.push_back(offset);
 
     // Subscript for the slow memref being copied.
     memIndices.push_back(forOp.getInductionVar());
   }
 
-  auto fastBufMap = AffineMap::get(2 * rank, /*symbolCount=*/0, fastBufExprs);
+  auto fastBufMap =
+      AffineMap::get(2 * rank, /*symbolCount=*/0, fastBufExprs, b.getContext());
   fullyComposeAffineMapAndOperands(&fastBufMap, &fastBufMapOperands);
   fastBufMap = simplifyAffineMap(fastBufMap);
   canonicalizeMapAndOperands(&fastBufMap, &fastBufMapOperands);
+
+  // Drop any dead affine.applys.
+  for (auto applyOp : mayBeDeadApplys)
+    if (applyOp.use_empty())
+      applyOp.erase();
 
   if (!isCopyOut) {
     // Copy in.
@@ -1712,7 +2464,7 @@ static LogicalResult generateCopy(
     SmallVector<StrideInfo, 4> dmaStrideInfos;
     getMultiLevelStrides(region, fastBufferShape, &dmaStrideInfos);
 
-    // TODO(bondhugula): use all stride levels once DmaStartOp is extended for
+    // TODO: use all stride levels once DmaStartOp is extended for
     // multi-level strides.
     if (dmaStrideInfos.size() > 1) {
       LLVM_DEBUG(llvm::dbgs() << "Only up to one level of stride supported\n");
@@ -1818,7 +2570,8 @@ static LogicalResult generateCopy(
     auto dimExpr = b.getAffineDimExpr(regionSymbols.size() + i);
     remapExprs.push_back(dimExpr - fastBufOffsets[i]);
   }
-  auto indexRemap = AffineMap::get(regionSymbols.size() + rank, 0, remapExprs);
+  auto indexRemap = AffineMap::get(regionSymbols.size() + rank, 0, remapExprs,
+                                   b.getContext());
 
   // Record the begin since it may be invalidated by memref replacement.
   Block::iterator prevOfBegin;
@@ -1911,7 +2664,7 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
 
   // Copies will be generated for this depth, i.e., symbolic in all loops
   // surrounding the this block range.
-  unsigned copyDepth = getNestingDepth(*begin);
+  unsigned copyDepth = getNestingDepth(&*begin);
 
   LLVM_DEBUG(llvm::dbgs() << "Generating copies at depth " << copyDepth
                           << "\n");
@@ -1966,7 +2719,7 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
 
     // Each memref has a single buffer associated with it irrespective of how
     // many load's and store's happen on it.
-    // TODO(bondhugula): in the future, when regions don't intersect and satisfy
+    // TODO: in the future, when regions don't intersect and satisfy
     // other properties (based on load/store regions), we could consider
     // multiple buffers per memref.
 
@@ -1981,7 +2734,7 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
     auto updateRegion =
         [&](const SmallMapVector<Value, std::unique_ptr<MemRefRegion>, 4>
                 &targetRegions) {
-          auto it = targetRegions.find(region->memref);
+          const auto it = targetRegions.find(region->memref);
           if (it == targetRegions.end())
             return false;
 
@@ -2181,7 +2934,11 @@ static AffineIfOp createSeparationCondition(MutableArrayRef<AffineForOp> loops,
   auto *context = loops[0].getContext();
 
   FlatAffineConstraints cst;
-  getIndexSet(loops, &cst);
+  SmallVector<Operation *, 8> ops;
+  ops.reserve(loops.size());
+  for (AffineForOp forOp : loops)
+    ops.push_back(forOp);
+  getIndexSet(ops, &cst);
 
   // Remove constraints that are independent of these loop IVs.
   cst.removeIndependentConstraints(/*pos=*/0, /*num=*/loops.size());
@@ -2191,7 +2948,7 @@ static AffineIfOp createSeparationCondition(MutableArrayRef<AffineForOp> loops,
   // larger (and resp. smaller) than any other lower (or upper bound).
   SmallVector<int64_t, 8> fullTileLb, fullTileUb;
   for (auto loop : loops) {
-    (void) loop;
+    (void)loop;
     // TODO: Non-unit stride is not an issue to generalize to.
     assert(loop.getStep() == 1 && "point loop step expected to be one");
     // Mark everything symbols for the purpose of finding a constant diff pair.
@@ -2265,7 +3022,8 @@ createFullTiles(MutableArrayRef<AffineForOp> inputNest,
                  << "[tile separation] non-unit stride not implemented\n");
       return failure();
     }
-    getIndexSet({loop}, &cst);
+    SmallVector<Operation *, 1> loopOp{loop.getOperation()};
+    getIndexSet(loopOp, &cst);
     // We will mark everything other than this loop IV as symbol for getting a
     // pair of <lb, ub> with a constant difference.
     cst.setDimSymbolSeparation(cst.getNumDimAndSymbolIds() - 1);
@@ -2289,7 +3047,7 @@ createFullTiles(MutableArrayRef<AffineForOp> inputNest,
     AffineForOp fullTileLoop = createCanonicalizedAffineForOp(
         b, loop.getLoc(), lbVmap.getOperands(), lbVmap.getAffineMap(),
         ubVmap.getOperands(), ubVmap.getAffineMap());
-    b = fullTileLoop.getBodyBuilder();
+    b = OpBuilder::atBlockTerminator(fullTileLoop.getBody());
     fullTileLoops.push_back(fullTileLoop);
   }
 
@@ -2298,7 +3056,7 @@ createFullTiles(MutableArrayRef<AffineForOp> inputNest,
   for (auto loopEn : llvm::enumerate(inputNest))
     operandMap.map(loopEn.value().getInductionVar(),
                    fullTileLoops[loopEn.index()].getInductionVar());
-  b = fullTileLoops.back().getBodyBuilder();
+  b = OpBuilder::atBlockTerminator(fullTileLoops.back().getBody());
   for (auto &op : inputNest.back().getBody()->without_terminator())
     b.clone(op, operandMap);
   return success();
@@ -2315,7 +3073,7 @@ mlir::separateFullTiles(MutableArrayRef<AffineForOp> inputNest,
   // Each successive for op has to be nested in the other.
   auto prevLoop = firstLoop;
   for (auto loop : inputNest.drop_front(1)) {
-    assert(loop.getParentOp() == prevLoop && "input not contiguously nested");
+    assert(loop->getParentOp() == prevLoop && "input not contiguously nested");
     prevLoop = loop;
   }
 
@@ -2343,16 +3101,15 @@ mlir::separateFullTiles(MutableArrayRef<AffineForOp> inputNest,
   AffineForOp outermostFullTileLoop = fullTileLoops[0];
   thenBlock->getOperations().splice(
       std::prev(thenBlock->end()),
-      outermostFullTileLoop.getOperation()->getBlock()->getOperations(),
+      outermostFullTileLoop->getBlock()->getOperations(),
       Block::iterator(outermostFullTileLoop));
 
   // Move the partial tile into the else block. The partial tile is the same as
   // the original loop nest.
   Block *elseBlock = ifOp.getElseBlock();
-  elseBlock->getOperations().splice(
-      std::prev(elseBlock->end()),
-      firstLoop.getOperation()->getBlock()->getOperations(),
-      Block::iterator(firstLoop));
+  elseBlock->getOperations().splice(std::prev(elseBlock->end()),
+                                    firstLoop->getBlock()->getOperations(),
+                                    Block::iterator(firstLoop));
 
   if (fullTileNest)
     *fullTileNest = std::move(fullTileLoops);

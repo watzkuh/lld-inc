@@ -51,9 +51,6 @@ public:
   /// Return the number of bytes in this string.
   unsigned size() const { return entry->getKeyLength(); }
 
-  /// Return true if this identifier is the specified string.
-  bool is(StringRef string) const { return strref() == string; }
-
   const char *begin() const { return data(); }
   const char *end() const { return entry->getKeyData() + size(); }
 
@@ -70,6 +67,9 @@ public:
     return Identifier(static_cast<const EntryType *>(entry));
   }
 
+  /// Compare the underlying StringRef.
+  int compare(Identifier rhs) const { return strref().compare(rhs.strref()); }
+
 private:
   /// This contains the bytes of the string, which is guaranteed to be nul
   /// terminated.
@@ -83,10 +83,15 @@ inline raw_ostream &operator<<(raw_ostream &os, Identifier identifier) {
 }
 
 // Identifier/Identifier equality comparisons are defined inline.
-inline bool operator==(Identifier lhs, StringRef rhs) { return lhs.is(rhs); }
-inline bool operator!=(Identifier lhs, StringRef rhs) { return !lhs.is(rhs); }
-inline bool operator==(StringRef lhs, Identifier rhs) { return rhs.is(lhs); }
-inline bool operator!=(StringRef lhs, Identifier rhs) { return !rhs.is(lhs); }
+inline bool operator==(Identifier lhs, StringRef rhs) {
+  return lhs.strref() == rhs;
+}
+inline bool operator!=(Identifier lhs, StringRef rhs) { return !(lhs == rhs); }
+
+inline bool operator==(StringRef lhs, Identifier rhs) {
+  return rhs.strref() == lhs;
+}
+inline bool operator!=(StringRef lhs, Identifier rhs) { return !(lhs == rhs); }
 
 // Make identifiers hashable.
 inline llvm::hash_code hash_value(Identifier arg) {

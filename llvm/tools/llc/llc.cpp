@@ -37,6 +37,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Pass.h"
+#include "llvm/Remarks/HotnessThresholdParser.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
@@ -142,11 +143,13 @@ static cl::opt<bool> RemarksWithHotness(
     cl::desc("With PGO, include profile count in optimization remarks"),
     cl::Hidden);
 
-static cl::opt<unsigned>
-    RemarksHotnessThreshold("pass-remarks-hotness-threshold",
-                            cl::desc("Minimum profile count required for "
-                                     "an optimization remark to be output"),
-                            cl::Hidden);
+static cl::opt<Optional<uint64_t>, false, remarks::HotnessThresholdParser>
+    RemarksHotnessThreshold(
+        "pass-remarks-hotness-threshold",
+        cl::desc("Minimum profile count required for "
+                 "an optimization remark to be output. "
+                 "Use 'auto' to apply the threshold from profile summary."),
+        cl::value_desc("N or 'auto'"), cl::init(0), cl::Hidden);
 
 static cl::opt<std::string>
     RemarksFilename("pass-remarks-output",
@@ -224,7 +227,7 @@ static std::unique_ptr<ToolOutputFile> GetOutputStream(const char *TargetName,
           OutputFilename += ".o";
         break;
       case CGFT_Null:
-        OutputFilename += ".null";
+        OutputFilename = "-";
         break;
       }
     }
@@ -316,7 +319,7 @@ int main(int argc, char **argv) {
   initializeConstantHoistingLegacyPassPass(*Registry);
   initializeScalarOpts(*Registry);
   initializeVectorization(*Registry);
-  initializeScalarizeMaskedMemIntrinPass(*Registry);
+  initializeScalarizeMaskedMemIntrinLegacyPassPass(*Registry);
   initializeExpandReductionsPass(*Registry);
   initializeHardwareLoopsPass(*Registry);
   initializeTransformUtils(*Registry);
@@ -412,41 +415,6 @@ static int compileModule(char **argv, LLVMContext &Context) {
   bool SkipModule = codegen::getMCPU() == "help" ||
                     (!MAttrs.empty() && MAttrs.front() == "help");
 
-  // If user just wants to list available options, skip module loading
-  if (!SkipModule) {
-    if (InputLanguage == "mir" ||
-        (InputLanguage == "" && StringRef(InputFilename).endswith(".mir"))) {
-      MIR = createMIRParserFromFile(InputFilename, Err, Context,
-                                    setMIRFunctionAttributes);
-      if (MIR)
-        M = MIR->parseIRModule();
-    } else
-      M = parseIRFile(InputFilename, Err, Context, false);
-    if (!M) {
-      Err.print(argv[0], WithColor::error(errs(), argv[0]));
-      return 1;
-    }
-
-    // If we are supposed to override the target triple, do so now.
-    if (!TargetTriple.empty())
-      M->setTargetTriple(Triple::normalize(TargetTriple));
-    TheTriple = Triple(M->getTargetTriple());
-  } else {
-    TheTriple = Triple(Triple::normalize(TargetTriple));
-  }
-
-  if (TheTriple.getTriple().empty())
-    TheTriple.setTriple(sys::getDefaultTargetTriple());
-
-  // Get the target specific parser.
-  std::string Error;
-  const Target *TheTarget =
-      TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
-  if (!TheTarget) {
-    WithColor::error(errs(), argv[0]) << Error;
-    return 1;
-  }
-
   CodeGenOpt::Level OLvl = CodeGenOpt::Default;
   switch (OptLevel) {
   default:
@@ -459,35 +427,107 @@ static int compileModule(char **argv, LLVMContext &Context) {
   case '3': OLvl = CodeGenOpt::Aggressive; break;
   }
 
-  TargetOptions Options = codegen::InitTargetOptionsFromCodeGenFlags();
-  Options.DisableIntegratedAS = NoIntegratedAssembler;
-  Options.MCOptions.ShowMCEncoding = ShowMCEncoding;
-  Options.MCOptions.MCUseDwarfDirectory = EnableDwarfDirectory;
-  Options.MCOptions.AsmVerbose = AsmVerbose;
-  Options.MCOptions.PreserveAsmComments = PreserveComments;
-  Options.MCOptions.IASSearchPaths = IncludeDirs;
-  Options.MCOptions.SplitDwarfFile = SplitDwarfFile;
+  TargetOptions Options;
+  auto InitializeOptions = [&](const Triple &TheTriple) {
+    Options = codegen::InitTargetOptionsFromCodeGenFlags(TheTriple);
+    Options.DisableIntegratedAS = NoIntegratedAssembler;
+    Options.MCOptions.ShowMCEncoding = ShowMCEncoding;
+    Options.MCOptions.MCUseDwarfDirectory = EnableDwarfDirectory;
+    Options.MCOptions.AsmVerbose = AsmVerbose;
+    Options.MCOptions.PreserveAsmComments = PreserveComments;
+    Options.MCOptions.IASSearchPaths = IncludeDirs;
+    Options.MCOptions.SplitDwarfFile = SplitDwarfFile;
+  };
 
-  // On AIX, setting the relocation model to anything other than PIC is considered
-  // a user error.
   Optional<Reloc::Model> RM = codegen::getExplicitRelocModel();
-  if (TheTriple.isOSAIX() && RM.hasValue() && *RM != Reloc::PIC_) {
-    WithColor::error(errs(), argv[0])
-        << "invalid relocation model, AIX only supports PIC.\n";
-    return 1;
-  }
 
-  std::unique_ptr<TargetMachine> Target(TheTarget->createTargetMachine(
-      TheTriple.getTriple(), CPUStr, FeaturesStr, Options, RM,
-      codegen::getExplicitCodeModel(), OLvl));
+  const Target *TheTarget = nullptr;
+  std::unique_ptr<TargetMachine> Target;
 
-  assert(Target && "Could not allocate target machine!");
+  // If user just wants to list available options, skip module loading
+  if (!SkipModule) {
+    auto SetDataLayout =
+        [&](StringRef DataLayoutTargetTriple) -> Optional<std::string> {
+      // If we are supposed to override the target triple, do so now.
+      std::string IRTargetTriple = DataLayoutTargetTriple.str();
+      if (!TargetTriple.empty())
+        IRTargetTriple = Triple::normalize(TargetTriple);
+      TheTriple = Triple(IRTargetTriple);
+      if (TheTriple.getTriple().empty())
+        TheTriple.setTriple(sys::getDefaultTargetTriple());
 
-  // If we don't have a module then just exit now. We do this down
-  // here since the CPU/Feature help is underneath the target machine
-  // creation.
-  if (SkipModule)
+      std::string Error;
+      TheTarget =
+          TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+      if (!TheTarget) {
+        WithColor::error(errs(), argv[0]) << Error;
+        exit(1);
+      }
+
+      // On AIX, setting the relocation model to anything other than PIC is
+      // considered a user error.
+      if (TheTriple.isOSAIX() && RM.hasValue() && *RM != Reloc::PIC_) {
+        WithColor::error(errs(), argv[0])
+            << "invalid relocation model, AIX only supports PIC.\n";
+        exit(1);
+      }
+
+      InitializeOptions(TheTriple);
+      Target = std::unique_ptr<TargetMachine>(TheTarget->createTargetMachine(
+          TheTriple.getTriple(), CPUStr, FeaturesStr, Options, RM,
+          codegen::getExplicitCodeModel(), OLvl));
+      assert(Target && "Could not allocate target machine!");
+
+      return Target->createDataLayout().getStringRepresentation();
+    };
+    if (InputLanguage == "mir" ||
+        (InputLanguage == "" && StringRef(InputFilename).endswith(".mir"))) {
+      MIR = createMIRParserFromFile(InputFilename, Err, Context,
+                                    setMIRFunctionAttributes);
+      if (MIR)
+        M = MIR->parseIRModule(SetDataLayout);
+    } else {
+      M = parseIRFile(InputFilename, Err, Context, SetDataLayout);
+    }
+    if (!M) {
+      Err.print(argv[0], WithColor::error(errs(), argv[0]));
+      return 1;
+    }
+    if (!TargetTriple.empty())
+      M->setTargetTriple(Triple::normalize(TargetTriple));
+  } else {
+    TheTriple = Triple(Triple::normalize(TargetTriple));
+    if (TheTriple.getTriple().empty())
+      TheTriple.setTriple(sys::getDefaultTargetTriple());
+
+    // Get the target specific parser.
+    std::string Error;
+    TheTarget =
+        TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+    if (!TheTarget) {
+      WithColor::error(errs(), argv[0]) << Error;
+      return 1;
+    }
+
+    // On AIX, setting the relocation model to anything other than PIC is
+    // considered a user error.
+    if (TheTriple.isOSAIX() && RM.hasValue() && *RM != Reloc::PIC_) {
+      WithColor::error(errs(), argv[0])
+          << "invalid relocation model, AIX only supports PIC.\n";
+      return 1;
+    }
+
+    InitializeOptions(TheTriple);
+    Target = std::unique_ptr<TargetMachine>(TheTarget->createTargetMachine(
+        TheTriple.getTriple(), CPUStr, FeaturesStr, Options, RM,
+        codegen::getExplicitCodeModel(), OLvl));
+    assert(Target && "Could not allocate target machine!");
+
+    // If we don't have a module then just exit now. We do this down
+    // here since the CPU/Feature help is underneath the target machine
+    // creation.
     return 0;
+  }
 
   assert(M && "Should have exited if we didn't have a module!");
   if (codegen::getFloatABIForCalls() != FloatABI::Default)
@@ -519,13 +559,6 @@ static int compileModule(char **argv, LLVMContext &Context) {
   if (DisableSimplifyLibCalls)
     TLII.disableAllFunctions();
   PM.add(new TargetLibraryInfoWrapperPass(TLII));
-
-  // Add the target data from the target machine, if it exists, or the module.
-  M->setDataLayout(Target->createDataLayout());
-
-  // This needs to be done after setting datalayout since it calls verifier
-  // to check debug info whereas verifier relies on correct datalayout.
-  UpgradeDebugInfo(*M);
 
   // Verify module immediately to catch problems before doInitialization() is
   // called on any passes.

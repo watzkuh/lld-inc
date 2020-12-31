@@ -38,8 +38,8 @@ private:
 /// Internally, argument and result attributes are stored as dict attributes
 /// with special names given by getResultAttrName, getArgumentAttrName.
 void addArgAndResultAttrs(Builder &builder, OperationState &result,
-                          ArrayRef<SmallVector<NamedAttribute, 2>> argAttrs,
-                          ArrayRef<SmallVector<NamedAttribute, 2>> resultAttrs);
+                          ArrayRef<NamedAttrList> argAttrs,
+                          ArrayRef<NamedAttrList> resultAttrs);
 
 /// Callback type for `parseFunctionLikeOp`, the callback should produce the
 /// type that will be associated with a function-like operation from lists of
@@ -49,17 +49,27 @@ void addArgAndResultAttrs(Builder &builder, OperationState &result,
 using FuncTypeBuilder = function_ref<Type(
     Builder &, ArrayRef<Type>, ArrayRef<Type>, VariadicFlag, std::string &)>;
 
+/// Parses function arguments using `parser`. The `allowVariadic` argument
+/// indicates whether functions with variadic arguments are supported. The
+/// trailing arguments are populated by this function with names, types and
+/// attributes of the arguments.
+ParseResult parseFunctionArgumentList(
+    OpAsmParser &parser, bool allowAttributes, bool allowVariadic,
+    SmallVectorImpl<OpAsmParser::OperandType> &argNames,
+    SmallVectorImpl<Type> &argTypes, SmallVectorImpl<NamedAttrList> &argAttrs,
+    bool &isVariadic);
+
 /// Parses a function signature using `parser`. The `allowVariadic` argument
 /// indicates whether functions with variadic arguments are supported. The
 /// trailing arguments are populated by this function with names, types and
 /// attributes of the arguments and those of the results.
-ParseResult parseFunctionSignature(
-    OpAsmParser &parser, bool allowVariadic,
-    SmallVectorImpl<OpAsmParser::OperandType> &argNames,
-    SmallVectorImpl<Type> &argTypes,
-    SmallVectorImpl<SmallVector<NamedAttribute, 2>> &argAttrs, bool &isVariadic,
-    SmallVectorImpl<Type> &resultTypes,
-    SmallVectorImpl<SmallVector<NamedAttribute, 2>> &resultAttrs);
+ParseResult
+parseFunctionSignature(OpAsmParser &parser, bool allowVariadic,
+                       SmallVectorImpl<OpAsmParser::OperandType> &argNames,
+                       SmallVectorImpl<Type> &argTypes,
+                       SmallVectorImpl<NamedAttrList> &argAttrs,
+                       bool &isVariadic, SmallVectorImpl<Type> &resultTypes,
+                       SmallVectorImpl<NamedAttrList> &resultAttrs);
 
 /// Parser implementation for function-like operations.  Uses
 /// `funcTypeBuilder` to construct the custom function type given lists of

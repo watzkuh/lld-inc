@@ -26,7 +26,6 @@
 #include "lldb/Utility/StructuredData.h"
 #include "lldb/Utility/Timeout.h"
 #include "lldb/Utility/UserIDResolver.h"
-#include "lldb/Utility/XcodeSDK.h"
 #include "lldb/lldb-private-forward.h"
 #include "lldb/lldb-public.h"
 #include "llvm/Support/VersionTuple.h"
@@ -302,11 +301,10 @@ public:
   LocateExecutableScriptingResources(Target *target, Module &module,
                                      Stream *feedback_stream);
 
-  virtual Status GetSharedModule(const ModuleSpec &module_spec,
-                                 Process *process, lldb::ModuleSP &module_sp,
-                                 const FileSpecList *module_search_paths_ptr,
-                                 lldb::ModuleSP *old_module_sp_ptr,
-                                 bool *did_create_ptr);
+  virtual Status GetSharedModule(
+      const ModuleSpec &module_spec, Process *process,
+      lldb::ModuleSP &module_sp, const FileSpecList *module_search_paths_ptr,
+      llvm::SmallVectorImpl<lldb::ModuleSP> *old_modules, bool *did_create_ptr);
 
   virtual bool GetModuleSpec(const FileSpec &module_file_spec,
                              const ArchSpec &arch, ModuleSpec &module_spec);
@@ -373,9 +371,13 @@ public:
 
   virtual lldb::ProcessSP ConnectProcess(llvm::StringRef connect_url,
                                          llvm::StringRef plugin_name,
-                                         lldb_private::Debugger &debugger,
-                                         lldb_private::Target *target,
-                                         lldb_private::Status &error);
+                                         Debugger &debugger, Target *target,
+                                         Status &error);
+
+  virtual lldb::ProcessSP
+  ConnectProcessSynchronous(llvm::StringRef connect_url,
+                            llvm::StringRef plugin_name, Debugger &debugger,
+                            Stream &stream, Target *target, Status &error);
 
   /// Attach to an existing process using a process ID.
   ///
@@ -433,10 +435,6 @@ public:
   virtual lldb_private::ConstString
   GetSDKDirectory(lldb_private::Target &target) {
     return lldb_private::ConstString();
-  }
-
-  virtual llvm::StringRef GetSDKPath(lldb_private::XcodeSDK sdk) {
-    return {};
   }
 
   const std::string &GetRemoteURL() const { return m_remote_url; }
@@ -523,6 +521,9 @@ public:
   virtual lldb::user_id_t GetFileSize(const FileSpec &file_spec) {
     return UINT64_MAX;
   }
+
+  virtual void AutoCompleteDiskFileOrDirectory(CompletionRequest &request,
+                                               bool only_dir) {}
 
   virtual uint64_t ReadFile(lldb::user_id_t fd, uint64_t offset, void *dst,
                             uint64_t dst_len, Status &error) {
@@ -619,7 +620,18 @@ public:
   }
 
   virtual lldb_private::Status RunShellCommand(
-      const char *command,         // Shouldn't be nullptr
+      llvm::StringRef command,
+      const FileSpec &working_dir, // Pass empty FileSpec to use the current
+                                   // working directory
+      int *status_ptr, // Pass nullptr if you don't want the process exit status
+      int *signo_ptr,  // Pass nullptr if you don't want the signal that caused
+                       // the process to exit
+      std::string
+          *command_output, // Pass nullptr if you don't want the command output
+      const Timeout<std::micro> &timeout);
+
+  virtual lldb_private::Status RunShellCommand(
+      llvm::StringRef shell, llvm::StringRef command,
       const FileSpec &working_dir, // Pass empty FileSpec to use the current
                                    // working directory
       int *status_ptr, // Pass nullptr if you don't want the process exit status
@@ -638,7 +650,7 @@ public:
   virtual bool CalculateMD5(const FileSpec &file_spec, uint64_t &low,
                             uint64_t &high);
 
-  virtual int32_t GetResumeCountForLaunchInfo(ProcessLaunchInfo &launch_info) {
+  virtual uint32_t GetResumeCountForLaunchInfo(ProcessLaunchInfo &launch_info) {
     return 1;
   }
 
@@ -853,6 +865,12 @@ public:
   }
 
 protected:
+  /// Private implementation of connecting to a process. If the stream is set
+  /// we connect synchronously.
+  lldb::ProcessSP DoConnectProcess(llvm::StringRef connect_url,
+                                   llvm::StringRef plugin_name,
+                                   Debugger &debugger, Stream *stream,
+                                   Target *target, Status &error);
   bool m_is_host;
   // Set to true when we are able to actually set the OS version while being
   // connected. For remote platforms, we might set the version ahead of time
@@ -932,8 +950,6 @@ private:
                               Platform &remote_platform);
 
   FileSpec GetModuleCacheRoot();
-
-  DISALLOW_COPY_AND_ASSIGN(Platform);
 };
 
 class PlatformList {
@@ -1000,7 +1016,8 @@ protected:
   lldb::PlatformSP m_selected_platform_sp;
 
 private:
-  DISALLOW_COPY_AND_ASSIGN(PlatformList);
+  PlatformList(const PlatformList &) = delete;
+  const PlatformList &operator=(const PlatformList &) = delete;
 };
 
 class OptionGroupPlatformRSync : public lldb_private::OptionGroup {
@@ -1025,7 +1042,9 @@ public:
   bool m_ignores_remote_hostname;
 
 private:
-  DISALLOW_COPY_AND_ASSIGN(OptionGroupPlatformRSync);
+  OptionGroupPlatformRSync(const OptionGroupPlatformRSync &) = delete;
+  const OptionGroupPlatformRSync &
+  operator=(const OptionGroupPlatformRSync &) = delete;
 };
 
 class OptionGroupPlatformSSH : public lldb_private::OptionGroup {
@@ -1048,7 +1067,9 @@ public:
   std::string m_ssh_opts;
 
 private:
-  DISALLOW_COPY_AND_ASSIGN(OptionGroupPlatformSSH);
+  OptionGroupPlatformSSH(const OptionGroupPlatformSSH &) = delete;
+  const OptionGroupPlatformSSH &
+  operator=(const OptionGroupPlatformSSH &) = delete;
 };
 
 class OptionGroupPlatformCaching : public lldb_private::OptionGroup {
@@ -1070,7 +1091,9 @@ public:
   std::string m_cache_dir;
 
 private:
-  DISALLOW_COPY_AND_ASSIGN(OptionGroupPlatformCaching);
+  OptionGroupPlatformCaching(const OptionGroupPlatformCaching &) = delete;
+  const OptionGroupPlatformCaching &
+  operator=(const OptionGroupPlatformCaching &) = delete;
 };
 
 } // namespace lldb_private

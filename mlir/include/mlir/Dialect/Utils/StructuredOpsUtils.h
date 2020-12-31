@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This header file define utilities that operate on standard types and are
+// This header file define utilities that operate on builtin types and are
 // useful across multiple dialects that use structured ops abstractions. These
 // abstractions consist of define custom operations that encode and transport
 // information about their semantics (e.g. type of iterators like parallel,
@@ -18,29 +18,31 @@
 #define MLIR_DIALECT_UTILS_STRUCTUREDOPSUTILS_H
 
 #include "mlir/IR/AffineMap.h"
-#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/StringRef.h"
 
 namespace mlir {
 
 inline bool isRowMajorMatmul(ArrayAttr indexingMaps) {
+  auto context = indexingMaps.getContext();
   AffineExpr m, n, k;
-  bindDims(indexingMaps.getContext(), m, n, k);
-  auto mapA = AffineMapAttr::get(AffineMap::get(3, 0, {m, k}));
-  auto mapB = AffineMapAttr::get(AffineMap::get(3, 0, {k, n}));
-  auto mapC = AffineMapAttr::get(AffineMap::get(3, 0, {m, n}));
-  auto maps = ArrayAttr::get({mapA, mapB, mapC}, indexingMaps.getContext());
+  bindDims(context, m, n, k);
+  auto mapA = AffineMapAttr::get(AffineMap::get(3, 0, {m, k}, context));
+  auto mapB = AffineMapAttr::get(AffineMap::get(3, 0, {k, n}, context));
+  auto mapC = AffineMapAttr::get(AffineMap::get(3, 0, {m, n}, context));
+  auto maps = ArrayAttr::get({mapA, mapB, mapC}, context);
   return indexingMaps == maps;
 }
 
 inline bool isColumnMajorMatmul(ArrayAttr indexingMaps) {
+  auto context = indexingMaps.getContext();
   AffineExpr m, n, k;
-  bindDims(indexingMaps.getContext(), m, n, k);
-  auto mapA = AffineMapAttr::get(AffineMap::get(3, 0, {k, n}));
-  auto mapB = AffineMapAttr::get(AffineMap::get(3, 0, {m, k}));
-  auto mapC = AffineMapAttr::get(AffineMap::get(3, 0, {n, m}));
-  auto maps = ArrayAttr::get({mapA, mapB, mapC}, indexingMaps.getContext());
+  bindDims(context, m, n, k);
+  auto mapA = AffineMapAttr::get(AffineMap::get(3, 0, {k, n}, context));
+  auto mapB = AffineMapAttr::get(AffineMap::get(3, 0, {m, k}, context));
+  auto mapC = AffineMapAttr::get(AffineMap::get(3, 0, {n, m}, context));
+  auto maps = ArrayAttr::get({mapA, mapB, mapC}, context);
   return indexingMaps == maps;
 }
 
@@ -52,25 +54,16 @@ constexpr StringRef getIndexingMapsAttrName() { return "indexing_maps"; }
 /// op's iterators.
 constexpr StringRef getIteratorTypesAttrName() { return "iterator_types"; }
 
-/// Attribute name for the IntegerAttr which encodes the number of input buffer
-/// arguments.
-constexpr StringRef getArgsInAttrName() { return "args_in"; }
-
-/// Attribute name for the IntegerAttr which encodes the number of input buffer
-/// arguments.
-constexpr StringRef getArgsOutAttrName() { return "args_out"; }
-
 /// Attribute name for the StringAttr which encodes an optional documentation
 /// string of the structured op.
 constexpr StringRef getDocAttrName() { return "doc"; }
 
-/// Attribute name for the StrArrayAttr which encodes the SymbolAttr for the
-/// MLIR function that implements the body of the structured op.
-constexpr StringRef getFunAttrName() { return "fun"; }
-
 /// Attribute name for the StrArrayAttr which encodes the external library
 /// function that implements the structured op.
 constexpr StringRef getLibraryCallAttrName() { return "library_call"; }
+
+/// Attribute name for the ArrayAttr of StrArrayAttr that encodes sparsity.
+constexpr StringRef getSparseAttrName() { return "sparse"; }
 
 /// Attribute name for the StrArrayAttr which encodes the value of strides.
 constexpr StringRef getStridesAttrName() { return "strides"; }
@@ -83,12 +76,24 @@ constexpr StringRef getPaddingAttrName() { return "padding"; }
 
 /// Use to encode that a particular iterator type has parallel semantics.
 constexpr StringRef getParallelIteratorTypeName() { return "parallel"; }
+inline bool isParallelIterator(Attribute attr) {
+  auto strAttr = attr.dyn_cast_or_null<StringAttr>();
+  return strAttr && strAttr.getValue() == getParallelIteratorTypeName();
+}
 
 /// Use to encode that a particular iterator type has reduction semantics.
 constexpr StringRef getReductionIteratorTypeName() { return "reduction"; }
+inline bool isReductionIterator(Attribute attr) {
+  auto strAttr = attr.dyn_cast_or_null<StringAttr>();
+  return strAttr && strAttr.getValue() == getReductionIteratorTypeName();
+}
 
 /// Use to encode that a particular iterator type has window semantics.
 constexpr StringRef getWindowIteratorTypeName() { return "window"; }
+inline bool isWindowIterator(Attribute attr) {
+  auto strAttr = attr.dyn_cast_or_null<StringAttr>();
+  return strAttr && strAttr.getValue() == getWindowIteratorTypeName();
+}
 
 /// Use to encode that a particular iterator type has window semantics.
 inline ArrayRef<StringRef> getAllIteratorTypeNames() {
@@ -126,6 +131,18 @@ inline StringRef toString(IteratorType t) {
     return getReductionIteratorTypeName();
   }
   llvm_unreachable("Unsupported IteratorType");
+}
+
+/// Use to encode a dense or sparse dimension.
+constexpr StringRef getSparseDimName() { return "S"; }
+inline bool isSparseDim(Attribute attr) {
+  auto strAttr = attr.dyn_cast_or_null<StringAttr>();
+  return strAttr && strAttr.getValue() == getSparseDimName();
+}
+constexpr StringRef getDenseDimName() { return "D"; }
+inline bool isDenseDim(Attribute attr) {
+  auto strAttr = attr.dyn_cast_or_null<StringAttr>();
+  return strAttr && strAttr.getValue() == getDenseDimName();
 }
 
 } // end namespace mlir

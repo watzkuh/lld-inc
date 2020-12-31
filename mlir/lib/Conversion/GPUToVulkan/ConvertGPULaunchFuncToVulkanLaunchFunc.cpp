@@ -16,14 +16,14 @@
 #include "../PassDetail.h"
 #include "mlir/Conversion/GPUToVulkan/ConvertGPUToVulkanPass.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
-#include "mlir/Dialect/SPIRV/SPIRVOps.h"
-#include "mlir/Dialect/SPIRV/Serialization.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/Function.h"
-#include "mlir/IR/Module.h"
-#include "mlir/IR/StandardTypes.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Target/SPIRV/Serialization.h"
 
 using namespace mlir;
 
@@ -54,10 +54,12 @@ private:
 
   /// Checks where the given type is supported by Vulkan runtime.
   bool isSupportedType(Type type) {
-    // TODO(denis0x0D): Handle other types.
-    if (auto memRefType = type.dyn_cast_or_null<MemRefType>())
+    if (auto memRefType = type.dyn_cast_or_null<MemRefType>()) {
+      auto elementType = memRefType.getElementType();
       return memRefType.hasRank() &&
-             (memRefType.getRank() >= 1 && memRefType.getRank() <= 3);
+             (memRefType.getRank() >= 1 && memRefType.getRank() <= 3) &&
+             (elementType.isIntOrFloat());
+    }
     return false;
   }
 
@@ -65,6 +67,11 @@ private:
   /// operand is unsupported by Vulkan runtime.
   LogicalResult declareVulkanLaunchFunc(Location loc,
                                         gpu::LaunchFuncOp launchOp);
+
+private:
+  /// The number of vulkan launch configuration operands, placed at the leading
+  /// positions of the operand list.
+  static constexpr unsigned kVulkanLaunchNumConfigOperands = 3;
 };
 
 } // anonymous namespace
@@ -93,23 +100,30 @@ void ConvertGpuLaunchFuncToVulkanLaunchFunc::runOnOperation() {
 LogicalResult ConvertGpuLaunchFuncToVulkanLaunchFunc::declareVulkanLaunchFunc(
     Location loc, gpu::LaunchFuncOp launchOp) {
   OpBuilder builder(getOperation().getBody()->getTerminator());
-  // TODO: Workgroup size is written into the kernel. So to properly modelling
-  // vulkan launch, we cannot have the local workgroup size configuration here.
-  SmallVector<Type, 8> vulkanLaunchTypes{launchOp.getOperandTypes()};
 
-  // Check that all operands have supported types except those for the launch
-  // configuration.
+  // Workgroup size is written into the kernel. So to properly modelling
+  // vulkan launch, we have to skip local workgroup size configuration here.
+  SmallVector<Type, 8> gpuLaunchTypes(launchOp.getOperandTypes());
+  // The first kVulkanLaunchNumConfigOperands of the gpu.launch_func op are the
+  // same as the config operands for the vulkan launch call op.
+  SmallVector<Type, 8> vulkanLaunchTypes(gpuLaunchTypes.begin(),
+                                         gpuLaunchTypes.begin() +
+                                             kVulkanLaunchNumConfigOperands);
+  vulkanLaunchTypes.append(gpuLaunchTypes.begin() +
+                               gpu::LaunchOp::kNumConfigOperands,
+                           gpuLaunchTypes.end());
+
+  // Check that all operands have supported types except those for the
+  // launch configuration.
   for (auto type :
-       llvm::drop_begin(vulkanLaunchTypes, gpu::LaunchOp::kNumConfigOperands)) {
+       llvm::drop_begin(vulkanLaunchTypes, kVulkanLaunchNumConfigOperands)) {
     if (!isSupportedType(type))
       return launchOp.emitError() << type << " is unsupported to run on Vulkan";
   }
 
   // Declare vulkan launch function.
-  builder.create<FuncOp>(
-      loc, kVulkanLaunch,
-      FunctionType::get(vulkanLaunchTypes, ArrayRef<Type>{}, loc->getContext()),
-      ArrayRef<NamedAttribute>{});
+  auto funcType = builder.getFunctionType(vulkanLaunchTypes, {});
+  builder.create<FuncOp>(loc, kVulkanLaunch, funcType).setPrivate();
 
   return success();
 }
@@ -147,20 +161,28 @@ void ConvertGpuLaunchFuncToVulkanLaunchFunc::convertGpuLaunchFunc(
   if (failed(declareVulkanLaunchFunc(loc, launchOp)))
     return signalPassFailure();
 
+  SmallVector<Value, 8> gpuLaunchOperands(launchOp.getOperands());
+  SmallVector<Value, 8> vulkanLaunchOperands(
+      gpuLaunchOperands.begin(),
+      gpuLaunchOperands.begin() + kVulkanLaunchNumConfigOperands);
+  vulkanLaunchOperands.append(gpuLaunchOperands.begin() +
+                                  gpu::LaunchOp::kNumConfigOperands,
+                              gpuLaunchOperands.end());
+
   // Create vulkan launch call op.
   auto vulkanLaunchCallOp = builder.create<CallOp>(
-      loc, ArrayRef<Type>{}, builder.getSymbolRefAttr(kVulkanLaunch),
-      launchOp.getOperands());
+      loc, TypeRange{}, builder.getSymbolRefAttr(kVulkanLaunch),
+      vulkanLaunchOperands);
 
   // Set SPIR-V binary shader data as an attribute.
-  vulkanLaunchCallOp.setAttr(
+  vulkanLaunchCallOp->setAttr(
       kSPIRVBlobAttrName,
       StringAttr::get({binary.data(), binary.size()}, loc->getContext()));
 
   // Set entry point name as an attribute.
-  vulkanLaunchCallOp.setAttr(
+  vulkanLaunchCallOp->setAttr(
       kSPIRVEntryPointAttrName,
-      StringAttr::get(launchOp.kernel(), loc->getContext()));
+      StringAttr::get(launchOp.getKernelName(), loc->getContext()));
 
   launchOp.erase();
 }

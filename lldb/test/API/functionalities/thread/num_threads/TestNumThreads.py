@@ -62,7 +62,6 @@ class NumberOfThreadsTestCase(TestBase):
 
     @skipIfDarwin # rdar://33462362
     @skipIfWindows # This is flakey on Windows: llvm.org/pr37658, llvm.org/pr38373
-    @expectedFailureNetBSD
     def test_unique_stacks(self):
         """Test backtrace unique with multiple threads executing the same stack."""
         self.build()
@@ -95,6 +94,8 @@ class NumberOfThreadsTestCase(TestBase):
         # the same breakpoint.
         def is_thread3(thread):
             for frame in thread:
+                if frame.GetFunctionName() is None:
+                    continue
                 if "thread3" in frame.GetFunctionName(): return True
             return False
 

@@ -4,6 +4,17 @@ add_llvm_component_library(LLVMDWARFLinker
   DWARFLinker.cpp
   DWARFStreamer.cpp
 
+  ADDITIONAL_HEADER_DIRS
+  ${LLVM_MAIN_INCLUDE_DIR}/llvm/DWARFLinker
+
   DEPENDS
   intrinsics_gen
+
+  LINK_COMPONENTS
+  DebugInfoDWARF
+  AsmPrinter
+  CodeGen
+  MC
+  Object
+  Support
   )

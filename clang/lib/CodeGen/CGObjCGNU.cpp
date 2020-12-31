@@ -42,16 +42,6 @@ using namespace CodeGen;
 
 namespace {
 
-std::string SymbolNameForMethod( StringRef ClassName,
-     StringRef CategoryName, const Selector MethodName,
-    bool isClassMethod) {
-  std::string MethodNameColonStripped = MethodName.getAsString();
-  std::replace(MethodNameColonStripped.begin(), MethodNameColonStripped.end(),
-      ':', '_');
-  return (Twine(isClassMethod ? "_c_" : "_i_") + ClassName + "_" +
-    CategoryName + "_" + MethodNameColonStripped).str();
-}
-
 /// Class that lazily initialises the runtime function.  Avoids inserting the
 /// types and the function declaration into a module if they're not used, and
 /// avoids constructing the type more than once if it's used more than once.
@@ -255,11 +245,11 @@ protected:
       isDynamic=true) {
     int attrs = property->getPropertyAttributes();
     // For read-only properties, clear the copy and retain flags
-    if (attrs & ObjCPropertyDecl::OBJC_PR_readonly) {
-      attrs &= ~ObjCPropertyDecl::OBJC_PR_copy;
-      attrs &= ~ObjCPropertyDecl::OBJC_PR_retain;
-      attrs &= ~ObjCPropertyDecl::OBJC_PR_weak;
-      attrs &= ~ObjCPropertyDecl::OBJC_PR_strong;
+    if (attrs & ObjCPropertyAttribute::kind_readonly) {
+      attrs &= ~ObjCPropertyAttribute::kind_copy;
+      attrs &= ~ObjCPropertyAttribute::kind_retain;
+      attrs &= ~ObjCPropertyAttribute::kind_weak;
+      attrs &= ~ObjCPropertyAttribute::kind_strong;
     }
     // The first flags field has the same attribute values as clang uses internally
     Fields.addInt(Int8Ty, attrs & 0xff);
@@ -1197,8 +1187,11 @@ class CGObjCGNUstep2 : public CGObjCGNUstep {
   }
   llvm::Constant *GenerateCategoryProtocolList(const ObjCCategoryDecl *OCD)
     override {
-    SmallVector<llvm::Constant*, 16> Protocols;
-    for (const auto *PI : OCD->getReferencedProtocols())
+    const auto &ReferencedProtocols = OCD->getReferencedProtocols();
+    auto RuntimeProtocols = GetRuntimeProtocolList(ReferencedProtocols.begin(),
+                                                   ReferencedProtocols.end());
+    SmallVector<llvm::Constant *, 16> Protocols;
+    for (const auto *PI : RuntimeProtocols)
       Protocols.push_back(
           llvm::ConstantExpr::getBitCast(GenerateProtocolRef(PI),
             ProtocolPtrTy));
@@ -1381,7 +1374,9 @@ class CGObjCGNUstep2 : public CGObjCGNUstep {
     }
 
     SmallVector<llvm::Constant*, 16> Protocols;
-    for (const auto *PI : PD->protocols())
+    auto RuntimeProtocols =
+        GetRuntimeProtocolList(PD->protocol_begin(), PD->protocol_end());
+    for (const auto *PI : RuntimeProtocols)
       Protocols.push_back(
           llvm::ConstantExpr::getBitCast(GenerateProtocolRef(PI),
             ProtocolPtrTy));
@@ -1564,7 +1559,7 @@ class CGObjCGNUstep2 : public CGObjCGNUstep {
     // We have to do this by hand, rather than with @llvm.ctors, so that the
     // linker can remove the duplicate invocations.
     auto *InitVar = new llvm::GlobalVariable(TheModule, LoadFunction->getType(),
-        /*isConstant*/true, llvm::GlobalValue::LinkOnceAnyLinkage,
+        /*isConstant*/false, llvm::GlobalValue::LinkOnceAnyLinkage,
         LoadFunction, ".objc_ctor");
     // Check that this hasn't been renamed.  This shouldn't happen, because
     // this function should be called precisely once.
@@ -1920,8 +1915,10 @@ class CGObjCGNUstep2 : public CGObjCGNUstep {
     // struct objc_class *sibling_class
     classFields.addNullPointer(PtrTy);
     // struct objc_protocol_list *protocols;
-    SmallVector<llvm::Constant*, 16> Protocols;
-    for (const auto *I : classDecl->protocols())
+    auto RuntimeProtocols = GetRuntimeProtocolList(classDecl->protocol_begin(),
+                                                   classDecl->protocol_end());
+    SmallVector<llvm::Constant *, 16> Protocols;
+    for (const auto *I : RuntimeProtocols)
       Protocols.push_back(
           llvm::ConstantExpr::getBitCast(GenerateProtocolRef(I),
             ProtocolPtrTy));
@@ -2823,9 +2820,7 @@ GenerateMethodList(StringRef ClassName,
   ASTContext &Context = CGM.getContext();
   for (const auto *OMD : Methods) {
     llvm::Constant *FnPtr =
-      TheModule.getFunction(SymbolNameForMethod(ClassName, CategoryName,
-                                                OMD->getSelector(),
-                                                isClassMethodList));
+      TheModule.getFunction(getSymbolNameForMethod(OMD));
     assert(FnPtr && "Can't generate metadata for method that doesn't exist");
     auto Method = MethodArray.beginStruct(ObjCMethodTy);
     if (isV2ABI) {
@@ -3088,6 +3083,9 @@ CGObjCGNU::GenerateEmptyProtocol(StringRef ProtocolName) {
 }
 
 void CGObjCGNU::GenerateProtocol(const ObjCProtocolDecl *PD) {
+  if (PD->isNonRuntimeProtocol())
+    return;
+
   std::string ProtocolName = PD->getNameAsString();
 
   // Use the protocol definition, if there is one.
@@ -3240,8 +3238,11 @@ llvm::Constant *CGObjCGNU::MakeBitField(ArrayRef<bool> bits) {
 
 llvm::Constant *CGObjCGNU::GenerateCategoryProtocolList(const
     ObjCCategoryDecl *OCD) {
+  const auto &RefPro = OCD->getReferencedProtocols();
+  const auto RuntimeProtos =
+      GetRuntimeProtocolList(RefPro.begin(), RefPro.end());
   SmallVector<std::string, 16> Protocols;
-  for (const auto *PD : OCD->getReferencedProtocols())
+  for (const auto *PD : RuntimeProtos)
     Protocols.push_back(PD->getNameAsString());
   return GenerateProtocolList(Protocols);
 }
@@ -3511,24 +3512,14 @@ void CGObjCGNU::GenerateClass(const ObjCImplementationDecl *OID) {
   ClassMethods.insert(ClassMethods.begin(), OID->classmeth_begin(),
       OID->classmeth_end());
 
-  // Collect the same information about synthesized properties, which don't
-  // show up in the instance method lists.
-  for (auto *propertyImpl : OID->property_impls())
-    if (propertyImpl->getPropertyImplementation() ==
-        ObjCPropertyImplDecl::Synthesize) {
-      auto addPropertyMethod = [&](const ObjCMethodDecl *accessor) {
-        if (accessor)
-          InstanceMethods.push_back(accessor);
-      };
-      addPropertyMethod(propertyImpl->getGetterMethodDecl());
-      addPropertyMethod(propertyImpl->getSetterMethodDecl());
-    }
-
   llvm::Constant *Properties = GeneratePropertyList(OID, ClassDecl);
 
   // Collect the names of referenced protocols
+  auto RefProtocols = ClassDecl->protocols();
+  auto RuntimeProtocols =
+      GetRuntimeProtocolList(RefProtocols.begin(), RefProtocols.end());
   SmallVector<std::string, 16> Protocols;
-  for (const auto *I : ClassDecl->protocols())
+  for (const auto *I : RuntimeProtocols)
     Protocols.push_back(I->getNameAsString());
 
   // Get the superclass pointer.
@@ -3873,18 +3864,10 @@ llvm::Function *CGObjCGNU::ModuleInitFunction() {
 
 llvm::Function *CGObjCGNU::GenerateMethod(const ObjCMethodDecl *OMD,
                                           const ObjCContainerDecl *CD) {
-  const ObjCCategoryImplDecl *OCD =
-    dyn_cast<ObjCCategoryImplDecl>(OMD->getDeclContext());
-  StringRef CategoryName = OCD ? OCD->getName() : "";
-  StringRef ClassName = CD->getName();
-  Selector MethodName = OMD->getSelector();
-  bool isClassMethod = !OMD->isInstanceMethod();
-
   CodeGenTypes &Types = CGM.getTypes();
   llvm::FunctionType *MethodTy =
     Types.GetFunctionType(Types.arrangeObjCMethodDeclaration(OMD));
-  std::string FunctionName = SymbolNameForMethod(ClassName, CategoryName,
-      MethodName, isClassMethod);
+  std::string FunctionName = getSymbolNameForMethod(OMD);
 
   llvm::Function *Method
     = llvm::Function::Create(MethodTy,

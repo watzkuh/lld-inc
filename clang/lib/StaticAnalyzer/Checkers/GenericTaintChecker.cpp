@@ -103,6 +103,9 @@ private:
 
   struct FunctionData {
     FunctionData() = delete;
+    FunctionData(const FunctionDecl *FDecl, StringRef Name,
+                 std::string FullName)
+        : FDecl(FDecl), Name(Name), FullName(std::move(FullName)) {}
     FunctionData(const FunctionData &) = default;
     FunctionData(FunctionData &&) = default;
     FunctionData &operator=(const FunctionData &) = delete;
@@ -110,7 +113,9 @@ private:
 
     static Optional<FunctionData> create(const CallEvent &Call,
                                          const CheckerContext &C) {
-      assert(Call.getDecl());
+      if (!Call.getDecl())
+        return None;
+
       const FunctionDecl *FDecl = Call.getDecl()->getAsFunction();
       if (!FDecl || (FDecl->getKind() != Decl::Function &&
                      FDecl->getKind() != Decl::CXXMethod))
@@ -121,7 +126,7 @@ private:
       if (Name.empty() || FullName.empty())
         return None;
 
-      return FunctionData{FDecl, Name, FullName};
+      return FunctionData{FDecl, Name, std::move(FullName)};
     }
 
     bool isInScope(StringRef Scope) const {

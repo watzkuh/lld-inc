@@ -16,11 +16,12 @@
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/Utils.h"
+#include "llvm/ADT/ScopeExit.h"
 
 namespace clang {
 namespace clangd {
 
-ParseInputs TestTU::inputs() const {
+ParseInputs TestTU::inputs(MockFS &FS) const {
   std::string FullFilename = testPath(Filename),
               FullHeaderName = testPath(HeaderFilename),
               ImportThunk = testPath("import_thunk.h");
@@ -29,10 +30,10 @@ ParseInputs TestTU::inputs() const {
   // guard without messing up offsets). In this case, use an intermediate file.
   std::string ThunkContents = "#import \"" + FullHeaderName + "\"\n";
 
-  llvm::StringMap<std::string> Files(AdditionalFiles);
-  Files[FullFilename] = Code;
-  Files[FullHeaderName] = HeaderCode;
-  Files[ImportThunk] = ThunkContents;
+  FS.Files = AdditionalFiles;
+  FS.Files[FullFilename] = Code;
+  FS.Files[FullHeaderName] = HeaderCode;
+  FS.Files[ImportThunk] = ThunkContents;
 
   ParseInputs Inputs;
   auto &Argv = Inputs.CompileCommand.CommandLine;
@@ -54,27 +55,62 @@ ParseInputs TestTU::inputs() const {
   Inputs.CompileCommand.Filename = FullFilename;
   Inputs.CompileCommand.Directory = testRoot();
   Inputs.Contents = Code;
-  Inputs.FS = buildTestFS(Files);
+  if (OverlayRealFileSystemForModules)
+    FS.OverlayRealFileSystemForModules = true;
+  Inputs.TFS = &FS;
   Inputs.Opts = ParseOptions();
-  Inputs.Opts.BuildRecoveryAST = true;
-  Inputs.Opts.ClangTidyOpts.Checks = ClangTidyChecks;
-  Inputs.Opts.ClangTidyOpts.WarningsAsErrors = ClangTidyWarningsAsErrors;
+  if (ClangTidyProvider)
+    Inputs.ClangTidyProvider = ClangTidyProvider;
   Inputs.Index = ExternalIndex;
   if (Inputs.Index)
     Inputs.Opts.SuggestMissingIncludes = true;
   return Inputs;
 }
 
+void initializeModuleCache(CompilerInvocation &CI) {
+  llvm::SmallString<128> ModuleCachePath;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("module-cache", ModuleCachePath));
+  CI.getHeaderSearchOpts().ModuleCachePath = ModuleCachePath.c_str();
+}
+
+void deleteModuleCache(const std::string ModuleCachePath) {
+  if (!ModuleCachePath.empty()) {
+    ASSERT_FALSE(llvm::sys::fs::remove_directories(ModuleCachePath));
+  }
+}
+
+std::shared_ptr<const PreambleData>
+TestTU::preamble(PreambleParsedCallback PreambleCallback) const {
+  MockFS FS;
+  auto Inputs = inputs(FS);
+  IgnoreDiagnostics Diags;
+  auto CI = buildCompilerInvocation(Inputs, Diags);
+  assert(CI && "Failed to build compilation invocation.");
+  if (OverlayRealFileSystemForModules)
+    initializeModuleCache(*CI);
+  auto ModuleCacheDeleter = llvm::make_scope_exit(
+      std::bind(deleteModuleCache, CI->getHeaderSearchOpts().ModuleCachePath));
+  return clang::clangd::buildPreamble(testPath(Filename), *CI, Inputs,
+                                      /*StoreInMemory=*/true, PreambleCallback);
+}
+
 ParsedAST TestTU::build() const {
-  auto Inputs = inputs();
+  MockFS FS;
+  auto Inputs = inputs(FS);
   StoreDiags Diags;
   auto CI = buildCompilerInvocation(Inputs, Diags);
   assert(CI && "Failed to build compilation invocation.");
-  auto Preamble =
-      buildPreamble(testPath(Filename), *CI, Inputs,
-                    /*StoreInMemory=*/true, /*PreambleCallback=*/nullptr);
-  auto AST = buildAST(testPath(Filename), std::move(CI), Diags.take(), Inputs,
-                      Preamble);
+  if (OverlayRealFileSystemForModules)
+    initializeModuleCache(*CI);
+  auto ModuleCacheDeleter = llvm::make_scope_exit(
+      std::bind(deleteModuleCache, CI->getHeaderSearchOpts().ModuleCachePath));
+
+  auto Preamble = clang::clangd::buildPreamble(testPath(Filename), *CI, Inputs,
+                                               /*StoreInMemory=*/true,
+                                               /*PreambleCallback=*/nullptr);
+  auto AST = ParsedAST::build(testPath(Filename), Inputs, std::move(CI),
+                              Diags.take(), Preamble);
   if (!AST.hasValue()) {
     ADD_FAILURE() << "Failed to build code:\n" << Code;
     llvm_unreachable("Failed to build TestTU!");
@@ -113,12 +149,19 @@ SymbolSlab TestTU::headerSymbols() const {
                                         AST.getCanonicalIncludes()));
 }
 
+RefSlab TestTU::headerRefs() const {
+  auto AST = build();
+  return std::get<1>(indexMainDecls(AST));
+}
+
 std::unique_ptr<SymbolIndex> TestTU::index() const {
   auto AST = build();
-  auto Idx = std::make_unique<FileIndex>(/*UseDex=*/true);
-  Idx->updatePreamble(Filename, /*Version=*/"null", AST.getASTContext(),
-                      AST.getPreprocessorPtr(), AST.getCanonicalIncludes());
-  Idx->updateMain(Filename, AST);
+  auto Idx = std::make_unique<FileIndex>(/*UseDex=*/true,
+                                         /*CollectMainFileRefs=*/true);
+  Idx->updatePreamble(testPath(Filename), /*Version=*/"null",
+                      AST.getASTContext(), AST.getPreprocessorPtr(),
+                      AST.getCanonicalIncludes());
+  Idx->updateMain(testPath(Filename), AST);
   return std::move(Idx);
 }
 
@@ -144,9 +187,6 @@ const Symbol &findSymbol(const SymbolSlab &Slab, llvm::StringRef QName) {
 }
 
 const NamedDecl &findDecl(ParsedAST &AST, llvm::StringRef QName) {
-  llvm::SmallVector<llvm::StringRef, 4> Components;
-  QName.split(Components, "::");
-
   auto &Ctx = AST.getASTContext();
   auto LookupDecl = [&Ctx](const DeclContext &Scope,
                            llvm::StringRef Name) -> const NamedDecl & {
@@ -157,11 +197,13 @@ const NamedDecl &findDecl(ParsedAST &AST, llvm::StringRef QName) {
   };
 
   const DeclContext *Scope = Ctx.getTranslationUnitDecl();
-  for (auto NameIt = Components.begin(), End = Components.end() - 1;
-       NameIt != End; ++NameIt) {
-    Scope = &cast<DeclContext>(LookupDecl(*Scope, *NameIt));
+
+  StringRef Cur, Rest;
+  for (std::tie(Cur, Rest) = QName.split("::"); !Rest.empty();
+       std::tie(Cur, Rest) = Rest.split("::")) {
+    Scope = &cast<DeclContext>(LookupDecl(*Scope, Cur));
   }
-  return LookupDecl(*Scope, Components.back());
+  return LookupDecl(*Scope, Cur);
 }
 
 const NamedDecl &findDecl(ParsedAST &AST,

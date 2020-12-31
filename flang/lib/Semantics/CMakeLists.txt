@@ -1,9 +1,11 @@
 
-add_library(FortranSemantics
+add_flang_library(FortranSemantics
   assignment.cpp
   attr.cpp
+  canonicalize-acc.cpp
   canonicalize-do.cpp
   canonicalize-omp.cpp
+  check-acc-structure.cpp
   check-allocate.cpp
   check-arithmeticif.cpp
   check-call.cpp
@@ -20,33 +22,39 @@ add_library(FortranSemantics
   check-omp-structure.cpp
   check-purity.cpp
   check-return.cpp
+  check-select-rank.cpp
+  check-select-type.cpp
   check-stop.cpp
+  compute-offsets.cpp
+  data-to-inits.cpp
   expression.cpp
   mod-file.cpp
   pointer-assignment.cpp
   program-tree.cpp
   resolve-labels.cpp
-  resolve-names.cpp
+  resolve-directives.cpp
   resolve-names-utils.cpp
+  resolve-names.cpp
   rewrite-parse-tree.cpp
+  runtime-type-info.cpp
   scope.cpp
   semantics.cpp
   symbol.cpp
   tools.cpp
   type.cpp
   unparse-with-symbols.cpp
-)
 
-target_compile_features(FortranSemantics PUBLIC cxx_std_17)
+  DEPENDS
+  acc_gen
+  omp_gen
 
-target_link_libraries(FortranSemantics
+  LINK_LIBS
   FortranCommon
+  FortranParser
   FortranEvaluate
-  LLVMSupport
-)
 
-install (TARGETS FortranSemantics
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
+  LINK_COMPONENTS
+  Support
+  FrontendOpenMP
+  FrontendOpenACC
 )

@@ -13,7 +13,6 @@ from lldbsuite.test.lldbtest import *
 from lldbsuite.test import lldbutil
 
 
-@skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
 class LoadUnloadTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
@@ -35,25 +34,15 @@ class LoadUnloadTestCase(TestBase):
 
     def setup_test(self):
         lldbutil.mkdir_p(self.getBuildArtifact("hidden"))
-        if not self.platformIsDarwin():
-            if not lldb.remote_platform and "LD_LIBRARY_PATH" in os.environ:
-                self.runCmd(
-                    "settings set target.env-vars " +
-                    self.dylibPath +
-                    "=" +
-                    os.environ["LD_LIBRARY_PATH"] +
-                    ":" +
-                    self.getBuildDir())
-            else:
-                if lldb.remote_platform:
-                    wd = lldb.remote_platform.GetWorkingDirectory()
-                else:
-                    wd = self.getBuildDir()
-                self.runCmd(
-                    "settings set target.env-vars " +
-                    self.dylibPath +
-                    "=" +
-                    wd)
+        if lldb.remote_platform:
+            path = lldb.remote_platform.GetWorkingDirectory()
+        else:
+            path = self.getBuildDir()
+            if self.dylibPath in os.environ:
+                sep = self.platformContext.shlib_path_separator
+                path = os.environ[self.dylibPath] + sep + path
+        self.runCmd("settings append target.env-vars '{}={}'".format(self.dylibPath, path))
+        self.default_path = path
 
     def copy_shlibs_to_remote(self, hidden_dir=False):
         """ Copies the shared libs required by this test suite to remote.
@@ -101,11 +90,10 @@ class LoadUnloadTestCase(TestBase):
 
     # libloadunload_d.so does not appear in the image list because executable
     # dependencies are resolved relative to the debuggers PWD. Bug?
-    @expectedFailureAll(oslist=["linux"])
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
-    @not_remote_testsuite_ready
+    @expectedFailureAll(oslist=["freebsd", "linux", "netbsd"])
+    @skipIfRemote
     @skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
-    @expectedFailureNetBSD
+    @skipIfReproducer # VFS is a snapshot.
     def test_modules_search_paths(self):
         """Test target modules list after loading a different copy of the library libd.dylib, and verifies that it works with 'target modules search-paths add'."""
         if self.platformIsDarwin():
@@ -142,15 +130,11 @@ class LoadUnloadTestCase(TestBase):
         # Obliterate traces of libd from the old location.
         os.remove(old_dylib)
         # Inform (DY)LD_LIBRARY_PATH of the new path, too.
-        env_cmd_string = "settings set target.env-vars " + self.dylibPath + "=" + new_dir
+        env_cmd_string = "settings replace target.env-vars " + self.dylibPath + "=" + new_dir
         if self.TraceOn():
             print("Set environment to: ", env_cmd_string)
         self.runCmd(env_cmd_string)
         self.runCmd("settings show target.env-vars")
-
-        remove_dyld_path_cmd = "settings remove target.env-vars " + self.dylibPath
-        self.addTearDownHook(
-            lambda: self.dbg.HandleCommand(remove_dyld_path_cmd))
 
         self.runCmd("run")
 
@@ -161,12 +145,10 @@ class LoadUnloadTestCase(TestBase):
 
     # libloadunload_d.so does not appear in the image list because executable
     # dependencies are resolved relative to the debuggers PWD. Bug?
-    @expectedFailureAll(oslist=["linux"])
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
+    @expectedFailureAll(oslist=["freebsd", "linux", "netbsd"])
     @expectedFailureAndroid  # wrong source file shows up for hidden library
     @skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
     @skipIfDarwinEmbedded
-    @expectedFailureNetBSD
     def test_dyld_library_path(self):
         """Test (DY)LD_LIBRARY_PATH after moving libd.dylib, which defines d_function, somewhere else."""
         self.copy_shlibs_to_remote(hidden_dir=True)
@@ -195,11 +177,6 @@ class LoadUnloadTestCase(TestBase):
         new_dir = os.path.join(wd, special_dir)
         old_dylib = os.path.join(old_dir, dylibName)
 
-        remove_dyld_path_cmd = "settings remove target.env-vars " \
-                               + self.dylibPath
-        self.addTearDownHook(
-            lambda: self.dbg.HandleCommand(remove_dyld_path_cmd))
-
         # For now we don't track (DY)LD_LIBRARY_PATH, so the old
         # library will be in the modules list.
         self.expect("target modules list",
@@ -214,10 +191,9 @@ class LoadUnloadTestCase(TestBase):
         self.runCmd("continue")
 
         # Add the hidden directory first in the search path.
-        env_cmd_string = ("settings set target.env-vars %s=%s" %
-                          (self.dylibPath, new_dir))
-        if not self.platformIsDarwin():
-            env_cmd_string += ":" + wd
+        env_cmd_string = ("settings set target.env-vars %s=%s%s%s" %
+                          (self.dylibPath, new_dir,
+                              self.platformContext.shlib_path_separator, self.default_path))
         self.runCmd(env_cmd_string)
 
         # This time, the hidden library should be picked up.
@@ -227,8 +203,7 @@ class LoadUnloadTestCase(TestBase):
         bugnumber="llvm.org/pr25805",
         hostoslist=["windows"],
         triple='.*-android')
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
-    @skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
+    @expectedFailureAll(oslist=["windows"]) # process load not implemented
     def test_lldb_process_load_and_unload_commands(self):
         self.setSvr4Support(False)
         self.run_lldb_process_load_and_unload_commands()
@@ -237,12 +212,12 @@ class LoadUnloadTestCase(TestBase):
         bugnumber="llvm.org/pr25805",
         hostoslist=["windows"],
         triple='.*-android')
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
-    @skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
+    @expectedFailureAll(oslist=["windows"]) # process load not implemented
     def test_lldb_process_load_and_unload_commands_with_svr4(self):
         self.setSvr4Support(True)
         self.run_lldb_process_load_and_unload_commands()
 
+    @skipIfReproducer # FIXME: Unexpected packet during (passive) replay
     def run_lldb_process_load_and_unload_commands(self):
         """Test that lldb process load/unload command work correctly."""
         self.copy_shlibs_to_remote()
@@ -287,7 +262,7 @@ class LoadUnloadTestCase(TestBase):
         output = self.res.GetOutput()
         pattern = re.compile("Image ([0-9]+) loaded")
         for l in output.split(os.linesep):
-            #print("l:", l)
+            self.trace("l:", l)
             match = pattern.search(l)
             if match:
                 break
@@ -313,12 +288,12 @@ class LoadUnloadTestCase(TestBase):
 
         self.runCmd("process continue")
 
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
+    @expectedFailureAll(oslist=["windows"]) # breakpoint not hit
     def test_load_unload(self):
         self.setSvr4Support(False)
         self.run_load_unload()
 
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
+    @expectedFailureAll(oslist=["windows"]) # breakpoint not hit
     def test_load_unload_with_svr4(self):
         self.setSvr4Support(True)
         self.run_load_unload()
@@ -361,18 +336,10 @@ class LoadUnloadTestCase(TestBase):
         self.expect("breakpoint list -f", BREAKPOINT_HIT_ONCE,
                     substrs=[' resolved, hit count = 2'])
 
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
-    @skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
-    @expectedFailureAll(archs="aarch64", oslist="linux",
-                        bugnumber="https://bugs.llvm.org/show_bug.cgi?id=27806")
     def test_step_over_load(self):
         self.setSvr4Support(False)
         self.run_step_over_load()
 
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
-    @skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
-    @expectedFailureAll(archs="aarch64", oslist="linux",
-                        bugnumber="https://bugs.llvm.org/show_bug.cgi?id=27806")
     def test_step_over_load_with_svr4(self):
         self.setSvr4Support(True)
         self.run_step_over_load()
@@ -406,10 +373,7 @@ class LoadUnloadTestCase(TestBase):
 
     # We can't find a breakpoint location for d_init before launching because
     # executable dependencies are resolved relative to the debuggers PWD. Bug?
-    @expectedFailureAll(oslist=["linux"], triple=no_match('aarch64-.*-android'))
-    @skipIfFreeBSD  # llvm.org/pr14424 - missing FreeBSD Makefiles/testcase support
-    @skipIfWindows  # Windows doesn't have dlopen and friends, dynamic libraries work differently
-    @expectedFailureNetBSD
+    @expectedFailureAll(oslist=["freebsd", "linux", "netbsd"], triple=no_match('aarch64-.*-android'))
     def test_static_init_during_load(self):
         """Test that we can set breakpoints correctly in static initializers"""
         self.copy_shlibs_to_remote()
@@ -438,7 +402,7 @@ class LoadUnloadTestCase(TestBase):
                              'stop reason = breakpoint %d' % b_init_bp_num])
         self.expect("thread backtrace",
                     substrs=['b_init',
-                             'dlopen',
+                             'dylib_open',
                              'main'])
 
         self.runCmd("continue")
@@ -448,5 +412,5 @@ class LoadUnloadTestCase(TestBase):
                              'stop reason = breakpoint %d' % a_init_bp_num])
         self.expect("thread backtrace",
                     substrs=['a_init',
-                             'dlopen',
+                             'dylib_open',
                              'main'])

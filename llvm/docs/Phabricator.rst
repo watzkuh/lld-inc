@@ -39,6 +39,21 @@ the command line. To get you set up, follow the
 
 You can learn more about how to use arc to interact with
 Phabricator in the `Arcanist User Guide`_.
+The basic way of creating a revision for the current commit in your local
+repository is to run:
+
+::
+
+  arc diff HEAD~
+
+
+If you later update your commit message, you need to add the `--verbatim`
+option to have `arc` update the description on Phabricator:
+
+::
+
+  arc diff --edit --verbatim
+
 
 .. _phabricator-request-review-web:
 
@@ -49,7 +64,7 @@ The tool to create and review patches in Phabricator is called
 *Differential*.
 
 Note that you can upload patches created through git, but using `arc` on the
-command line (see previous section) is prefered: it adds more metadata to
+command line (see previous section) is preferred: it adds more metadata to
 Phabricator which are useful for the pre-merge testing system and for
 propagating attribution on commits when someone else has to push it for you.
 
@@ -82,8 +97,7 @@ To upload a new patch:
 * Add reviewers (see below for advice). (If you set the Repository field
   correctly, llvm-commits or cfe-commits will be subscribed automatically;
   otherwise, you will have to manually subscribe them.)
-* In the Repository field, enter the name of the project (LLVM, Clang,
-  etc.) to which the review should be sent.
+* In the Repository field, enter "rG LLVM Github Monorepo".
 * Click *Save*.
 
 To submit an updated patch:
@@ -183,11 +197,10 @@ that you close the review manually. In the web UI, under "Leap Into Action" put
 the git revision number in the Comment, set the Action to "Close Revision" and
 click Submit.  Note the review must have been Accepted first.
 
-
 Committing someone's change from Phabricator
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-On a clean Git repository on an up to date ``master`` branch run the
+On a clean Git repository on an up to date ``main`` branch run the
 following (where ``<Revision>`` is the Phabricator review number):
 
 ::
@@ -196,7 +209,7 @@ following (where ``<Revision>`` is the Phabricator review number):
 
 
 This will create a new branch called ``arcpatch-D<Revision>`` based on the
-current ``master`` and will create a commit corresponding to ``D<Revision>`` with a
+current ``main`` and will create a commit corresponding to ``D<Revision>`` with a
 commit message derived from information in the Phabricator review.
 
 Check you are happy with the commit message and amend it if necessary.
@@ -212,16 +225,10 @@ the following:
 
 ::
 
-  git pull --rebase origin master
+  git pull --rebase https://github.com/llvm/llvm-project.git main
   git show # Ensure the patch looks correct.
   ninja check-$whatever # Rerun the appropriate tests if needed.
-  git push
-
-Or
-
-::
-
-  arc land D<Revision>
+  git push https://github.com/llvm/llvm-project.git HEAD:main
 
 
 Abandoning a change

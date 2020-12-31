@@ -26,7 +26,7 @@ namespace {
 class MachOLinkGraphBuilder_x86_64 : public MachOLinkGraphBuilder {
 public:
   MachOLinkGraphBuilder_x86_64(const object::MachOObjectFile &Obj)
-      : MachOLinkGraphBuilder(Obj) {}
+      : MachOLinkGraphBuilder(Obj, Triple("x86_64-apple-darwin")) {}
 
 private:
   static Expected<MachOX86RelocationKind>
@@ -95,15 +95,6 @@ private:
         ", length=" + formatv("{0:d}", RI.r_length));
   }
 
-  MachO::relocation_info
-  getRelocationInfo(const object::relocation_iterator RelItr) {
-    MachO::any_relocation_info ARI =
-        getObject().getRelocation(RelItr->getRawDataRefImpl());
-    MachO::relocation_info RI;
-    memcpy(&RI, &ARI, sizeof(MachO::relocation_info));
-    return RI;
-  }
-
   using PairRelocInfo = std::tuple<MachOX86RelocationKind, Symbol *, uint64_t>;
 
   // Parses paired SUBTRACTOR/UNSIGNED relocations and, on success,
@@ -159,10 +150,11 @@ private:
       else
         return ToSymbolOrErr.takeError();
     } else {
-      if (auto ToSymbolOrErr = findSymbolByAddress(FixupValue))
-        ToSymbol = &*ToSymbolOrErr;
-      else
-        return ToSymbolOrErr.takeError();
+      auto ToSymbolSec = findSectionByIndex(UnsignedRI.r_symbolnum - 1);
+      if (!ToSymbolSec)
+        return ToSymbolSec.takeError();
+      ToSymbol = getSymbolByAddress(ToSymbolSec->Address);
+      assert(ToSymbol && "No symbol for section");
       FixupValue -= ToSymbol->getAddress();
     }
 
@@ -192,10 +184,13 @@ private:
     using namespace support;
     auto &Obj = getObject();
 
+    LLVM_DEBUG(dbgs() << "Processing relocations:\n");
+
     for (auto &S : Obj.sections()) {
 
       JITTargetAddress SectionAddress = S.getAddress();
 
+      // Skip relocations virtual sections.
       if (S.isVirtual()) {
         if (S.relocation_begin() != S.relocation_end())
           return make_error<JITLinkError>("Virtual section contains "
@@ -203,6 +198,21 @@ private:
         continue;
       }
 
+      // Skip relocations for debug symbols.
+      {
+        auto &NSec =
+            getSectionByIndex(Obj.getSectionIndex(S.getRawDataRefImpl()));
+        if (!NSec.GraphSection) {
+          LLVM_DEBUG({
+            dbgs() << "  Skipping relocations for MachO section "
+                   << NSec.SegName << "/" << NSec.SectName
+                   << " which has no associated graph section\n";
+          });
+          continue;
+        }
+      }
+
+      // Add relocations for section.
       for (auto RelItr = S.relocation_begin(), RelEnd = S.relocation_end();
            RelItr != RelEnd; ++RelItr) {
 
@@ -217,8 +227,10 @@ private:
         JITTargetAddress FixupAddress = SectionAddress + (uint32_t)RI.r_address;
 
         LLVM_DEBUG({
-          dbgs() << "Processing relocation at "
-                 << format("0x%016" PRIx64, FixupAddress) << "\n";
+          auto &NSec =
+              getSectionByIndex(Obj.getSectionIndex(S.getRawDataRefImpl()));
+          dbgs() << "  " << NSec.SectName << " + "
+                 << formatv("{0:x8}", RI.r_address) << ":\n";
         });
 
         // Find the block that the fixup points to.
@@ -327,12 +339,16 @@ private:
           assert(TargetSymbol && "No target symbol from parsePairRelocation?");
           break;
         }
+        case PCRel32TLV:
+          return make_error<JITLinkError>(
+              "MachO TLV relocations not yet supported");
         default:
           llvm_unreachable("Special relocation kind should not appear in "
                            "mach-o file");
         }
 
         LLVM_DEBUG({
+          dbgs() << "    ";
           Edge GE(*Kind, FixupAddress - BlockToFix->getAddress(), *TargetSymbol,
                   Addend);
           printEdge(dbgs(), *BlockToFix, GE,
@@ -532,20 +548,13 @@ class MachOJITLinker_x86_64 : public JITLinker<MachOJITLinker_x86_64> {
 
 public:
   MachOJITLinker_x86_64(std::unique_ptr<JITLinkContext> Ctx,
+                        std::unique_ptr<LinkGraph> G,
                         PassConfiguration PassConfig)
-      : JITLinker(std::move(Ctx), std::move(PassConfig)) {}
+      : JITLinker(std::move(Ctx), std::move(G), std::move(PassConfig)) {}
 
 private:
   StringRef getEdgeKindName(Edge::Kind R) const override {
     return getMachOX86RelocationKindName(R);
-  }
-
-  Expected<std::unique_ptr<LinkGraph>>
-  buildGraph(MemoryBufferRef ObjBuffer) override {
-    auto MachOObj = object::ObjectFile::createMachOObjectFile(ObjBuffer);
-    if (!MachOObj)
-      return MachOObj.takeError();
-    return MachOLinkGraphBuilder_x86_64(**MachOObj).buildGraph();
   }
 
   static Error targetOutOfRangeError(const Block &B, const Edge &E) {
@@ -644,18 +653,27 @@ private:
   uint64_t NullValue = 0;
 };
 
-void jitLink_MachO_x86_64(std::unique_ptr<JITLinkContext> Ctx) {
-  PassConfiguration Config;
-  Triple TT("x86_64-apple-macosx");
+Expected<std::unique_ptr<LinkGraph>>
+createLinkGraphFromMachOObject_x86_64(MemoryBufferRef ObjectBuffer) {
+  auto MachOObj = object::ObjectFile::createMachOObjectFile(ObjectBuffer);
+  if (!MachOObj)
+    return MachOObj.takeError();
+  return MachOLinkGraphBuilder_x86_64(**MachOObj).buildGraph();
+}
 
-  if (Ctx->shouldAddDefaultTargetPasses(TT)) {
+void link_MachO_x86_64(std::unique_ptr<LinkGraph> G,
+                       std::unique_ptr<JITLinkContext> Ctx) {
+
+  PassConfiguration Config;
+
+  if (Ctx->shouldAddDefaultTargetPasses(G->getTargetTriple())) {
     // Add eh-frame passses.
     Config.PrePrunePasses.push_back(EHFrameSplitter("__eh_frame"));
     Config.PrePrunePasses.push_back(
         EHFrameEdgeFixer("__eh_frame", NegDelta32, Delta64, Delta64));
 
     // Add a mark-live pass.
-    if (auto MarkLive = Ctx->getMarkLivePass(TT))
+    if (auto MarkLive = Ctx->getMarkLivePass(G->getTargetTriple()))
       Config.PrePrunePasses.push_back(std::move(MarkLive));
     else
       Config.PrePrunePasses.push_back(markAllSymbolsLive);
@@ -670,11 +688,11 @@ void jitLink_MachO_x86_64(std::unique_ptr<JITLinkContext> Ctx) {
     Config.PostAllocationPasses.push_back(optimizeMachO_x86_64_GOTAndStubs);
   }
 
-  if (auto Err = Ctx->modifyPassConfig(TT, Config))
+  if (auto Err = Ctx->modifyPassConfig(G->getTargetTriple(), Config))
     return Ctx->notifyFailed(std::move(Err));
 
   // Construct a JITLinker and run the link function.
-  MachOJITLinker_x86_64::link(std::move(Ctx), std::move(Config));
+  MachOJITLinker_x86_64::link(std::move(Ctx), std::move(G), std::move(Config));
 }
 
 StringRef getMachOX86RelocationKindName(Edge::Kind R) {

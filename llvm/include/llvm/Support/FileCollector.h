@@ -12,21 +12,67 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/ADT/Twine.h"
 #include "llvm/Support/VirtualFileSystem.h"
-
 #include <mutex>
+#include <string>
 
 namespace llvm {
 class FileCollectorFileSystem;
-/// Collects files into a directory and generates a mapping that can be used by
-/// the VFS.
-class FileCollector {
+class Twine;
+
+class FileCollectorBase {
 public:
-  FileCollector(std::string Root, std::string OverlayRoot);
+  FileCollectorBase();
+  virtual ~FileCollectorBase();
 
   void addFile(const Twine &file);
   void addDirectory(const Twine &Dir);
+
+protected:
+  bool markAsSeen(StringRef Path) {
+    if (Path.empty())
+      return false;
+    return Seen.insert(Path).second;
+  }
+
+  virtual void addFileImpl(StringRef SrcPath) = 0;
+
+  virtual llvm::vfs::directory_iterator
+  addDirectoryImpl(const llvm::Twine &Dir,
+                   IntrusiveRefCntPtr<vfs::FileSystem> FS,
+                   std::error_code &EC) = 0;
+
+  /// Synchronizes access to internal data structures.
+  std::mutex Mutex;
+
+  /// Tracks already seen files so they can be skipped.
+  StringSet<> Seen;
+};
+
+/// Captures file system interaction and generates data to be later replayed
+/// with the RedirectingFileSystem.
+///
+/// For any file that gets accessed we eventually create:
+/// - a copy of the file inside Root
+/// - a record in RedirectingFileSystem mapping that maps:
+///   current real path -> path to the copy in Root
+///
+/// That intent is that later when the mapping is used by RedirectingFileSystem
+/// it simulates the state of FS that we collected.
+///
+/// We generate file copies and mapping lazily - see writeMapping and copyFiles.
+/// We don't try to capture the state of the file at the exact time when it's
+/// accessed. Files might get changed, deleted ... we record only the "final"
+/// state.
+///
+/// In order to preserve the relative topology of files we use their real paths
+/// as relative paths inside of the Root.
+class FileCollector : public FileCollectorBase {
+public:
+  /// \p Root is the directory where collected files are will be stored.
+  /// \p OverlayRoot is VFS mapping root.
+  /// \p Root directory gets created in copyFiles unless it already exists.
+  FileCollector(std::string Root, std::string OverlayRoot);
 
   /// Write the yaml mapping (for the VFS) to the given file.
   std::error_code writeMapping(StringRef MappingFile);
@@ -38,20 +84,14 @@ public:
   /// removed after it was added to the mapping.
   std::error_code copyFiles(bool StopOnError = true);
 
-  /// Create a VFS that collects all the paths that might be looked at by the
-  /// file system accesses.
+  /// Create a VFS that uses \p Collector to collect files accessed via \p
+  /// BaseFS.
   static IntrusiveRefCntPtr<vfs::FileSystem>
   createCollectorVFS(IntrusiveRefCntPtr<vfs::FileSystem> BaseFS,
                      std::shared_ptr<FileCollector> Collector);
 
 private:
   friend FileCollectorFileSystem;
-
-  bool markAsSeen(StringRef Path) {
-    if (Path.empty())
-      return false;
-    return Seen.insert(Path).second;
-  }
 
   bool getRealPath(StringRef SrcPath, SmallVectorImpl<char> &Result);
 
@@ -63,23 +103,18 @@ private:
   }
 
 protected:
-  void addFileImpl(StringRef SrcPath);
+  void addFileImpl(StringRef SrcPath) override;
 
   llvm::vfs::directory_iterator
   addDirectoryImpl(const llvm::Twine &Dir,
-                   IntrusiveRefCntPtr<vfs::FileSystem> FS, std::error_code &EC);
+                   IntrusiveRefCntPtr<vfs::FileSystem> FS,
+                   std::error_code &EC) override;
 
-  /// Synchronizes adding files.
-  std::mutex Mutex;
-
-  /// The root directory where files are copied.
-  std::string Root;
+  /// The directory where collected files are copied to in copyFiles().
+  const std::string Root;
 
   /// The root directory where the VFS overlay lives.
-  std::string OverlayRoot;
-
-  /// Tracks already seen files so they can be skipped.
-  StringSet<> Seen;
+  const std::string OverlayRoot;
 
   /// The yaml mapping writer.
   vfs::YAMLVFSWriter VFSWriter;

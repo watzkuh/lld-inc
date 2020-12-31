@@ -237,6 +237,13 @@ public:
   JITEvaluatedSymbol(JITTargetAddress Address, JITSymbolFlags Flags)
       : Address(Address), Flags(Flags) {}
 
+  /// Create a symbol from the given pointer with the given flags.
+  template <typename T>
+  static JITEvaluatedSymbol
+  fromPointer(T *P, JITSymbolFlags Flags = JITSymbolFlags::Exported) {
+    return JITEvaluatedSymbol(pointerToJITTargetAddress(P), Flags);
+  }
+
   /// An evaluated symbol converts to 'true' if its address is non-zero.
   explicit operator bool() const { return Address != 0; }
 
@@ -422,7 +429,7 @@ public:
   virtual JITSymbol findSymbol(const std::string &Name) = 0;
 
 private:
-  virtual void anchor();
+  void anchor() override;
 };
 
 } // end namespace llvm

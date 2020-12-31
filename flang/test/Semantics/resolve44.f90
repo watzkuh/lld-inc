@@ -1,5 +1,8 @@
-! RUN: %B/test/Semantics/test_errors.sh %s %flang %t
+! RUN: %S/test_errors.sh %s %t %f18
 ! Error tests for recursive use of derived types.
+! C744 If neither the POINTER nor the ALLOCATABLE attribute is specified, the
+! declaration-type-spec in the component-def-stmt shall specify an intrinsic
+! type or a previously defined derived type.
 
 program main
   type :: recursive1
@@ -17,10 +20,12 @@ program main
     integer, kind :: kind
     integer, len :: len
     !ERROR: Recursive use of the derived type requires POINTER or ALLOCATABLE
+    !ERROR: An automatic variable or component must not be initialized
     type(recursive2(kind,len)) :: bad1
     type(recursive2(kind,len)), pointer :: ok1
     type(recursive2(kind,len)), allocatable :: ok2
     !ERROR: Recursive use of the derived type requires POINTER or ALLOCATABLE
+    !ERROR: An automatic variable or component must not be initialized
     !ERROR: CLASS entity 'bad2' must be a dummy argument or have ALLOCATABLE or POINTER attribute
     class(recursive2(kind,len)) :: bad2
     class(recursive2(kind,len)), pointer :: ok3

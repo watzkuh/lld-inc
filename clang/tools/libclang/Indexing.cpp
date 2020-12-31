@@ -227,7 +227,8 @@ private:
   }
 
   bool isParsedOnceInclude(const FileEntry *FE) {
-    return PP.getHeaderSearchInfo().isFileMultipleIncludeGuarded(FE);
+    return PP.getHeaderSearchInfo().isFileMultipleIncludeGuarded(FE) ||
+           PP.getHeaderSearchInfo().hasFileBeenImported(FE);
   }
 };
 
@@ -616,9 +617,7 @@ static CXErrorCode clang_indexSourceFile_Impl(
       std::move(CInvok), CXXIdx->getPCHContainerOperations(), Diags,
       IndexAction.get(), UPtr, Persistent, CXXIdx->getClangResourcesPath(),
       OnlyLocalDecls, CaptureDiagnostics, PrecompilePreambleAfterNParses,
-      CacheCodeCompletionResults,
-      /*IncludeBriefCommentsInCodeCompletion=*/false,
-      /*UserFilesAreVolatile=*/true);
+      CacheCodeCompletionResults, /*UserFilesAreVolatile=*/true);
   if (DiagTrap.hasErrorOccurred() && CXXIdx->getDisplayDiagnostics())
     printDiagsToStderr(UPtr);
 

@@ -12,12 +12,14 @@
 #include "clang/AST/Expr.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
+#include "clang/Basic/SourceLocation.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
 #include "clang/Tooling/Transformer/SourceCodeBuilders.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/Error.h"
 #include <atomic>
 #include <memory>
 #include <string>
@@ -61,6 +63,7 @@ enum class UnaryNodeOperator {
   MaybeDeref,
   AddressOf,
   MaybeAddressOf,
+  Describe,
 };
 
 // Generic container for stencil operations with a (single) node-id argument.
@@ -131,6 +134,9 @@ std::string toStringData(const UnaryOperationData &Data) {
   case UnaryNodeOperator::MaybeAddressOf:
     OpName = "maybeAddressOf";
     break;
+  case UnaryNodeOperator::Describe:
+    OpName = "describe";
+    break;
   }
   return (OpName + "(\"" + Data.Id + "\")").str();
 }
@@ -172,11 +178,11 @@ Error evalData(const RawTextData &Data, const MatchFinder::MatchResult &,
   return Error::success();
 }
 
-Error evalData(const DebugPrintNodeData &Data,
-               const MatchFinder::MatchResult &Match, std::string *Result) {
+static Error printNode(StringRef Id, const MatchFinder::MatchResult &Match,
+                       std::string *Result) {
   std::string Output;
   llvm::raw_string_ostream Os(Output);
-  auto NodeOrErr = getNode(Match.Nodes, Data.Id);
+  auto NodeOrErr = getNode(Match.Nodes, Id);
   if (auto Err = NodeOrErr.takeError())
     return Err;
   NodeOrErr->print(Os, PrintingPolicy(Match.Context->getLangOpts()));
@@ -184,8 +190,18 @@ Error evalData(const DebugPrintNodeData &Data,
   return Error::success();
 }
 
+Error evalData(const DebugPrintNodeData &Data,
+               const MatchFinder::MatchResult &Match, std::string *Result) {
+  return printNode(Data.Id, Match, Result);
+}
+
 Error evalData(const UnaryOperationData &Data,
                const MatchFinder::MatchResult &Match, std::string *Result) {
+  // The `Describe` operation can be applied to any node, not just expressions,
+  // so it is handled here, separately.
+  if (Data.Op == UnaryNodeOperator::Describe)
+    return printNode(Data.Id, Match, Result);
+
   const auto *E = Match.Nodes.getNodeAs<Expr>(Data.Id);
   if (E == nullptr)
     return llvm::make_error<StringError>(
@@ -215,6 +231,8 @@ Error evalData(const UnaryOperationData &Data,
     }
     Source = tooling::buildAddressOf(*E, *Match.Context);
     break;
+  case UnaryNodeOperator::Describe:
+    llvm_unreachable("This case is handled at the start of the function");
   }
   if (!Source)
     return llvm::make_error<StringError>(
@@ -226,12 +244,37 @@ Error evalData(const UnaryOperationData &Data,
 
 Error evalData(const SelectorData &Data, const MatchFinder::MatchResult &Match,
                std::string *Result) {
-  auto Range = Data.Selector(Match);
-  if (!Range)
-    return Range.takeError();
-  if (auto Err = tooling::validateEditRange(*Range, *Match.SourceManager))
-    return Err;
-  *Result += tooling::getText(*Range, *Match.Context);
+  auto RawRange = Data.Selector(Match);
+  if (!RawRange)
+    return RawRange.takeError();
+  CharSourceRange Range = Lexer::makeFileCharRange(
+      *RawRange, *Match.SourceManager, Match.Context->getLangOpts());
+  if (Range.isInvalid()) {
+    // Validate the original range to attempt to get a meaningful error message.
+    // If it's valid, then something else is the cause and we just return the
+    // generic failure message.
+    if (auto Err = tooling::validateEditRange(*RawRange, *Match.SourceManager))
+      return handleErrors(std::move(Err), [](std::unique_ptr<StringError> E) {
+        assert(E->convertToErrorCode() ==
+                   llvm::make_error_code(errc::invalid_argument) &&
+               "Validation errors must carry the invalid_argument code");
+        return llvm::createStringError(
+            errc::invalid_argument,
+            "selected range could not be resolved to a valid source range; " +
+                E->getMessage());
+      });
+    return llvm::createStringError(
+        errc::invalid_argument,
+        "selected range could not be resolved to a valid source range");
+  }
+  // Validate `Range`, because `makeFileCharRange` accepts some ranges that
+  // `validateEditRange` rejects.
+  if (auto Err = tooling::validateEditRange(Range, *Match.SourceManager))
+    return joinErrors(
+        llvm::createStringError(errc::invalid_argument,
+                                "selected range is not valid for editing"),
+        std::move(Err));
+  *Result += tooling::getText(Range, *Match.Context);
   return Error::success();
 }
 
@@ -295,17 +338,11 @@ public:
 };
 } // namespace
 
-Stencil transformer::detail::makeStencil(StringRef Text) { return text(Text); }
-
-Stencil transformer::detail::makeStencil(RangeSelector Selector) {
-  return selection(std::move(Selector));
-}
-
-Stencil transformer::text(StringRef Text) {
+Stencil transformer::detail::makeStencil(StringRef Text) {
   return std::make_shared<StencilImpl<RawTextData>>(std::string(Text));
 }
 
-Stencil transformer::selection(RangeSelector Selector) {
+Stencil transformer::detail::makeStencil(RangeSelector Selector) {
   return std::make_shared<StencilImpl<SelectorData>>(std::move(Selector));
 }
 
@@ -336,6 +373,11 @@ Stencil transformer::addressOf(llvm::StringRef ExprId) {
 Stencil transformer::maybeAddressOf(llvm::StringRef ExprId) {
   return std::make_shared<StencilImpl<UnaryOperationData>>(
       UnaryNodeOperator::MaybeAddressOf, std::string(ExprId));
+}
+
+Stencil transformer::describe(StringRef Id) {
+  return std::make_shared<StencilImpl<UnaryOperationData>>(
+      UnaryNodeOperator::Describe, std::string(Id));
 }
 
 Stencil transformer::access(StringRef BaseId, Stencil Member) {

@@ -1,5 +1,4 @@
-! RUN: %B/test/Semantics/test_errors.sh %s %flang %t
-! OPTIONS: -fopenmp
+! RUN: %S/test_errors.sh %s %t %f18 -fopenmp
 ! Check OpenMP clause validity for the following directives:
 !     2.10 Device constructs
 program main
@@ -98,13 +97,19 @@ program main
   enddo
   !$omp end teams
 
+  !$omp target teams num_teams(2) defaultmap(tofrom:scalar)
+  do i = 1, N
+      a = 3.14
+  enddo
+  !$omp end target teams
+
   !$omp target map(tofrom:a)
   do i = 1, N
      a = 3.14
   enddo
   !$omp end target
 
-  !ERROR: Only the TO, FROM, TOFROM, or ALLOC map types are permitted for MAP clauses on the TARGET directive
+  !ERROR: Only the TO, FROM, TOFROM, ALLOC map types are permitted for MAP clauses on the TARGET directive
   !$omp target map(delete:a)
   do i = 1, N
      a = 3.14
@@ -127,7 +132,7 @@ program main
   !ERROR: At most one IF clause can appear on the TARGET ENTER DATA directive
   !$omp target enter data map(to:a) if(.true.) if(.false.)
 
-  !ERROR: Only the TO or ALLOC map types are permitted for MAP clauses on the TARGET ENTER DATA directive
+  !ERROR: Only the TO, ALLOC map types are permitted for MAP clauses on the TARGET ENTER DATA directive
   !$omp target enter data map(from:a)
 
   !$omp target exit data map(delete:a)
@@ -135,7 +140,7 @@ program main
   !ERROR: At most one DEVICE clause can appear on the TARGET EXIT DATA directive
   !$omp target exit data map(from:a) device(0) device(1)
 
-  !ERROR: Only the FROM, RELEASE, or DELETE map types are permitted for MAP clauses on the TARGET EXIT DATA directive
+  !ERROR: Only the FROM, RELEASE, DELETE map types are permitted for MAP clauses on the TARGET EXIT DATA directive
   !$omp target exit data map(to:a)
 
   !$omp target

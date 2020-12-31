@@ -22,6 +22,7 @@ add_clang_library(clangDaemonTweaks OBJECT
   ExtractFunction.cpp
   ExtractVariable.cpp
   ObjCLocalizeStringLiteral.cpp
+  PopulateSwitch.cpp
   RawStringLiteral.cpp
   RemoveUsingNamespace.cpp
   SwapIfBranches.cpp
@@ -30,9 +31,13 @@ add_clang_library(clangDaemonTweaks OBJECT
   clangAST
   clangBasic
   clangDaemon
+  clangdSupport
   clangFormat
   clangLex
   clangToolingCore
   clangToolingRefactoring
   clangToolingSyntax
+
+  DEPENDS
+  omp_gen
   )

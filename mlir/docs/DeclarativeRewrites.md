@@ -11,8 +11,8 @@ compiler build time.
 This manual explains in detail all of the available mechanisms for defining
 rewrite rules in such a declarative manner. It aims to be a specification
 instead of a tutorial. Please refer to
-[Quickstart tutorial to adding MLIR graph rewrite](QuickstartRewrites.md) for
-the latter.
+[Quickstart tutorial to adding MLIR graph
+rewrite](Tutorials/QuickstartRewrites.md) for the latter.
 
 Given that declarative rewrite rules depend on op definition specification, this
 manual assumes knowledge of the [ODS](OpDefinitions.md) doc.
@@ -136,9 +136,11 @@ and `$attr` in result patterns and additional constraints.
 
 The pattern is position-based: the symbol names used for capturing here do not
 need to match with the op definition as shown in the above example. As another
-example, the pattern can be written as ` def : Pat<(AOp $a, F32Attr:$b), ...>;`
+example, the pattern can be written as `def : Pat<(AOp $a, F32Attr:$b), ...>;`
 and use `$a` and `$b` to refer to the captured input and attribute. But using
-the ODS name directly in the pattern is also allowed.
+the ODS name directly in the pattern is also allowed. Operands in the source
+pattern can have the same name. This bounds one operand to the name while
+verifying the rest are all equal.
 
 Also note that we only need to add `TypeConstraint` or `AttributeConstraint`
 when we need to further limit the match criteria. If all valid cases to the op
@@ -153,7 +155,7 @@ bound symbol, for example, `def : Pat<(AOp $a, F32Attr), ...>`.
 
 #### Matching DAG of operations
 
-To match an DAG of ops, use nested `dag` objects:
+To match a DAG of ops, use nested `dag` objects:
 
 ```tablegen
 
@@ -265,7 +267,7 @@ For example, for the above `AOp`, a possible builder is:
 
 ```c++
 
-void AOp::build(Builder *builder, OperationState &state,
+void AOp::build(OpBuilder &builder, OperationState &state,
                 Value input, Attribute attr) {
   state.addOperands({input});
   state.addAttribute("a_attr", attr);
@@ -384,10 +386,12 @@ In `NativeCodeCall`, we can use placeholders like `$_builder`, `$N`. The former
 is called _special placeholder_, while the latter is called _positional
 placeholder_.
 
-`NativeCodeCall` right now only supports two special placeholders: `$_builder`
-and `$_self`:
+`NativeCodeCall` right now only supports three special placeholders:
+`$_builder`, `$_loc`, and `$_self`:
 
 *   `$_builder` will be replaced by the current `mlir::PatternRewriter`.
+*   `$_loc` will be replaced by the fused location or custom location (as
+    determined by location directive).
 *   `$_self` will be replaced with the entity `NativeCodeCall` is attached to.
 
 We have seen how `$_builder` can be used in the above; it allows us to pass a
@@ -530,7 +534,7 @@ the `TwoResultOp`'s two results, respectively.
 
 The above example also shows how to replace a matched multi-result op.
 
-To replace a `N`-result op, the result patterns must generate at least `N`
+To replace an `N`-result op, the result patterns must generate at least `N`
 declared values (see [Declared vs. actual value](#declared-vs-actual-value) for
 definition). If there are more than `N` declared values generated, only the
 last `N` declared values will be used to replace the matched op. Note that
@@ -668,12 +672,12 @@ directive to provide finer control.
 
 `location` is of the following syntax:
 
-```tablgen
+```tablegen
 (location $symbol0, $symbol1, ...)
 ```
 
 where all `$symbol` should be bound previously in the pattern and one optional
-string may be specified as an attribute. The following locations are creted:
+string may be specified as an attribute. The following locations are created:
 
 *   If only 1 symbol is specified then that symbol's location is used,
 *   If multiple are specified then a fused location is created;

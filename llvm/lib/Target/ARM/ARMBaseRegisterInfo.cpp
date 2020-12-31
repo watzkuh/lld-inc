@@ -55,7 +55,9 @@
 using namespace llvm;
 
 ARMBaseRegisterInfo::ARMBaseRegisterInfo()
-    : ARMGenRegisterInfo(ARM::LR, 0, 0, ARM::PC) {}
+    : ARMGenRegisterInfo(ARM::LR, 0, 0, ARM::PC) {
+  ARM_MC::initLLVMToCVRegMapping(this);
+}
 
 static unsigned getFramePointerReg(const ARMSubtarget &STI) {
   return STI.useR7AsFramePointer() ? ARM::R7 : ARM::R11;
@@ -224,6 +226,21 @@ isAsmClobberable(const MachineFunction &MF, MCRegister PhysReg) const {
   return !getReservedRegs(MF).test(PhysReg);
 }
 
+bool ARMBaseRegisterInfo::isInlineAsmReadOnlyReg(const MachineFunction &MF,
+                                                 unsigned PhysReg) const {
+  const ARMSubtarget &STI = MF.getSubtarget<ARMSubtarget>();
+  const ARMFrameLowering *TFI = getFrameLowering(MF);
+
+  BitVector Reserved(getNumRegs());
+  markSuperRegs(Reserved, ARM::PC);
+  if (TFI->hasFP(MF))
+    markSuperRegs(Reserved, getFramePointerReg(STI));
+  if (hasBasePointer(MF))
+    markSuperRegs(Reserved, BasePtr);
+  assert(checkAllSuperRegsMarked(Reserved));
+  return Reserved.test(PhysReg);
+}
+
 const TargetRegisterClass *
 ARMBaseRegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC,
                                                const MachineFunction &MF) const {
@@ -313,9 +330,13 @@ bool ARMBaseRegisterInfo::getRegAllocationHints(
   case ARMRI::RegPairOdd:
     Odd = 1;
     break;
-  default:
+  case ARMRI::RegLR:
     TargetRegisterInfo::getRegAllocationHints(VirtReg, Order, Hints, MF, VRM);
+    if (MRI.getRegClass(VirtReg)->contains(ARM::LR))
+      Hints.push_back(ARM::LR);
     return false;
+  default:
+    return TargetRegisterInfo::getRegAllocationHints(VirtReg, Order, Hints, MF, VRM);
   }
 
   // This register should preferably be even (Odd == 0) or odd (Odd == 1).
@@ -462,7 +483,7 @@ void ARMBaseRegisterInfo::emitLoadConstPool(
   MachineConstantPool *ConstantPool = MF.getConstantPool();
   const Constant *C =
         ConstantInt::get(Type::getInt32Ty(MF.getFunction().getContext()), Val);
-  unsigned Idx = ConstantPool->getConstantPoolIndex(C, 4);
+  unsigned Idx = ConstantPool->getConstantPoolIndex(C, Align(4));
 
   BuildMI(MBB, MBBI, dl, TII.get(ARM::LDRcp))
       .addReg(DestReg, getDefRegState(true), SubIdx)

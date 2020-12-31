@@ -178,6 +178,15 @@ public:
 
   void parseSymbolVersion();
 
+  // Get the NUL-terminated version suffix ("", "@...", or "@@...").
+  //
+  // For @@, the name has been truncated by insert(). For @, the name has been
+  // truncated by Symbol::parseSymbolVersion().
+  const char *getVersionSuffix() const {
+    (void)getName();
+    return nameData + nameSize;
+  }
+
   bool isInGot() const { return gotIndex != -1U; }
   bool isInPlt() const { return pltIndex != -1U; }
 
@@ -258,6 +267,9 @@ public:
   uint8_t isPreemptible : 1;
 
   // True if an undefined or shared symbol is used from a live section.
+  //
+  // NOTE: In Writer.cpp the field is used to mark local defined symbols
+  // which are referenced by relocations when -r or --emit-relocs is given.
   uint8_t used : 1;
 
   // True if a call to this symbol needs to be followed by a restore of the
@@ -517,13 +529,16 @@ size_t Symbol::getSymbolSize() const {
 void Symbol::replace(const Symbol &newSym) {
   using llvm::ELF::STT_TLS;
 
-  // Symbols representing thread-local variables must be referenced by
-  // TLS-aware relocations, and non-TLS symbols must be reference by
-  // non-TLS relocations, so there's a clear distinction between TLS
-  // and non-TLS symbols. It is an error if the same symbol is defined
-  // as a TLS symbol in one file and as a non-TLS symbol in other file.
-  if (symbolKind != PlaceholderKind && !isLazy() && !newSym.isLazy() &&
-      (type == STT_TLS) != (newSym.type == STT_TLS))
+  // st_value of STT_TLS represents the assigned offset, not the actual address
+  // which is used by STT_FUNC and STT_OBJECT. STT_TLS symbols can only be
+  // referenced by special TLS relocations. It is usually an error if a STT_TLS
+  // symbol is replaced by a non-STT_TLS symbol, vice versa. There are two
+  // exceptions: (a) a STT_NOTYPE lazy/undefined symbol can be replaced by a
+  // STT_TLS symbol, (b) a STT_TLS undefined symbol can be replaced by a
+  // STT_NOTYPE lazy symbol.
+  if (symbolKind != PlaceholderKind && !newSym.isLazy() &&
+      (type == STT_TLS) != (newSym.type == STT_TLS) &&
+      type != llvm::ELF::STT_NOTYPE)
     error("TLS attribute mismatch: " + toString(*this) + "\n>>> defined in " +
           toString(newSym.file) + "\n>>> defined in " + toString(file));
 
@@ -561,7 +576,9 @@ void reportBackrefs();
 
 // A mapping from a symbol to an InputFile referencing it backward. Used by
 // --warn-backrefs.
-extern llvm::DenseMap<const Symbol *, const InputFile *> backwardReferences;
+extern llvm::DenseMap<const Symbol *,
+                      std::pair<const InputFile *, const InputFile *>>
+    backwardReferences;
 
 } // namespace elf
 } // namespace lld

@@ -1,11 +1,11 @@
-! RUN: %S/test_symbols.sh %s %flang %t
+! RUN: %S/test_symbols.sh %s %t %f18
 ! Tests for "proc-interface" semantics.
 ! These cases are all valid.
 
 !DEF: /module1 Module
 module module1
  abstract interface
-  !DEF: /module1/abstract1 PUBLIC (Function) Subprogram REAL(4)
+  !DEF: /module1/abstract1 ABSTRACT, PUBLIC (Function) Subprogram REAL(4)
   !DEF: /module1/abstract1/x INTENT(IN) ObjectEntity REAL(4)
   real function abstract1(x)
    !REF: /module1/abstract1/x

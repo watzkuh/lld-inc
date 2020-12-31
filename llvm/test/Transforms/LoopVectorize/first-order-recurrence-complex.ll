@@ -8,8 +8,8 @@
 
 define void @can_sink_after_store(i32 %x, i32* %ptr, i64 %tc) local_unnamed_addr #0 {
 ; CHECK-LABEL: vector.ph:
-; CHECK:        %broadcast.splatinsert1 = insertelement <4 x i32> undef, i32 %x, i32 0
-; CHECK-NEXT:   %broadcast.splat2 = shufflevector <4 x i32> %broadcast.splatinsert1, <4 x i32> undef, <4 x i32> zeroinitializer
+; CHECK:        %broadcast.splatinsert = insertelement <4 x i32> poison, i32 %x, i32 0
+; CHECK-NEXT:   %broadcast.splat = shufflevector <4 x i32> %broadcast.splatinsert, <4 x i32> poison, <4 x i32> zeroinitializer
 ; CHECK-NEXT:   %vector.recur.init = insertelement <4 x i32> undef, i32 %.pre, i32 3
 ; CHECK-NEXT:    br label %vector.body
 
@@ -17,16 +17,13 @@ define void @can_sink_after_store(i32 %x, i32* %ptr, i64 %tc) local_unnamed_addr
 ; CHECK-NEXT:   %index = phi i64 [ 0, %vector.ph ], [ %index.next, %vector.body ]
 ; CHECK-NEXT:   %vector.recur = phi <4 x i32> [ %vector.recur.init, %vector.ph ], [ %wide.load, %vector.body ]
 ; CHECK-NEXT:   %offset.idx = add i64 1, %index
-; CHECK-NEXT:   %broadcast.splatinsert = insertelement <4 x i64> undef, i64 %offset.idx, i32 0
-; CHECK-NEXT:   %broadcast.splat = shufflevector <4 x i64> %broadcast.splatinsert, <4 x i64> undef, <4 x i32> zeroinitializer
-; CHECK-NEXT:   %induction = add <4 x i64> %broadcast.splat, <i64 0, i64 1, i64 2, i64 3>
 ; CHECK-NEXT:   %0 = add i64 %offset.idx, 0
 ; CHECK-NEXT:   %1 = getelementptr inbounds [257 x i32], [257 x i32]* @p, i64 0, i64 %0
 ; CHECK-NEXT:   %2 = getelementptr inbounds i32, i32* %1, i32 0
 ; CHECK-NEXT:   %3 = bitcast i32* %2 to <4 x i32>*
 ; CHECK-NEXT:   %wide.load = load <4 x i32>, <4 x i32>* %3, align 4
 ; CHECK-NEXT:   %4 = shufflevector <4 x i32> %vector.recur, <4 x i32> %wide.load, <4 x i32> <i32 3, i32 4, i32 5, i32 6>
-; CHECK-NEXT:   %5 = add <4 x i32> %4, %broadcast.splat2
+; CHECK-NEXT:   %5 = add <4 x i32> %4, %broadcast.splat
 ; CHECK-NEXT:   %6 = add <4 x i32> %5, %wide.load
 ; CHECK-NEXT:   %7 = getelementptr inbounds [257 x i32], [257 x i32]* @q, i64 0, i64 %0
 ; CHECK-NEXT:   %8 = getelementptr inbounds i32, i32* %7, i32 0
@@ -65,8 +62,8 @@ exit:
 ; and not introduce traps on additional paths.
 define void @sink_sdiv(i32 %x, i32* %ptr, i64 %tc) local_unnamed_addr #0 {
 ; CHECK-LABEL: vector.ph:
-; CHECK:        %broadcast.splatinsert1 = insertelement <4 x i32> undef, i32 %x, i32 0
-; CHECK-NEXT:   %broadcast.splat2 = shufflevector <4 x i32> %broadcast.splatinsert1, <4 x i32> undef, <4 x i32> zeroinitializer
+; CHECK:        %broadcast.splatinsert = insertelement <4 x i32> poison, i32 %x, i32 0
+; CHECK-NEXT:   %broadcast.splat = shufflevector <4 x i32> %broadcast.splatinsert, <4 x i32> poison, <4 x i32> zeroinitializer
 ; CHECK-NEXT:   %vector.recur.init = insertelement <4 x i32> undef, i32 %.pre, i32 3
 ; CHECK-NEXT:    br label %vector.body
 
@@ -74,16 +71,13 @@ define void @sink_sdiv(i32 %x, i32* %ptr, i64 %tc) local_unnamed_addr #0 {
 ; CHECK-NEXT:   %index = phi i64 [ 0, %vector.ph ], [ %index.next, %vector.body ]
 ; CHECK-NEXT:   %vector.recur = phi <4 x i32> [ %vector.recur.init, %vector.ph ], [ %wide.load, %vector.body ]
 ; CHECK-NEXT:   %offset.idx = add i64 1, %index
-; CHECK-NEXT:   %broadcast.splatinsert = insertelement <4 x i64> undef, i64 %offset.idx, i32 0
-; CHECK-NEXT:   %broadcast.splat = shufflevector <4 x i64> %broadcast.splatinsert, <4 x i64> undef, <4 x i32> zeroinitializer
-; CHECK-NEXT:   %induction = add <4 x i64> %broadcast.splat, <i64 0, i64 1, i64 2, i64 3>
 ; CHECK-NEXT:   %0 = add i64 %offset.idx, 0
 ; CHECK-NEXT:   %1 = getelementptr inbounds [257 x i32], [257 x i32]* @p, i64 0, i64 %0
 ; CHECK-NEXT:   %2 = getelementptr inbounds i32, i32* %1, i32 0
 ; CHECK-NEXT:   %3 = bitcast i32* %2 to <4 x i32>*
 ; CHECK-NEXT:   %wide.load = load <4 x i32>, <4 x i32>* %3, align 4
 ; CHECK-NEXT:   %4 = shufflevector <4 x i32> %vector.recur, <4 x i32> %wide.load, <4 x i32> <i32 3, i32 4, i32 5, i32 6>
-; CHECK-NEXT:   %5 = sdiv <4 x i32> %4, %broadcast.splat2
+; CHECK-NEXT:   %5 = sdiv <4 x i32> %4, %broadcast.splat
 ; CHECK-NEXT:   %6 = add <4 x i32> %5, %wide.load
 ; CHECK-NEXT:   %7 = getelementptr inbounds [257 x i32], [257 x i32]* @q, i64 0, i64 %0
 ; CHECK-NEXT:   %8 = getelementptr inbounds i32, i32* %7, i32 0
@@ -271,5 +265,38 @@ bb13:                                             ; preds = %bb13, %bb
   br i1 %tmp12, label %bb13, label %bb74
 
 bb74:                                             ; preds = %bb13
+  ret void
+}
+
+; Users that are phi nodes cannot be sunk.
+define void @cannot_sink_phi(i32* %ptr) {
+; CHECK-LABEL: define void @cannot_sink_phi(
+; CHECK-NOT:   vector.body
+entry:
+  br label %loop.header
+
+loop.header:                                      ; preds = %if.end128, %for.cond108.preheader
+  %iv = phi i64 [ 1, %entry ], [ %iv.next, %loop.latch ]
+  %for = phi i32 [ 0, %entry ], [ %for.next, %loop.latch ]
+  %c.1 = icmp ult i64 %iv, 500
+  br i1 %c.1, label %if.truebb, label %if.falsebb
+
+if.truebb:                  ; preds = %for.body114
+  br label %loop.latch
+
+if.falsebb:                                       ; preds = %for.body114
+  br label %loop.latch
+
+loop.latch:                                        ; preds = %if.then122, %for.body114.if.end128_crit_edge
+  %first_time.1 = phi i32 [ 20, %if.truebb ], [ %for, %if.falsebb ]
+  %c.2 = icmp ult i64 %iv, 800
+  %for.next = select i1 %c.2, i32 30, i32 %first_time.1
+  %ptr.idx = getelementptr i32, i32* %ptr, i64 %iv
+  store i32 %for.next, i32* %ptr.idx
+  %iv.next = add nuw nsw i64 %iv, 1
+  %exitcond.not = icmp eq i64 %iv.next, 1000
+  br i1 %exitcond.not, label %exit, label %loop.header
+
+exit:
   ret void
 }

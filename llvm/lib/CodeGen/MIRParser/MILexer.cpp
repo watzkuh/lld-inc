@@ -11,12 +11,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "MILexer.h"
-#include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/None.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include <algorithm>
 #include <cassert>
@@ -215,11 +212,12 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case("contract", MIToken::kw_contract)
       .Case("afn", MIToken::kw_afn)
       .Case("reassoc", MIToken::kw_reassoc)
-      .Case("nuw" , MIToken::kw_nuw)
-      .Case("nsw" , MIToken::kw_nsw)
-      .Case("exact" , MIToken::kw_exact)
+      .Case("nuw", MIToken::kw_nuw)
+      .Case("nsw", MIToken::kw_nsw)
+      .Case("exact", MIToken::kw_exact)
       .Case("nofpexcept", MIToken::kw_nofpexcept)
       .Case("debug-location", MIToken::kw_debug_location)
+      .Case("debug-instr-number", MIToken::kw_debug_instr_number)
       .Case("same_value", MIToken::kw_cfi_same_value)
       .Case("offset", MIToken::kw_cfi_offset)
       .Case("rel_offset", MIToken::kw_cfi_rel_offset)
@@ -234,7 +232,8 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case("undefined", MIToken::kw_cfi_undefined)
       .Case("register", MIToken::kw_cfi_register)
       .Case("window_save", MIToken::kw_cfi_window_save)
-      .Case("negate_ra_sign_state", MIToken::kw_cfi_aarch64_negate_ra_sign_state)
+      .Case("negate_ra_sign_state",
+            MIToken::kw_cfi_aarch64_negate_ra_sign_state)
       .Case("blockaddress", MIToken::kw_blockaddress)
       .Case("intrinsic", MIToken::kw_intrinsic)
       .Case("target-index", MIToken::kw_target_index)
@@ -534,7 +533,7 @@ static Cursor maybeLexMCSymbol(Cursor C, MIToken &Token,
 }
 
 static bool isValidHexFloatingPointPrefix(char C) {
-  return C == 'H' || C == 'K' || C == 'L' || C == 'M';
+  return C == 'H' || C == 'K' || C == 'L' || C == 'M' || C == 'R';
 }
 
 static Cursor lexFloatingPointLiteral(Cursor Range, Cursor C, MIToken &Token) {

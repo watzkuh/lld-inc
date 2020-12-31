@@ -12,15 +12,14 @@
 
 #include "DIEHash.h"
 #include "ByteStreamer.h"
+#include "DwarfCompileUnit.h"
 #include "DwarfDebug.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/AsmPrinter.h"
-#include "llvm/CodeGen/DIE.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Endian.h"
-#include "llvm/Support/MD5.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -216,7 +215,15 @@ void DIEHash::hashDIEEntry(dwarf::Attribute Attribute, dwarf::Tag Tag,
 // all of the data is going to be added as integers.
 void DIEHash::hashBlockData(const DIE::const_value_range &Values) {
   for (const auto &V : Values)
-    Hash.update((uint64_t)V.getDIEInteger().getValue());
+    if (V.getType() == DIEValue::isBaseTypeRef) {
+      const DIE &C =
+          *CU->ExprRefedBaseTypes[V.getDIEBaseTypeRef().getIndex()].Die;
+      StringRef Name = getDIEStringAttr(C, dwarf::DW_AT_name);
+      assert(!Name.empty() &&
+             "Base types referenced from DW_OP_convert should have a name");
+      hashNestedType(C, Name);
+    } else
+      Hash.update((uint64_t)V.getDIEInteger().getValue());
 }
 
 // Hash the contents of a loclistptr class.

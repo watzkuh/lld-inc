@@ -61,7 +61,6 @@ macro(add_flang_library name)
   llvm_add_library(${name} ${LIBTYPE} ${ARG_UNPARSED_ARGUMENTS} ${srcs})
 
   if (TARGET ${name})
-    target_link_libraries(${name} INTERFACE ${LLVM_COMMON_LIBS})
 
     if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY OR ${name} STREQUAL "libflang")
       set(export_to_flangtargets)
@@ -109,7 +108,6 @@ macro(add_flang_tool name)
   endif()
 
   add_flang_executable(${name} ${ARGN})
-  add_dependencies(${name} flang-resource-headers)
 
   if (FLANG_BUILD_TOOLS)
     set(export_to_flangtargets)

@@ -142,7 +142,7 @@ static void MarkBlocksLiveIn(BasicBlock *BB,
 /// instruction with those returned by the personality function.
 void SjLjEHPrepare::substituteLPadValues(LandingPadInst *LPI, Value *ExnVal,
                                          Value *SelVal) {
-  SmallVector<Value *, 8> UseWorkList(LPI->user_begin(), LPI->user_end());
+  SmallVector<Value *, 8> UseWorkList(LPI->users());
   while (!UseWorkList.empty()) {
     Value *Val = UseWorkList.pop_back_val();
     auto *EVI = dyn_cast<ExtractValueInst>(Val);
@@ -466,8 +466,7 @@ bool SjLjEHPrepare::setupEntryBlockAndCallSites(Function &F) {
       }
       Instruction *StackAddr = CallInst::Create(StackAddrFn, "sp");
       StackAddr->insertAfter(&I);
-      Instruction *StoreStackAddr = new StoreInst(StackAddr, StackPtr, true);
-      StoreStackAddr->insertAfter(StackAddr);
+      new StoreInst(StackAddr, StackPtr, true, StackAddr->getNextNode());
     }
   }
 

@@ -1539,10 +1539,20 @@ static void PrintNullabilityKind(CXType T, const char *Format) {
 
   const char *nullability = 0;
   switch (N) {
-    case CXTypeNullability_NonNull: nullability = "nonnull"; break;
-    case CXTypeNullability_Nullable: nullability = "nullable"; break;
-    case CXTypeNullability_Unspecified: nullability = "unspecified"; break;
-    case CXTypeNullability_Invalid: break;
+  case CXTypeNullability_NonNull:
+    nullability = "nonnull";
+    break;
+  case CXTypeNullability_Nullable:
+    nullability = "nullable";
+    break;
+  case CXTypeNullability_NullableResult:
+    nullability = "nullable_result";
+    break;
+  case CXTypeNullability_Unspecified:
+    nullability = "unspecified";
+    break;
+  case CXTypeNullability_Invalid:
+    break;
   }
 
   if (nullability) {
@@ -1578,6 +1588,12 @@ static enum CXChildVisitResult PrintType(CXCursor cursor, CXCursor p,
         PrintTypeAndTypeKind(CT, " [canonicaltype=%s] [canonicaltypekind=%s]");
         PrintTypeTemplateArgs(CT, " [canonicaltemplateargs/%d=");
       }
+    }
+    /* Print the value type if it exists. */
+    {
+      CXType VT = clang_Type_getValueType(T);
+      if (VT.kind != CXType_Invalid)
+        PrintTypeAndTypeKind(VT, " [valuetype=%s] [valuetypekind=%s]");
     }
     /* Print the modified type if it exists. */
     {

@@ -13,9 +13,10 @@
 #ifndef LINALG_OPS
 #define LINALG_OPS
 
-include "mlir/Dialect/Affine/IR/AffineOpsBase.td"
 include "mlir/Dialect/Linalg/IR/LinalgBase.td"
-include "mlir/Interfaces/SideEffects.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/ViewLikeInterface.td"
 
 // Base class for Linalg dialect ops that do not correspond to library calls.
 class Linalg_Op<string mnemonic, list<OpTrait> traits = []> :
@@ -29,6 +30,91 @@ class Linalg_Op<string mnemonic, list<OpTrait> traits = []> :
   let printer = [{ return ::print(p, *this); }];
   let verifier = [{ return ::verify(*this); }];
   let parser = [{ return ::parse$cppClass(parser, result); }];
+}
+
+def Linalg_InitTensorOp : Linalg_Op<"init_tensor", [NoSideEffect]> {
+  let summary = "operation to define a tensor of particular value";
+
+  let description = [{
+    `linalg.init_tensor` is an operation that materializes a tensor of
+    a given shape. The shape could be dynamic or static.
+  }];
+
+  let arguments =
+    (ins Variadic<Index>:$sizes, I64ArrayAttr:$static_sizes);
+
+  let results = (outs AnyTensor:$result);
+
+  let verifier = [{ return ::verify(*this); }];
+
+  let extraClassDeclaration = [{
+    static StringRef getStaticSizesAttrName() {
+      return "static_sizes";
+    }
+
+    RankedTensorType getType() {
+      return getResult().getType().cast<RankedTensorType>(); }
+
+    // Infer the shape of the result tensor given the static shapes
+    // and element type of the result tensor.
+    static Type inferResultType(ArrayRef<int64_t> staticSizes, Type elementType);
+
+    // Return true if the size of the tensor is dynamic at `idx`
+    bool isDynamicSize(unsigned idx) {
+      APInt v = *(static_sizes().getAsValueRange<IntegerAttr>().begin() + idx);
+      return ShapedType::isDynamic(v.getSExtValue());
+    }
+
+    // Assert that the size of the result tensor is static at `idx`
+    // and return the shape.
+    int64_t getStaticSize(unsigned idx) {
+      assert(!isDynamicSize(idx) && "expected static size");
+      APInt v = *(static_sizes().
+          template getAsValueRange<IntegerAttr>().begin() + idx);
+        return v.getSExtValue();
+    }
+
+    // Return the argument position that contains the dynamic size of
+    // the tensor at dimension `idx`. Asserts that the shape is
+    // dynamic at that `idx`.
+    unsigned getIndexOfDynamicSize(unsigned idx) {
+      assert(isDynamicSize(idx) && "expected dynamic size");
+      return std::count_if(
+          static_sizes().getValue().begin(),
+          static_sizes().getValue().begin() + idx,
+          [&](Attribute attr) {
+            return ShapedType::isDynamic(attr.cast<IntegerAttr>().getInt());
+          });
+    }
+
+    // Return the Value of the dynamic size of the tensor at dimension
+    // `idx`. Asserts that the shape is dynamic at that `idx.
+    Value getDynamicSize(unsigned idx) {
+      return getOperand(getIndexOfDynamicSize(idx));
+    }
+  }];
+
+  let builders = [
+    OpBuilderDAG<(ins "ValueRange":$shape,
+                  "ArrayRef<int64_t>":$staticShape, "Type":$elementType),
+    [{
+      build($_builder, $_state,
+            InitTensorOp::inferResultType(staticShape, elementType),
+            shape, $_builder.getI64ArrayAttr(staticShape));
+    }]>,
+    OpBuilderDAG<(ins "ValueRange":$shape, "Type":$elementType),
+    [{
+      SmallVector<int64_t, 4> staticShape(
+        shape.size(), ShapedType::kDynamicSize);
+      build($_builder, $_state, shape, staticShape, elementType);
+    }]>,
+    OpBuilderDAG<(ins "ArrayRef<int64_t>":$staticShape, "Type":$elementType),
+    [{
+      build($_builder, $_state, ValueRange{}, staticShape, elementType);
+    }]>
+  ];
+
+  let hasCanonicalizer = 1;
 }
 
 def Linalg_RangeOp :
@@ -47,12 +133,11 @@ def Linalg_RangeOp :
     %3 = linalg.range %0:%1:%2 : !linalg.range
     ````
   }];
-  let builders = [OpBuilder<
-    "Builder *builder, OperationState &result, Value min, Value max, "
-    "Value step",
+  let builders = [
+    OpBuilderDAG<(ins "Value":$min, "Value":$max, "Value":$step),
     [{
-      auto rangeType = RangeType::get(builder->getContext());
-      build(builder, result, rangeType, min, max, step);
+      auto rangeType = RangeType::get($_builder.getContext());
+      build($_builder, $_state, rangeType, min, max, step);
     }]>];
 
   // Fully specified by traits.
@@ -60,29 +145,52 @@ def Linalg_RangeOp :
   let assemblyFormat = "$min `:` $max `:` $step attr-dict `:` type(results)";
 }
 
-class Linalg_ReshapeLikeOp<string mnemonic> :
-    Linalg_Op<mnemonic, [NoSideEffect]> {
+class Linalg_ReshapeLikeOp<string mnemonic, list<OpTrait> traits = []> :
+    Linalg_Op<mnemonic, !listconcat(traits, [NoSideEffect])> {
   let builders = [
-    // Builder for a contracting reshape whose result type is computed from
+    // Builders for a contracting reshape whose result type is computed from
     // `src` and `reassociation`.
-    OpBuilder<"Builder *b, OperationState &result, Value src, "
-    "ArrayRef<ArrayRef<AffineExpr>> reassociation, "
-    "ArrayRef<NamedAttribute> attrs = {}">,
-    // Builder for a reshape whose result type is passed explicitly. This may be
-    // either a contracting or expanding reshape.
-    OpBuilder<"Builder *b, OperationState &result, Type resultType, Value src,"
-    "ArrayRef<ArrayRef<AffineExpr>> reassociation, "
-    "ArrayRef<NamedAttribute> attrs = {}">];
+    OpBuilderDAG<(ins "Value":$src,
+      "ArrayRef<ReassociationExprs>":$reassociation,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
+    OpBuilderDAG<(ins "Value":$src,
+      "ArrayRef<ReassociationIndices>":$reassociation,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs),
+    [{
+      auto reassociationMaps =
+          convertReassociationIndicesToMaps($_builder, reassociation);
+      build($_builder, $_state, src, reassociationMaps, attrs);
+    }]>,
+
+    // Builders for a reshape whose result type is passed explicitly. This may
+    // be either a contracting or expanding reshape.
+    OpBuilderDAG<(ins "Type":$resultType, "Value":$src,
+      "ArrayRef<ReassociationExprs>":$reassociation,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
+    OpBuilderDAG<(ins "Type":$resultType, "Value":$src,
+      "ArrayRef<ReassociationIndices>":$reassociation,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs),
+    [{
+      auto reassociationMaps =
+          convertReassociationIndicesToMaps($_builder, reassociation);
+      build($_builder, $_state, resultType, src, reassociationMaps, attrs);
+    }]>
+  ];
 
   code commonExtraClassDeclaration = [{
     static StringRef getReassociationAttrName() { return "reassociation"; }
+    SmallVector<AffineMap, 4> getReassociationMaps() {
+      return llvm::to_vector<4>(llvm::map_range(reassociation(), [
+      ](Attribute a) { return a.cast<AffineMapAttr>().getValue(); }));
+    }
   }];
   let assemblyFormat = [{
     $src $reassociation attr-dict `:` type($src) `into` type(results)
   }];
 }
 
-def Linalg_ReshapeOp : Linalg_ReshapeLikeOp<"reshape">,
+def Linalg_ReshapeOp : Linalg_ReshapeLikeOp<"reshape",
+    [DeclareOpInterfaceMethods<ViewLikeOpInterface>]>,
     Arguments<(ins AnyStridedMemRef:$src, AffineMapArrayAttr:$reassociation)>,
     Results<(outs AnyStridedMemRef:$result)> {
   let summary = "linalg.reshape produces a new view into the operand view";
@@ -110,6 +218,13 @@ def Linalg_ReshapeOp : Linalg_ReshapeLikeOp<"reshape">,
     rank to obtain the memref with the smaller rank. In the case of a dimension
     expansion, the reassociation maps can be interpreted as inverse maps.
 
+    The result memref type of a reshape when dimensions are collapsed
+    (operand memref type when dimensions are expanded) can be
+    zero-ranked if the operand memref type (or the result memref type
+    when dimensions are expanded) is statically shaped with all
+    dimensions being unit extent. In such cases the reassociation map
+    is empty.
+
     Examples:
 
     ```mlir
@@ -129,6 +244,7 @@ def Linalg_ReshapeOp : Linalg_ReshapeLikeOp<"reshape">,
     MemRefType getResultType() { return result().getType().cast<MemRefType>(); }
   }];
   let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
 def Linalg_TensorReshapeOp : Linalg_ReshapeLikeOp<"tensor_reshape">,
@@ -150,6 +266,13 @@ def Linalg_TensorReshapeOp : Linalg_ReshapeLikeOp<"tensor_reshape">,
     is that the reassociation maps are applied to the tensor with the larger
     rank to obtain the tensor with the smaller rank. In the case of a dimension
     expansion, the reassociation maps can be interpreted as inverse maps.
+
+    The result tensor type of a reshape when dimensions are collapsed
+    (operand tensor type when dimensions are expanded) can be
+    zero-ranked if the operand tensor type (or the result tensor type
+    when dimensions are expanded) is statically shaped with all
+    dimensions being unit extent. In such cases the reassociation map
+    is empty.
 
     Examples:
 
@@ -173,9 +296,12 @@ def Linalg_TensorReshapeOp : Linalg_ReshapeLikeOp<"tensor_reshape">,
       return result().getType().cast<RankedTensorType>();
     }
   }];
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
-def Linalg_SliceOp : Linalg_Op<"slice", [NoSideEffect]>,
+def Linalg_SliceOp : Linalg_Op<"slice", [
+      DeclareOpInterfaceMethods<ViewLikeOpInterface>, NoSideEffect]>,
     Arguments<(ins AnyStridedMemRef:$view,
                    Variadic<AnyTypeOf<[Range, Index]>>:$indexings)>,
     Results<(outs AnyStridedMemRef)> {
@@ -220,9 +346,7 @@ def Linalg_SliceOp : Linalg_Op<"slice", [NoSideEffect]>,
       ```
   }];
 
-  let builders = [OpBuilder<
-    "Builder *b, OperationState &result, Value base, "
-    "ValueRange indexings">];
+  let builders = [OpBuilderDAG<(ins "Value":$base, "ValueRange":$indexings)>];
 
   let extraClassDeclaration = [{
     enum { FirstIndexingOperand = 1 };
@@ -248,43 +372,7 @@ def Linalg_SliceOp : Linalg_Op<"slice", [NoSideEffect]>,
   let hasFolder = 1;
 }
 
-def Linalg_TransposeOp : Linalg_Op<"transpose", [NoSideEffect]>,
-    Arguments<(ins AnyStridedMemRef:$view, AffineMapAttr:$permutation)>,
-    Results<(outs AnyStridedMemRef)> {
-  let summary = "`transpose` produces a new strided memref (metadata-only)";
-  let description = [{
-    The `linalg.transpose` op produces a strided memref whose sizes and strides
-    are a permutation of the original `view`. This is a pure metadata
-    transformation.
-
-    Example:
-
-    ```mlir
-    %1 = linalg.transpose %0 (i, j) -> (j, i) : memref<?x?xf32, stride_spec>
-    ```
-  }];
-
-  let builders = [OpBuilder<
-    "Builder *b, OperationState &result, Value view, "
-    "AffineMapAttr permutation, ArrayRef<NamedAttribute> attrs = {}">];
-
-  let verifier = [{
-    if (!permutation().isPermutation())
-      return emitOpError("expected a permutation map");
-    if (permutation().getNumDims() != getShapedType().getRank())
-      return emitOpError("expected a permutation map of same rank as the view");
-    return success();
-  }];
-
-  let extraClassDeclaration = [{
-    static StringRef getPermutationAttrName() { return "permutation"; }
-    ShapedType getShapedType() { return view().getType().cast<ShapedType>(); }
-  }];
-
-  let hasFolder = 1;
-}
-
-def Linalg_YieldOp : Linalg_Op<"yield", [NoSideEffect, Terminator]>,
+def Linalg_YieldOp : Linalg_Op<"yield", [NoSideEffect, ReturnLike, Terminator]>,
     Arguments<(ins Variadic<AnyType>:$values)> {
   let summary = "Linalg yield operation";
   let description = [{

@@ -22,6 +22,7 @@
 #include "llvm/MC/MCValue.h"
 #include "llvm/MC/MCXCOFFObjectWriter.h"
 #include "llvm/MC/StringTableBuilder.h"
+#include "llvm/Support/EndianStream.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -67,7 +68,7 @@ struct Symbol {
   XCOFF::StorageClass getStorageClass() const {
     return MCSym->getStorageClass();
   }
-  StringRef getName() const { return MCSym->getName(); }
+  StringRef getSymbolTableName() const { return MCSym->getSymbolTableName(); }
   Symbol(const MCSymbolXCOFF *MCSym) : MCSym(MCSym), SymbolTableIndex(-1) {}
 };
 
@@ -80,7 +81,7 @@ struct ControlSection {
 
   SmallVector<Symbol, 1> Syms;
   SmallVector<XCOFFRelocation, 1> Relocations;
-  StringRef getName() const { return MCCsect->getSectionName(); }
+  StringRef getSymbolTableName() const { return MCCsect->getSymbolTableName(); }
   ControlSection(const MCSectionXCOFF *MCSec)
       : MCCsect(MCSec), SymbolTableIndex(-1), Address(-1), Size(0) {}
 };
@@ -303,6 +304,7 @@ CsectGroup &XCOFFObjectWriter::getCsectGroup(const MCSectionXCOFF *MCSec) {
            "in this CsectGroup.");
     return TOCCsects;
   case XCOFF::XMC_TC:
+  case XCOFF::XMC_TE:
     assert(XCOFF::XTY_SD == MCSec->getCSectType() &&
            "Only an initialized csect can contain TC entry.");
     assert(!TOCCsects.empty() &&
@@ -333,8 +335,8 @@ void XCOFFObjectWriter::executePostLayoutBinding(MCAssembler &Asm,
 
     // If the name does not fit in the storage provided in the symbol table
     // entry, add it to the string table.
-    if (nameShouldBeInStringTable(MCSec->getSectionName()))
-      Strings.add(MCSec->getSectionName());
+    if (nameShouldBeInStringTable(MCSec->getSymbolTableName()))
+      Strings.add(MCSec->getSymbolTableName());
 
     CsectGroup &Group = getCsectGroup(MCSec);
     Group.emplace_back(MCSec);
@@ -353,26 +355,29 @@ void XCOFFObjectWriter::executePostLayoutBinding(MCAssembler &Asm,
       // Handle undefined symbol.
       UndefinedCsects.emplace_back(ContainingCsect);
       SectionMap[ContainingCsect] = &UndefinedCsects.back();
-    } else {
-      // If the symbol is the csect itself, we don't need to put the symbol
-      // into csect's Syms.
-      if (XSym == ContainingCsect->getQualNameSymbol())
-        continue;
-
-      // Only put a label into the symbol table when it is an external label.
-      if (!XSym->isExternal())
-        continue;
-
-      assert(SectionMap.find(ContainingCsect) != SectionMap.end() &&
-             "Expected containing csect to exist in map");
-      // Lookup the containing csect and add the symbol to it.
-      SectionMap[ContainingCsect]->Syms.emplace_back(XSym);
+      if (nameShouldBeInStringTable(ContainingCsect->getSymbolTableName()))
+        Strings.add(ContainingCsect->getSymbolTableName());
+      continue;
     }
+
+    // If the symbol is the csect itself, we don't need to put the symbol
+    // into csect's Syms.
+    if (XSym == ContainingCsect->getQualNameSymbol())
+      continue;
+
+    // Only put a label into the symbol table when it is an external label.
+    if (!XSym->isExternal())
+      continue;
+
+    assert(SectionMap.find(ContainingCsect) != SectionMap.end() &&
+           "Expected containing csect to exist in map");
+    // Lookup the containing csect and add the symbol to it.
+    SectionMap[ContainingCsect]->Syms.emplace_back(XSym);
 
     // If the name does not fit in the storage provided in the symbol table
     // entry, add it to the string table.
-    if (nameShouldBeInStringTable(XSym->getName()))
-      Strings.add(XSym->getName());
+    if (nameShouldBeInStringTable(XSym->getSymbolTableName()))
+      Strings.add(XSym->getSymbolTableName());
   }
 
   Strings.finalize();
@@ -384,11 +389,26 @@ void XCOFFObjectWriter::recordRelocation(MCAssembler &Asm,
                                          const MCFragment *Fragment,
                                          const MCFixup &Fixup, MCValue Target,
                                          uint64_t &FixedValue) {
+  auto getIndex = [this](const MCSymbol *Sym,
+                         const MCSectionXCOFF *ContainingCsect) {
+    // If we could not find the symbol directly in SymbolIndexMap, this symbol
+    // could either be a temporary symbol or an undefined symbol. In this case,
+    // we would need to have the relocation reference its csect instead.
+    return SymbolIndexMap.find(Sym) != SymbolIndexMap.end()
+               ? SymbolIndexMap[Sym]
+               : SymbolIndexMap[ContainingCsect->getQualNameSymbol()];
+  };
 
-  if (Target.getSymB())
-    report_fatal_error("Handling Target.SymB for relocation is unimplemented.");
+  auto getVirtualAddress = [this,
+                            &Layout](const MCSymbol *Sym,
+                                     const MCSectionXCOFF *ContainingCsect) {
+    // If Sym is a csect, return csect's address.
+    // If Sym is a label, return csect's address + label's offset from the csect.
+    return SectionMap[ContainingCsect]->Address +
+           (Sym->isDefined() ? Layout.getSymbolOffset(*Sym) : 0);
+  };
 
-  const MCSymbol &SymA = Target.getSymA()->getSymbol();
+  const MCSymbol *const SymA = &Target.getSymA()->getSymbol();
 
   MCAsmBackend &Backend = Asm.getBackend();
   bool IsPCRel = Backend.getFixupKindInfo(Fixup.getKind()).Flags &
@@ -399,29 +419,27 @@ void XCOFFObjectWriter::recordRelocation(MCAssembler &Asm,
   std::tie(Type, SignAndSize) =
       TargetObjectWriter->getRelocTypeAndSignSize(Target, Fixup, IsPCRel);
 
-  const MCSectionXCOFF *SymASec =
-      getContainingCsect(cast<MCSymbolXCOFF>(&SymA));
+  const MCSectionXCOFF *SymASec = getContainingCsect(cast<MCSymbolXCOFF>(SymA));
   assert(SectionMap.find(SymASec) != SectionMap.end() &&
          "Expected containing csect to exist in map.");
 
-  // If we could not find SymA directly in SymbolIndexMap, this symbol could
-  // either be a temporary symbol or an undefined symbol. In this case, we
-  // would need to have the relocation reference its csect instead.
-  uint32_t Index = SymbolIndexMap.find(&SymA) != SymbolIndexMap.end()
-                       ? SymbolIndexMap[&SymA]
-                       : SymbolIndexMap[SymASec->getQualNameSymbol()];
-
+  const uint32_t Index = getIndex(SymA, SymASec);
   if (Type == XCOFF::RelocationType::R_POS)
     // The FixedValue should be symbol's virtual address in this object file
     // plus any constant value that we might get.
-    // Notice that SymA.isDefined() could return false, but SymASec could still
-    // be a defined csect. One of the example is the TOC-base symbol.
-    FixedValue = SectionMap[SymASec]->Address +
-                 (SymA.isDefined() ? Layout.getSymbolOffset(SymA) : 0) +
-                 Target.getConstant();
-  else if (Type == XCOFF::RelocationType::R_TOC)
-    // The FixedValue should be the TC entry offset from TOC-base.
-    FixedValue = SectionMap[SymASec]->Address - TOCCsects.front().Address;
+    FixedValue = getVirtualAddress(SymA, SymASec) + Target.getConstant();
+  else if (Type == XCOFF::RelocationType::R_TOC ||
+           Type == XCOFF::RelocationType::R_TOCL) {
+    // The FixedValue should be the TOC entry offset from the TOC-base plus any
+    // constant offset value.
+    const int64_t TOCEntryOffset = SectionMap[SymASec]->Address -
+                                   TOCCsects.front().Address +
+                                   Target.getConstant();
+    if (Type == XCOFF::RelocationType::R_TOC && !isInt<16>(TOCEntryOffset))
+      report_fatal_error("TOCEntryOffset overflows in small code model mode");
+
+    FixedValue = TOCEntryOffset;
+  }
 
   assert(
       (TargetObjectWriter->is64Bit() ||
@@ -435,6 +453,33 @@ void XCOFFObjectWriter::recordRelocation(MCAssembler &Asm,
   assert(SectionMap.find(RelocationSec) != SectionMap.end() &&
          "Expected containing csect to exist in map.");
   SectionMap[RelocationSec]->Relocations.push_back(Reloc);
+
+  if (!Target.getSymB())
+    return;
+
+  const MCSymbol *const SymB = &Target.getSymB()->getSymbol();
+  if (SymA == SymB)
+    report_fatal_error("relocation for opposite term is not yet supported");
+
+  const MCSectionXCOFF *SymBSec = getContainingCsect(cast<MCSymbolXCOFF>(SymB));
+  assert(SectionMap.find(SymBSec) != SectionMap.end() &&
+         "Expected containing csect to exist in map.");
+  if (SymASec == SymBSec)
+    report_fatal_error(
+        "relocation for paired relocatable term is not yet supported");
+
+  assert(Type == XCOFF::RelocationType::R_POS &&
+         "SymA must be R_POS here if it's not opposite term or paired "
+         "relocatable term.");
+  const uint32_t IndexB = getIndex(SymB, SymBSec);
+  // SymB must be R_NEG here, given the general form of Target(MCValue) is
+  // "SymbolA - SymbolB + imm64".
+  const uint8_t TypeB = XCOFF::RelocationType::R_NEG;
+  XCOFFRelocation RelocB = {IndexB, FixupOffsetInCsect, SignAndSize, TypeB};
+  SectionMap[RelocationSec]->Relocations.push_back(RelocB);
+  // We already folded "SymbolA + imm64" above when Type is R_POS for SymbolA,
+  // now we just need to fold "- SymbolB" here.
+  FixedValue -= getVirtualAddress(SymB, SymBSec);
 }
 
 void XCOFFObjectWriter::writeSections(const MCAssembler &Asm,
@@ -520,7 +565,7 @@ void XCOFFObjectWriter::writeSymbolTableEntryForCsectMemberLabel(
     const Symbol &SymbolRef, const ControlSection &CSectionRef,
     int16_t SectionIndex, uint64_t SymbolOffset) {
   // Name or Zeros and string table offset
-  writeSymbolName(SymbolRef.getName());
+  writeSymbolName(SymbolRef.getSymbolTableName());
   assert(SymbolOffset <= UINT32_MAX - CSectionRef.Address &&
          "Symbol address overflows.");
   W.write<uint32_t>(CSectionRef.Address + SymbolOffset);
@@ -557,7 +602,7 @@ void XCOFFObjectWriter::writeSymbolTableEntryForControlSection(
     const ControlSection &CSectionRef, int16_t SectionIndex,
     XCOFF::StorageClass StorageClass) {
   // n_name, n_zeros, n_offset
-  writeSymbolName(CSectionRef.getName());
+  writeSymbolName(CSectionRef.getSymbolTableName());
   // n_value
   W.write<uint32_t>(CSectionRef.Address);
   // n_scnum
@@ -705,8 +750,16 @@ void XCOFFObjectWriter::finalizeSectionInfo() {
       if (Group->empty())
         continue;
 
-      for (auto &Csect : *Group)
-        Section->RelocationCount += Csect.Relocations.size();
+      for (auto &Csect : *Group) {
+        const size_t CsectRelocCount = Csect.Relocations.size();
+        if (CsectRelocCount >= XCOFF::RelocOverflow ||
+            Section->RelocationCount >= XCOFF::RelocOverflow - CsectRelocCount)
+          report_fatal_error(
+              "relocation entries overflowed; overflow section is "
+              "not implemented yet");
+
+        Section->RelocationCount += CsectRelocCount;
+      }
     }
   }
 

@@ -8,9 +8,9 @@
 
 #include "HeaderSourceSwitch.h"
 #include "AST.h"
-#include "Logger.h"
 #include "SourceCode.h"
 #include "index/SymbolCollector.h"
+#include "support/Logger.h"
 #include "clang/AST/Decl.h"
 
 namespace clang {
@@ -80,7 +80,7 @@ llvm::Optional<Path> getCorrespondingHeaderOrSource(const Path &OriginalFile,
   // Find all symbols present in the original file.
   for (const auto *D : getIndexableLocalDecls(AST)) {
     if (auto ID = getSymbolID(D))
-      Request.IDs.insert(*ID);
+      Request.IDs.insert(ID);
   }
   llvm::StringMap<int> Candidates; // Target path => score.
   auto AwardTarget = [&](const char *TargetURI) {

@@ -15,14 +15,16 @@
 #ifndef LLVM_CLANG_BASIC_MODULE_H
 #define LLVM_CLANG_BASIC_MODULE_H
 
+#include "clang/Basic/DirectoryEntry.h"
+#include "clang/Basic/FileEntry.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerIntPair.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
@@ -30,6 +32,7 @@
 #include <cassert>
 #include <cstdint>
 #include <ctime>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,8 +45,6 @@ class raw_ostream;
 
 namespace clang {
 
-class DirectoryEntry;
-class FileEntry;
 class FileManager;
 class LangOptions;
 class TargetInfo;
@@ -52,12 +53,42 @@ class TargetInfo;
 using ModuleId = SmallVector<std::pair<std::string, SourceLocation>, 2>;
 
 /// The signature of a module, which is a hash of the AST content.
-struct ASTFileSignature : std::array<uint32_t, 5> {
-  ASTFileSignature(std::array<uint32_t, 5> S = {{0}})
-      : std::array<uint32_t, 5>(std::move(S)) {}
+struct ASTFileSignature : std::array<uint8_t, 20> {
+  using BaseT = std::array<uint8_t, 20>;
 
-  explicit operator bool() const {
-    return *this != std::array<uint32_t, 5>({{0}});
+  static constexpr size_t size = std::tuple_size<BaseT>::value;
+
+  ASTFileSignature(BaseT S = {{0}}) : BaseT(std::move(S)) {}
+
+  explicit operator bool() const { return *this != BaseT({{0}}); }
+
+  /// Returns the value truncated to the size of an uint64_t.
+  uint64_t truncatedValue() const {
+    uint64_t Value = 0;
+    static_assert(sizeof(*this) >= sizeof(uint64_t), "No need to truncate.");
+    for (unsigned I = 0; I < sizeof(uint64_t); ++I)
+      Value |= static_cast<uint64_t>((*this)[I]) << (I * 8);
+    return Value;
+  }
+
+  static ASTFileSignature create(StringRef Bytes) {
+    return create(Bytes.bytes_begin(), Bytes.bytes_end());
+  }
+
+  static ASTFileSignature createDISentinel() {
+    ASTFileSignature Sentinel;
+    Sentinel.fill(0xFF);
+    return Sentinel;
+  }
+
+  template <typename InputIt>
+  static ASTFileSignature create(InputIt First, InputIt Last) {
+    assert(std::distance(First, Last) == size &&
+           "Wrong amount of bytes to create an ASTFileSignature");
+
+    ASTFileSignature Signature;
+    std::copy(First, Last, Signature.begin());
+    return Signature;
   }
 };
 
@@ -102,7 +133,9 @@ public:
   std::string PresumedModuleMapFile;
 
   /// The umbrella header or directory.
-  const void *Umbrella = nullptr;
+  llvm::PointerUnion<const FileEntryRef::MapEntry *,
+                     const DirectoryEntryRef::MapEntry *>
+      Umbrella;
 
   /// The module signature.
   ASTFileSignature Signature;
@@ -129,7 +162,7 @@ private:
 
   /// The AST file if this is a top-level module which has a
   /// corresponding serialized AST file, or null otherwise.
-  const FileEntry *ASTFile = nullptr;
+  Optional<FileEntryRef> ASTFile;
 
   /// The top-level headers associated with this module.
   llvm::SmallSetVector<const FileEntry *, 2> TopHeaders;
@@ -157,18 +190,18 @@ public:
   /// file.
   struct Header {
     std::string NameAsWritten;
-    const FileEntry *Entry;
+    OptionalFileEntryRefDegradesToFileEntryPtr Entry;
 
-    explicit operator bool() { return Entry; }
+    explicit operator bool() { return Entry != None; }
   };
 
   /// Information about a directory name as found in the module map
   /// file.
   struct DirectoryName {
     std::string NameAsWritten;
-    const DirectoryEntry *Entry;
+    OptionalDirectoryEntryRefDegradesToDirectoryEntryPtr Entry;
 
-    explicit operator bool() { return Entry; }
+    explicit operator bool() { return Entry != None; }
   };
 
   /// The headers that are part of this module.
@@ -207,8 +240,10 @@ public:
   /// A module with the same name that shadows this module.
   Module *ShadowingModule = nullptr;
 
-  /// Whether this module is missing a feature from \c Requirements.
-  unsigned IsMissingRequirement : 1;
+  /// Whether this module has declared itself unimportable, either because
+  /// it's missing a requirement from \p Requirements or because it's been
+  /// shadowed by another module.
+  unsigned IsUnimportable : 1;
 
   /// Whether we tried and failed to load a module file for this module.
   unsigned HasIncompatibleModuleFile : 1;
@@ -268,9 +303,6 @@ public:
   /// Whether this module came from a "private" module map, found next
   /// to a regular (public) module map.
   unsigned ModuleMapIsPrivate : 1;
-
-  /// Whether Umbrella is a directory or header.
-  unsigned HasUmbrellaDir : 1;
 
   /// Describes the visibility of the various names within a
   /// particular module.
@@ -384,6 +416,25 @@ public:
 
   ~Module();
 
+  /// Determine whether this module has been declared unimportable.
+  bool isUnimportable() const { return IsUnimportable; }
+
+  /// Determine whether this module has been declared unimportable.
+  ///
+  /// \param LangOpts The language options used for the current
+  /// translation unit.
+  ///
+  /// \param Target The target options used for the current translation unit.
+  ///
+  /// \param Req If this module is unimportable because of a missing
+  /// requirement, this parameter will be set to one of the requirements that
+  /// is not met for use of this module.
+  ///
+  /// \param ShadowingModule If this module is unimportable because it is
+  /// shadowed, this parameter will be set to the shadowing module.
+  bool isUnimportable(const LangOptions &LangOpts, const TargetInfo &Target,
+                      Requirement &Req, Module *&ShadowingModule) const;
+
   /// Determine whether this module is available for use within the
   /// current translation unit.
   bool isAvailable() const { return IsAvailable; }
@@ -414,8 +465,12 @@ public:
   /// Determine whether this module is a submodule.
   bool isSubModule() const { return Parent != nullptr; }
 
-  /// Determine whether this module is a submodule of the given other
-  /// module.
+  /// Check if this module is a (possibly transitive) submodule of \p Other.
+  ///
+  /// The 'A is a submodule of B' relation is a partial order based on the
+  /// the parent-child relationship between individual modules.
+  ///
+  /// Returns \c false if \p Other is \c nullptr.
   bool isSubModuleOf(const Module *Other) const;
 
   /// Determine whether this module is a part of a framework,
@@ -473,14 +528,14 @@ public:
   }
 
   /// The serialized AST file for this module, if one was created.
-  const FileEntry *getASTFile() const {
+  OptionalFileEntryRefDegradesToFileEntryPtr getASTFile() const {
     return getTopLevelModule()->ASTFile;
   }
 
   /// Set the serialized AST file for the top-level module of this module.
-  void setASTFile(const FileEntry *File) {
-    assert((File == nullptr || getASTFile() == nullptr ||
-            getASTFile() == File) && "file path changed");
+  void setASTFile(Optional<FileEntryRef> File) {
+    assert((!File || !getASTFile() || getASTFile() == File) &&
+           "file path changed");
     getTopLevelModule()->ASTFile = File;
   }
 
@@ -491,15 +546,16 @@ public:
   /// Retrieve the header that serves as the umbrella header for this
   /// module.
   Header getUmbrellaHeader() const {
-    if (!HasUmbrellaDir)
-      return Header{UmbrellaAsWritten,
-                    static_cast<const FileEntry *>(Umbrella)};
+    if (auto *ME = Umbrella.dyn_cast<const FileEntryRef::MapEntry *>())
+      return Header{UmbrellaAsWritten, FileEntryRef(*ME)};
     return Header{};
   }
 
   /// Determine whether this module has an umbrella directory that is
   /// not based on an umbrella header.
-  bool hasUmbrellaDir() const { return Umbrella && HasUmbrellaDir; }
+  bool hasUmbrellaDir() const {
+    return Umbrella && Umbrella.is<const DirectoryEntryRef::MapEntry *>();
+  }
 
   /// Add a top-level header associated with this module.
   void addTopHeader(const FileEntry *File);
@@ -535,7 +591,7 @@ public:
                       const TargetInfo &Target);
 
   /// Mark this module and all of its submodules as unavailable.
-  void markUnavailable(bool MissingRequirement = false);
+  void markUnavailable(bool Unimportable);
 
   /// Find the submodule with the given name.
   ///

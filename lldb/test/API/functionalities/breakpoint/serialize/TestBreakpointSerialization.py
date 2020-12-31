@@ -3,6 +3,7 @@ Test breakpoint serialization.
 """
 
 import os
+import json
 import lldb
 from lldbsuite.test.decorators import *
 from lldbsuite.test.lldbtest import *
@@ -15,41 +16,82 @@ class BreakpointSerialization(TestBase):
     NO_DEBUG_INFO_TESTCASE = True
 
     @add_test_categories(['pyapi'])
+    @skipIfReproducer # side_effect bypasses reproducer
     def test_resolvers(self):
         """Use Python APIs to test that we serialize resolvers."""
         self.build()
         self.setup_targets_and_cleanup()
         self.do_check_resolvers()
 
+    @skipIfReproducer # side_effect bypasses reproducer
     def test_filters(self):
         """Use Python APIs to test that we serialize search filters correctly."""
         self.build()
         self.setup_targets_and_cleanup()
         self.do_check_filters()
 
+    @skipIfReproducer # side_effect bypasses reproducer
     def test_options(self):
         """Use Python APIs to test that we serialize breakpoint options correctly."""
         self.build()
         self.setup_targets_and_cleanup()
         self.do_check_options()
 
+    @skipIfReproducer # side_effect bypasses reproducer
     def test_appending(self):
         """Use Python APIs to test that we serialize breakpoint options correctly."""
         self.build()
         self.setup_targets_and_cleanup()
         self.do_check_appending()
 
+    @skipIfReproducer # side_effect bypasses reproducer
     def test_name_filters(self):
         """Use python APIs to test that reading in by name works correctly."""
         self.build()
         self.setup_targets_and_cleanup()
         self.do_check_names()
-        
+
+    @skipIfReproducer # side_effect bypasses reproducer
     def test_scripted_extra_args(self):
         self.build()
         self.setup_targets_and_cleanup()
         self.do_check_extra_args()
-        
+
+    def test_structured_data_serialization(self):
+        target = self.dbg.GetDummyTarget()
+        self.assertTrue(target.IsValid(), VALID_TARGET)
+
+        interpreter = self.dbg.GetCommandInterpreter()
+        result = lldb.SBCommandReturnObject()
+        interpreter.HandleCommand("br set -f foo -l 42", result)
+        result = lldb.SBCommandReturnObject()
+        interpreter.HandleCommand("br set -c 'argc == 1' -n main", result)
+
+        bkp1 =  target.GetBreakpointAtIndex(0)
+        self.assertTrue(bkp1.IsValid(), VALID_BREAKPOINT)
+        stream = lldb.SBStream()
+        sd = bkp1.SerializeToStructuredData()
+        sd.GetAsJSON(stream)
+        serialized_data = json.loads(stream.GetData())
+        self.assertEqual(serialized_data["Breakpoint"]["BKPTResolver"]["Options"]["FileName"], "foo")
+        self.assertEqual(serialized_data["Breakpoint"]["BKPTResolver"]["Options"]["LineNumber"], 42)
+
+        bkp2 =  target.GetBreakpointAtIndex(1)
+        self.assertTrue(bkp2.IsValid(), VALID_BREAKPOINT)
+        stream = lldb.SBStream()
+        sd = bkp2.SerializeToStructuredData()
+        sd.GetAsJSON(stream)
+        serialized_data = json.loads(stream.GetData())
+        self.assertIn("main", serialized_data["Breakpoint"]["BKPTResolver"]["Options"]["SymbolNames"])
+        self.assertEqual(serialized_data["Breakpoint"]["BKPTOptions"]["ConditionText"],"argc == 1")
+
+        invalid_bkp = lldb.SBBreakpoint()
+        self.assertFalse(invalid_bkp.IsValid(), "Breakpoint should not be valid.")
+        stream = lldb.SBStream()
+        sd = invalid_bkp.SerializeToStructuredData()
+        sd.GetAsJSON(stream)
+        self.assertFalse(stream.GetData(), "Invalid breakpoint should have an empty structured data")
+
     def setup_targets_and_cleanup(self):
         def cleanup ():
             self.RemoveTempFile(self.bkpts_file_path)
@@ -112,7 +154,7 @@ class BreakpointSerialization(TestBase):
             copy_text = copy_desc.GetData()
 
             # These two should be identical.
-            # print ("Source text for %d is %s."%(i, source_text))
+            self.trace("Source text for %d is %s."%(i, source_text))
             self.assertTrue (source_text == copy_text, "Source and dest breakpoints are not identical: \nsource: %s\ndest: %s"%(source_text, copy_text))
 
     def do_check_resolvers(self):
@@ -328,13 +370,13 @@ class BreakpointSerialization(TestBase):
         self.copy_target.DeleteAllBreakpoints()
 
         # Now try one with extra args:
-        
+
         extra_args = lldb.SBStructuredData()
         stream = lldb.SBStream()
         stream.Print('{"first_arg" : "first_value", "second_arg" : "second_value"}')
         extra_args.SetFromJSON(stream)
         self.assertTrue(extra_args.IsValid(), "SBStructuredData is valid.")
-        
+
         bkpt = self.orig_target.BreakpointCreateFromScript("resolver.Resolver",
                                                            extra_args, lldb.SBFileSpecList(), lldb.SBFileSpecList())
         self.assertTrue(bkpt.IsValid(), "Bkpt is valid")

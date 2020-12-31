@@ -1,5 +1,5 @@
 
-add_library(FortranParser
+add_flang_library(FortranParser
   Fortran-parsers.cpp
   char-buffer.cpp
   char-block.cpp
@@ -11,6 +11,7 @@ add_library(FortranParser
   instrumented-parser.cpp
   io-parsers.cpp
   message.cpp
+  openacc-parsers.cpp
   openmp-parsers.cpp
   parse-tree.cpp
   parsing.cpp
@@ -23,17 +24,15 @@ add_library(FortranParser
   tools.cpp
   unparse.cpp
   user-state.cpp
-)
 
-target_compile_features(FortranParser PRIVATE cxx_std_17)
-
-target_link_libraries(FortranParser
+  LINK_LIBS
   FortranCommon
-  LLVMSupport
-)
 
-install (TARGETS FortranParser
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
+  LINK_COMPONENTS
+  Support
+  FrontendOpenACC
+
+  DEPENDS
+  omp_gen
+  acc_gen
 )

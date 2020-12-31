@@ -19,15 +19,18 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/PseudoProbe.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "instr-emitter"
@@ -198,6 +201,8 @@ void InstrEmitter::CreateVirtualRegisters(SDNode *Node,
   bool HasVRegVariadicDefs = !MF->getTarget().usesPhysRegsForValues() &&
                              II.isVariadic() && II.variadicOpsAreDefs();
   unsigned NumVRegs = HasVRegVariadicDefs ? NumResults : II.getNumDefs();
+  if (Node->getMachineOpcode() == TargetOpcode::STATEPOINT)
+    NumVRegs = NumResults;
   for (unsigned i = 0; i < NumVRegs; ++i) {
     // If the specific node value is only used by a CopyToReg and the dest reg
     // is a vreg in the same register class, use the CopyToReg'd destination
@@ -412,23 +417,14 @@ void InstrEmitter::AddOperand(MachineInstrBuilder &MIB,
     MIB.addJumpTableIndex(JT->getIndex(), JT->getTargetFlags());
   } else if (ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(Op)) {
     int Offset = CP->getOffset();
-    unsigned Align = CP->getAlignment();
-    Type *Type = CP->getType();
-    // MachineConstantPool wants an explicit alignment.
-    if (Align == 0) {
-      Align = MF->getDataLayout().getPrefTypeAlignment(Type);
-      if (Align == 0) {
-        // Alignment of vector types.  FIXME!
-        Align = MF->getDataLayout().getTypeAllocSize(Type);
-      }
-    }
+    Align Alignment = CP->getAlign();
 
     unsigned Idx;
     MachineConstantPool *MCP = MF->getConstantPool();
     if (CP->isMachineConstantPoolEntry())
-      Idx = MCP->getConstantPoolIndex(CP->getMachineCPVal(), Align);
+      Idx = MCP->getConstantPoolIndex(CP->getMachineCPVal(), Alignment);
     else
-      Idx = MCP->getConstantPoolIndex(CP->getConstVal(), Align);
+      Idx = MCP->getConstantPoolIndex(CP->getConstVal(), Alignment);
     MIB.addConstantPoolIndex(Idx, Offset, CP->getTargetFlags());
   } else if (ExternalSymbolSDNode *ES = dyn_cast<ExternalSymbolSDNode>(Op)) {
     MIB.addExternalSymbol(ES->getSymbol(), ES->getTargetFlags());
@@ -700,6 +696,11 @@ InstrEmitter::EmitDbgValue(SDDbgValue *SD,
     return &*MIB;
   }
 
+  // Attempt to produce a DBG_INSTR_REF if we've been asked to.
+  if (EmitDebugInstrRefs)
+    if (auto *InstrRef = EmitDbgInstrRef(SD, VRBaseMap))
+      return InstrRef;
+
   if (SD->getKind() == SDDbgValue::FRAMEIX) {
     // Stack address; this needs to be lowered in target-dependent fashion.
     // EmitTargetCodeForFrameDebugValue is responsible for allocation.
@@ -767,6 +768,63 @@ InstrEmitter::EmitDbgValue(SDDbgValue *SD,
 }
 
 MachineInstr *
+InstrEmitter::EmitDbgInstrRef(SDDbgValue *SD,
+                              DenseMap<SDValue, Register> &VRBaseMap) {
+  // Instruction referencing is still in a prototype state: for now we're only
+  // going to support SDNodes within a block. Copies are not supported, they
+  // don't actually define a value.
+  if (SD->getKind() != SDDbgValue::SDNODE)
+    return nullptr;
+
+  SDNode *Node = SD->getSDNode();
+  SDValue Op = SDValue(Node, SD->getResNo());
+  DenseMap<SDValue, Register>::iterator I = VRBaseMap.find(Op);
+  if (I==VRBaseMap.end())
+    return nullptr; // undef value: let EmitDbgValue produce a DBG_VALUE $noreg.
+
+  MDNode *Var = SD->getVariable();
+  MDNode *Expr = SD->getExpression();
+  DebugLoc DL = SD->getDebugLoc();
+
+  // Try to pick out a defining instruction at this point.
+  unsigned VReg = getVR(Op, VRBaseMap);
+  MachineInstr *ResultInstr = nullptr;
+
+  // No definition corresponds to scenarios where a vreg is live-in to a block,
+  // and doesn't have a defining instruction (yet). This can be patched up
+  // later; at this early stage of implementation, fall back to using DBG_VALUE.
+  if (!MRI->hasOneDef(VReg))
+    return nullptr;
+
+  MachineInstr &DefMI = *MRI->def_instr_begin(VReg);
+  // Some target specific opcodes can become copies. As stated above, we're
+  // ignoring those for now.
+  if (DefMI.isCopy() || DefMI.getOpcode() == TargetOpcode::SUBREG_TO_REG)
+    return nullptr;
+
+  const MCInstrDesc &RefII = TII->get(TargetOpcode::DBG_INSTR_REF);
+  auto MIB = BuildMI(*MF, DL, RefII);
+
+  // Find the operand which defines the specified VReg.
+  unsigned OperandIdx = 0;
+  for (const auto &MO : DefMI.operands()) {
+    if (MO.isReg() && MO.isDef() && MO.getReg() == VReg)
+      break;
+    ++OperandIdx;
+  }
+  assert(OperandIdx < DefMI.getNumOperands());
+
+  // Make the DBG_INSTR_REF refer to that instruction, and that operand.
+  unsigned InstrNum = DefMI.getDebugInstrNum();
+  MIB.addImm(InstrNum);
+  MIB.addImm(OperandIdx);
+  MIB.addMetadata(Var);
+  MIB.addMetadata(Expr);
+  ResultInstr = &*MIB;
+  return ResultInstr;
+}
+
+MachineInstr *
 InstrEmitter::EmitDbgLabel(SDDbgLabel *SD) {
   MDNode *Label = SD->getLabel();
   DebugLoc DL = SD->getDebugLoc();
@@ -828,6 +886,8 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
       NumDefs = NumResults;
     }
     ScratchRegs = TLI->getScratchRegisters((CallingConv::ID) CC);
+  } else if (Opc == TargetOpcode::STATEPOINT) {
+    NumDefs = NumResults;
   }
 
   unsigned NumImpUses = 0;
@@ -977,6 +1037,22 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
   if (!UsedRegs.empty() || II.getImplicitDefs() || II.hasOptionalDef())
     MIB->setPhysRegsDeadExcept(UsedRegs, *TRI);
 
+  // STATEPOINT is too 'dynamic' to have meaningful machine description.
+  // We have to manually tie operands.
+  if (Opc == TargetOpcode::STATEPOINT && NumDefs > 0) {
+    assert(!HasPhysRegOuts && "STATEPOINT mishandled");
+    MachineInstr *MI = MIB;
+    unsigned Def = 0;
+    int First = StatepointOpers(MI).getFirstGCPtrIdx();
+    assert(First > 0 && "Statepoint has Defs but no GC ptr list");
+    unsigned Use = (unsigned)First;
+    while (Def < NumDefs) {
+      if (MI->getOperand(Use).isReg())
+        MI->tieOperands(Def++, Use);
+      Use = StackMaps::getNextMetaArgIdx(MI, Use);
+    }
+  }
+
   // Run post-isel target hook to adjust this instruction if needed.
   if (II.hasPostISelHook())
     TLI->AdjustInstrPostInstrSelection(*MIB, Node);
@@ -1046,6 +1122,20 @@ EmitSpecialNode(SDNode *Node, bool IsClone, bool IsCloned,
     FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Node->getOperand(1));
     BuildMI(*MBB, InsertPos, Node->getDebugLoc(), TII->get(TarOp))
     .addFrameIndex(FI->getIndex());
+    break;
+  }
+
+  case ISD::PSEUDO_PROBE: {
+    unsigned TarOp = TargetOpcode::PSEUDO_PROBE;
+    auto Guid = cast<PseudoProbeSDNode>(Node)->getGuid();
+    auto Index = cast<PseudoProbeSDNode>(Node)->getIndex();
+    auto Attr = cast<PseudoProbeSDNode>(Node)->getAttributes();
+
+    BuildMI(*MBB, InsertPos, Node->getDebugLoc(), TII->get(TarOp))
+        .addImm(Guid)
+        .addImm(Index)
+        .addImm((uint8_t)PseudoProbeType::Block)
+        .addImm(Attr);
     break;
   }
 
@@ -1164,10 +1254,12 @@ EmitSpecialNode(SDNode *Node, bool IsClone, bool IsCloned,
 
 /// InstrEmitter - Construct an InstrEmitter and set it to start inserting
 /// at the given position in the given block.
-InstrEmitter::InstrEmitter(MachineBasicBlock *mbb,
+InstrEmitter::InstrEmitter(const TargetMachine &TM, MachineBasicBlock *mbb,
                            MachineBasicBlock::iterator insertpos)
     : MF(mbb->getParent()), MRI(&MF->getRegInfo()),
       TII(MF->getSubtarget().getInstrInfo()),
       TRI(MF->getSubtarget().getRegisterInfo()),
       TLI(MF->getSubtarget().getTargetLowering()), MBB(mbb),
-      InsertPos(insertpos) {}
+      InsertPos(insertpos) {
+  EmitDebugInstrRefs = TM.Options.ValueTrackingVariableLocations;
+}

@@ -157,6 +157,10 @@ void llvm_execute_on_thread_async(
     // std::thread per core.
     bool UseHyperThreads = true;
 
+    // If set, will constrain 'ThreadsRequested' to the number of hardware
+    // threads, or hardware cores.
+    bool Limit = false;
+
     /// Retrieves the max available threads for the current strategy. This
     /// accounts for affinity masks and takes advantage of all CPU sockets.
     unsigned compute_thread_count() const;
@@ -206,13 +210,23 @@ void llvm_execute_on_thread_async(
     return heavyweight_hardware_concurrency();
   }
 
-  /// Returns a default thread strategy where all available hardware ressources
+  /// Returns a default thread strategy where all available hardware resources
   /// are to be used, except for those initially excluded by an affinity mask.
   /// This function takes affinity into consideration. Returns 1 when LLVM is
   /// configured with LLVM_ENABLE_THREADS=OFF.
   inline ThreadPoolStrategy hardware_concurrency(unsigned ThreadCount = 0) {
     ThreadPoolStrategy S;
     S.ThreadsRequested = ThreadCount;
+    return S;
+  }
+
+  /// Returns an optimal thread strategy to execute specified amount of tasks.
+  /// This strategy should prevent us from creating too many threads if we
+  /// occasionaly have an unexpectedly small amount of tasks.
+  inline ThreadPoolStrategy optimal_concurrency(unsigned TaskCount = 0) {
+    ThreadPoolStrategy S;
+    S.Limit = true;
+    S.ThreadsRequested = TaskCount;
     return S;
   }
 

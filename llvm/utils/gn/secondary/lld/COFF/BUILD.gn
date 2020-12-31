@@ -28,6 +28,7 @@ static_library("COFF") {
   ]
   include_dirs = [ "cereal" ]
   sources = [
+    "CallGraphSort.cpp",
     "Chunks.cpp",
     "DLL.cpp",
     "DebugTypes.cpp",

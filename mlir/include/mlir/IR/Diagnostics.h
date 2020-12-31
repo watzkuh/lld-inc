@@ -14,7 +14,6 @@
 #define MLIR_IR_DIAGNOSTICS_H
 
 #include "mlir/IR/Location.h"
-#include "mlir/Support/STLExtras.h"
 #include <functional>
 
 namespace llvm {
@@ -232,9 +231,8 @@ public:
   /// is ','.
   template <typename T, template <typename> class Container>
   Diagnostic &appendRange(const Container<T> &c, const char *delim = ", ") {
-    interleave(
-        c, [&](const detail::ValueOfRange<Container<T>> &a) { *this << a; },
-        [&]() { *this << delim; });
+    llvm::interleave(
+        c, [this](const auto &a) { *this << a; }, [&]() { *this << delim; });
     return *this;
   }
 
@@ -363,10 +361,11 @@ private:
   InFlightDiagnostic(DiagnosticEngine *owner, Diagnostic &&rhs)
       : owner(owner), impl(std::move(rhs)) {}
 
-  /// Returns if the diagnostic is still active, i.e. it has a live diagnostic.
+  /// Returns true if the diagnostic is still active, i.e. it has a live
+  /// diagnostic.
   bool isActive() const { return impl.hasValue(); }
 
-  /// Returns if the diagnostic is still in flight to be reported.
+  /// Returns true if the diagnostic is still in flight to be reported.
   bool isInFlight() const { return owner; }
 
   // Allow access to the constructor.
@@ -560,7 +559,7 @@ private:
   llvm::SMLoc convertLocToSMLoc(FileLineColLoc loc);
 
   /// The maximum depth that a call stack will be printed.
-  /// TODO(riverriddle) This should be a tunable flag.
+  /// TODO: This should be a tunable flag.
   unsigned callStackLimit = 10;
 
   std::unique_ptr<detail::SourceMgrDiagnosticHandlerImpl> impl;

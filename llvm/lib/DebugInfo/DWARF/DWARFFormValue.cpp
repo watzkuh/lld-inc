@@ -241,6 +241,7 @@ bool DWARFFormValue::extractValue(const DWARFDataExtractor &Data,
     Ctx = &CU->getContext();
   C = Ctx;
   U = CU;
+  Format = FP.Format;
   bool Indirect = false;
   bool IsBlock = false;
   Value.data = nullptr;
@@ -357,10 +358,16 @@ bool DWARFFormValue::extractValue(const DWARFDataExtractor &Data,
   return !errorToBool(std::move(Err));
 }
 
+void DWARFFormValue::dumpAddress(raw_ostream &OS, uint8_t AddressSize,
+                                 uint64_t Address) {
+  uint8_t HexDigits = AddressSize * 2;
+  OS << format("0x%*.*" PRIx64, HexDigits, HexDigits, Address);
+}
+
 void DWARFFormValue::dumpSectionedAddress(raw_ostream &OS,
                                           DIDumpOptions DumpOpts,
                                           object::SectionedAddress SA) const {
-  OS << format("0x%016" PRIx64, SA.Address);
+  dumpAddress(OS, U->getAddressByteSize(), SA.Address);
   dumpAddressSection(U->getContext().getDWARFObj(), OS, DumpOpts,
                      SA.SectionIndex);
 }
@@ -386,6 +393,7 @@ void DWARFFormValue::dump(raw_ostream &OS, DIDumpOptions DumpOpts) const {
   raw_ostream &AddrOS = DumpOpts.ShowAddresses
                             ? WithColor(OS, HighlightColor::Address).get()
                             : nulls();
+  int OffsetDumpWidth = 2 * dwarf::getDwarfOffsetByteSize(Format);
   switch (Form) {
   case DW_FORM_addr:
     dumpSectionedAddress(AddrOS, DumpOpts, {Value.uval, Value.SectionIndex});
@@ -481,12 +489,13 @@ void DWARFFormValue::dump(raw_ostream &OS, DIDumpOptions DumpOpts) const {
     break;
   case DW_FORM_strp:
     if (DumpOpts.Verbose)
-      OS << format(" .debug_str[0x%8.8x] = ", (uint32_t)UValue);
+      OS << format(" .debug_str[0x%0*" PRIx64 "] = ", OffsetDumpWidth, UValue);
     dumpString(OS);
     break;
   case DW_FORM_line_strp:
     if (DumpOpts.Verbose)
-      OS << format(" .debug_line_str[0x%8.8x] = ", (uint32_t)UValue);
+      OS << format(" .debug_line_str[0x%0*" PRIx64 "] = ", OffsetDumpWidth,
+                   UValue);
     dumpString(OS);
     break;
   case DW_FORM_strx:
@@ -550,9 +559,8 @@ void DWARFFormValue::dump(raw_ostream &OS, DIDumpOptions DumpOpts) const {
     OS << format("indexed (0x%x) loclist = ", (uint32_t)UValue);
     break;
 
-  // Should be formatted to 64-bit for DWARF64.
   case DW_FORM_sec_offset:
-    AddrOS << format("0x%08x", (uint32_t)UValue);
+    AddrOS << format("0x%0*" PRIx64, OffsetDumpWidth, UValue);
     break;
 
   default:

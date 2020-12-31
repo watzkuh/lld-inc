@@ -26,7 +26,7 @@ typically described in TableGen file using the [DDR
 format](DeclarativeRewrites.md).
 
 Note that dialect names should not generally be suffixed with “Ops”,
-although some files pertaining to the operations of a dialect (e.g.
+although some files pertaining only to the operations of a dialect (e.g.
 FooOps.cpp) might be.
 
 ## CMake best practices
@@ -38,10 +38,8 @@ tablegen in a file FooOps.td.  This file forms the core of a dialect and
 is declared using add_mlir_dialect().
 
 ```cmake
-
 add_mlir_dialect(FooOps foo)
 add_mlir_doc(FooOps -gen-dialect-doc FooDialect Dialects/)
-
 ```
 
 This generates the correct rules to run mlir-tblgen, along with a
@@ -49,6 +47,7 @@ This generates the correct rules to run mlir-tblgen, along with a
 
 Dialect transformations are typically declared in a file FooTransforms.td.
 Targets for TableGen are described in typical llvm fashion.
+
 ```cmake
 set(LLVM_TARGET_DEFINITIONS FooTransforms.td)
 mlir_tablegen(FooTransforms.h.inc -gen-rewriters)
@@ -67,18 +66,18 @@ other dialect libraries.  Typically this dependence is declared using
 target_link_libraries() and the PUBLIC keyword.  For instance:
 
 ```cmake
+add_mlir_dialect_library(MLIRFoo
+  DEPENDS
+  MLIRFooOpsIncGen
+  MLIRFooTransformsIncGen
 
-add_mlir_dialect_library(FooOps
-	DEPENDS
-	MLIRFooOpsIncGen
-	MLIRFooTransformsIncGen
-	)
-target_link_libraries(FooOps
-	PUBLIC
-	BarOps
-	<some-other-library>
-	)
+  LINK_COMPONENTS
+  Core
 
+  LINK_LIBS PUBLIC
+  MLIRBar
+  <some-other-library>
+  )
 ```
 
 add_mlir_dialect_library() is a thin wrapper around add_llvm_library()
@@ -88,9 +87,7 @@ access to all dialects.  This list is also linked into libMLIR.so.
 The list can be retrieved from the MLIR_DIALECT_LIBS global property:
 
 ```cmake
-
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-
 ```
 
 Note that although the Bar dialect also uses TableGen to declare its
@@ -99,8 +96,15 @@ corresponding IncGen targets.  The PUBLIC link dependency is
 sufficient.  Also note that we avoid using add_dependencies
 explicitly, since the dependencies need to be available to the
 underlying add_llvm_library() call, allowing it to correctly create
-new targets with the same sources.
+new targets with the same sources.  However, dialects that depend on
+LLVM IR may need to depend on the LLVM 'intrinsics_gen' target to
+ensure that tablegen'd LLVM header files have been generated.
 
+In addition, linkage to MLIR libraries is specified using the
+LINK_LIBS descriptor and linkage to LLVM libraries is specified using
+the LINK_COMPONENTS descriptor.  This allows cmake infrastructure to
+generate new library targets with correct linkage, in particular, when
+BUILD_SHARED_LIBS=on or LLVM_LINK_LLVM_DYLIB=on are specified.
 
 
 # Dialect Conversions
@@ -130,19 +134,16 @@ dialects (e.g. MLIRStandard).  Typically this dependence is specified
 using target_link_libraries() and the PUBLIC keyword.  For instance:
 
 ```cmake
-
 add_mlir_conversion_library(MLIRBarToFoo
-	BarToFoo.cpp
+  BarToFoo.cpp
 
-   ADDITIONAL_HEADER_DIRS
-   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/BarToFoo
-	)
-target_link_libraries(MLIRBarToFoo
-	PUBLIC
-	BarOps
-	FooOps
-	)
+  ADDITIONAL_HEADER_DIRS
+  ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/BarToFoo
 
+  LINK_LIBS PUBLIC
+  MLIRBar
+  MLIRFoo
+  )
 ```
 
 add_mlir_conversion_library() is a thin wrapper around
@@ -153,7 +154,12 @@ is also linked in libMLIR.so.  The list can be retrieved from the
 MLIR_CONVERSION_LIBS global property:
 
 ```cmake
-
 get_property(dialect_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
-
 ```
+
+Note that it is only necessary to specify a PUBLIC dependence against
+dialects to generate compile-time and link-time dependencies, and it
+is not necessary to explicitly depend on the dialects' IncGen targets.
+However, conversions that directly include LLVM IR header files may
+need to depend on the LLVM 'intrinsics_gen' target to ensure that
+tablegen'd LLVM header files have been generated.

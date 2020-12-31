@@ -8,6 +8,8 @@
 
 #include "big-radix-floating-point.h"
 #include "flang/Decimal/decimal.h"
+#include <cassert>
+#include <string>
 
 namespace Fortran::decimal {
 
@@ -54,53 +56,22 @@ BigRadixFloatingPointNumber<PREC, LOG10RADIX>::BigRadixFloatingPointNumber(
     ++exponent_;
   }
 
+  int overflow{0};
   for (; twoPow >= 9; twoPow -= 9) {
     // D * 10.**E * 2.**twoPow -> (D*(2**9)) * 10.**E * 2.**(twoPow-9)
-    MultiplyByRounded<512>();
+    overflow |= MultiplyBy<512>();
   }
   for (; twoPow >= 3; twoPow -= 3) {
     // D * 10.**E * 2.**twoPow -> (D*(2**3)) * 10.**E * 2.**(twoPow-3)
-    MultiplyByRounded<8>();
+    overflow |= MultiplyBy<8>();
   }
   for (; twoPow > 0; --twoPow) {
     // D * 10.**E * 2.**twoPow -> (2*D) * 10.**E * 2.**(twoPow-1)
-    MultiplyByRounded<2>();
+    overflow |= MultiplyBy<2>();
   }
 
-  while (twoPow < 0) {
-    int shift{common::TrailingZeroBitCount(digit_[0])};
-    if (shift == 0) {
-      break;
-    }
-    if (shift > log10Radix) {
-      shift = log10Radix;
-    }
-    if (shift > -twoPow) {
-      shift = -twoPow;
-    }
-    // (D*(2**S)) * 10.**E * 2.**twoPow -> D * 10.**E * 2.**(twoPow+S)
-    DivideByPowerOfTwo(shift);
-    twoPow += shift;
-  }
-
-  for (; twoPow <= -4; twoPow += 4) {
-    // D * 10.**E * 2.**twoPow -> 625D * 10.**(E-4) * 2.**(twoPow+4)
-    MultiplyByRounded<(5 * 5 * 5 * 5)>();
-    exponent_ -= 4;
-  }
-  if (twoPow <= -2) {
-    // D * 10.**E * 2.**twoPow -> 25D * 10.**(E-2) * 2.**(twoPow+2)
-    MultiplyByRounded<25>();
-    twoPow += 2;
-    exponent_ -= 2;
-  }
-  for (; twoPow < 0; ++twoPow) {
-    // D * 10.**E * 2.**twoPow -> 5D * 10.**(E-1) * 2.**(twoPow+1)
-    MultiplyByRounded<5>();
-    --exponent_;
-  }
-
-  // twoPow == 0, the decimal encoding is complete.
+  overflow |= DivideByPowerOfTwoInPlace(-twoPow);
+  assert(overflow == 0);
   Normalize();
 }
 
@@ -129,28 +100,35 @@ BigRadixFloatingPointNumber<PREC, LOG10RADIX>::ConvertToDecimal(char *buffer,
                             "4041424344454647484950515253545556575859"
                             "6061626364656667686970717273747576777879"
                             "8081828384858687888990919293949596979899";
-  static constexpr Digit hundredth{radix / 100};
   // Treat the MSD specially: don't emit leading zeroes.
   Digit dig{digit_[digits_ - 1]};
-  for (int k{0}; k < LOG10RADIX; k += 2) {
-    Digit d{common::DivideUnsignedBy<Digit, hundredth>(dig)};
-    dig = 100 * (dig - d * hundredth);
-    const char *q{lut + 2 * d};
-    if (q[0] != '0' || p > start) {
-      *p++ = q[0];
-      *p++ = q[1];
-    } else if (q[1] != '0') {
-      *p++ = q[1];
-    }
+  char stack[LOG10RADIX], *sp{stack};
+  for (int k{0}; k < log10Radix; k += 2) {
+    Digit newDig{dig / 100};
+    auto d{static_cast<std::uint32_t>(dig) -
+        std::uint32_t{100} * static_cast<std::uint32_t>(newDig)};
+    dig = newDig;
+    const char *q{lut + d + d};
+    *sp++ = q[1];
+    *sp++ = q[0];
+  }
+  while (sp > stack && sp[-1] == '0') {
+    --sp;
+  }
+  while (sp > stack) {
+    *p++ = *--sp;
   }
   for (int j{digits_ - 1}; j-- > 0;) {
     Digit dig{digit_[j]};
+    char *reverse{p += log10Radix};
     for (int k{0}; k < log10Radix; k += 2) {
-      Digit d{common::DivideUnsignedBy<Digit, hundredth>(dig)};
-      dig = 100 * (dig - d * hundredth);
-      const char *q = lut + 2 * d;
-      *p++ = q[0];
-      *p++ = q[1];
+      Digit newDig{dig / 100};
+      auto d{static_cast<std::uint32_t>(dig) -
+          std::uint32_t{100} * static_cast<std::uint32_t>(newDig)};
+      dig = newDig;
+      const char *q{lut + d + d};
+      *--reverse = q[1];
+      *--reverse = q[0];
     }
   }
   // Adjust exponent so the effective decimal point is to
@@ -172,7 +150,6 @@ BigRadixFloatingPointNumber<PREC, LOG10RADIX>::ConvertToDecimal(char *buffer,
     bool incr{false};
     switch (rounding_) {
     case RoundNearest:
-    case RoundDefault:
       incr = *end > '5' ||
           (*end == '5' && (p > end + 1 || ((end[-1] - '0') & 1) != 0));
       break;
@@ -281,9 +258,9 @@ void BigRadixFloatingPointNumber<PREC, LOG10RADIX>::Minimize(
   Digit least{less.digit_[offset]};
   Digit my{digit_[0]};
   while (true) {
-    Digit q{common::DivideUnsignedBy<Digit, 10>(my)};
+    Digit q{my / 10u};
     Digit r{my - 10 * q};
-    Digit lq{common::DivideUnsignedBy<Digit, 10>(least)};
+    Digit lq{least / 10u};
     Digit lr{least - 10 * lq};
     if (r != 0 && lq == q) {
       Digit sub{(r - lr) >> 1};
@@ -297,37 +274,6 @@ void BigRadixFloatingPointNumber<PREC, LOG10RADIX>::Minimize(
     }
   }
   Normalize();
-}
-
-template <int PREC, int LOG10RADIX>
-void BigRadixFloatingPointNumber<PREC,
-    LOG10RADIX>::LoseLeastSignificantDigit() {
-  Digit LSD{digit_[0]};
-  for (int j{0}; j < digits_ - 1; ++j) {
-    digit_[j] = digit_[j + 1];
-  }
-  digit_[digits_ - 1] = 0;
-  bool incr{false};
-  switch (rounding_) {
-  case RoundNearest:
-  case RoundDefault:
-    incr = LSD > radix / 2 || (LSD == radix / 2 && digit_[0] % 2 != 0);
-    break;
-  case RoundUp:
-    incr = LSD > 0 && !isNegative_;
-    break;
-  case RoundDown:
-    incr = LSD > 0 && isNegative_;
-    break;
-  case RoundToZero:
-    break;
-  case RoundCompatible:
-    incr = LSD >= radix / 2;
-    break;
-  }
-  for (int j{0}; (digit_[j] += incr) == radix; ++j) {
-    digit_[j] = 0;
-  }
 }
 
 template <int PREC>
@@ -358,12 +304,13 @@ ConversionToDecimalResult ConvertToDecimal(char *buffer, std::size_t size,
       // decimal sequence in that range.
       using Binary = typename Big::Real;
       Binary less{x};
-      --less.raw;
+      less.Previous();
       Binary more{x};
       if (!x.IsMaximalFiniteMagnitude()) {
-        ++more.raw;
+        more.Next();
       }
       number.Minimize(Big{less, rounding}, Big{more, rounding});
+    } else {
     }
     return number.ConvertToDecimal(buffer, size, flags, digits);
   }
@@ -411,5 +358,23 @@ ConversionToDecimalResult ConvertLongDoubleToDecimal(char *buffer,
       rounding, Fortran::decimal::BinaryFloatingPointNumber<64>(x));
 }
 #endif
+}
+
+template <int PREC, int LOG10RADIX>
+template <typename STREAM>
+STREAM &BigRadixFloatingPointNumber<PREC, LOG10RADIX>::Dump(STREAM &o) const {
+  if (isNegative_) {
+    o << '-';
+  }
+  o << "10**(" << exponent_ << ") * ...\n";
+  for (int j{digits_}; --j >= 0;) {
+    std::string str{std::to_string(digit_[j])};
+    o << std::string(20 - str.size(), ' ') << str << " [" << j << ']';
+    if (j + 1 == digitLimit_) {
+      o << " (limit)";
+    }
+    o << '\n';
+  }
+  return o;
 }
 } // namespace Fortran::decimal

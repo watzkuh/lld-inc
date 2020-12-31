@@ -1,12 +1,7 @@
-; RUN: llc -filetype=obj %p/Inputs/hello.ll -o %t.hello.o
+; RUN: llvm-mc -filetype=obj -triple=wasm32-unknown-unknown %p/Inputs/hello.s -o %t.hello.o
 ; RUN: llc -filetype=obj %s -o %t.o
 ; RUN: wasm-ld -r -o %t.wasm %t.hello.o %t.o
-; RUN: obj2yaml %t.wasm | FileCheck %s --check-prefixes CHECK,NORMAL
-
-; RUN: llc -filetype=obj %p/Inputs/hello.ll -o %t.hello.bm.o -mattr=+bulk-memory,+atomics
-; RUN: llc -filetype=obj %s -o %t.bm.o -mattr=+bulk-memory
-; RUN: wasm-ld -r -o %t.mt.wasm %t.hello.bm.o %t.bm.o --shared-memory --max-memory=131072
-; RUN: obj2yaml %t.mt.wasm | FileCheck %s --check-prefixes CHECK,SHARED
+; RUN: obj2yaml %t.wasm | FileCheck %s
 
 target triple = "wasm32-unknown-unknown"
 
@@ -39,7 +34,7 @@ entry:
 
 ; CHECK:      --- !WASM
 ; CHECK-NEXT: FileHeader:
-; CHECK-NEXT:   Version:         0x00000001
+; CHECK-NEXT:   Version:         0x1
 ; CHECK-NEXT: Sections:
 ; CHECK-NEXT:   - Type:            TYPE
 ; CHECK-NEXT:     Signatures:
@@ -72,17 +67,15 @@ entry:
 ; CHECK-NEXT:     FunctionTypes:   [ 2, 1, 1 ]
 ; CHECK-NEXT:   - Type:            TABLE
 ; CHECK-NEXT:     Tables:
-; CHECK-NEXT:       - ElemType:        FUNCREF
+; CHECK-NEXT:       - Index:           0
+; CHECK-NEXT:         ElemType:        FUNCREF
 ; CHECK-NEXT:         Limits:
 ; CHECK-NEXT:           Flags:           [ HAS_MAX ]
-; CHECK-NEXT:           Initial:         0x00000004
-; CHECK-NEXT:           Maximum:         0x00000004
+; CHECK-NEXT:           Initial:         0x4
+; CHECK-NEXT:           Maximum:         0x4
 ; CHECK-NEXT:   - Type:            MEMORY
 ; CHECK-NEXT:     Memories:
-; NORMAL-NEXT:      - Initial:         0x00000001
-; SHARED-NEXT:      - Flags:           [ HAS_MAX, IS_SHARED ]
-; SHARED-NEXT:        Initial:         0x00000001
-; SHARED-NEXT:        Maximum:         0x00000002
+; CHECK-NEXT:      - Initial:         0x1
 ; CHECK-NEXT:   - Type:            ELEM
 ; CHECK-NEXT:     Segments:
 ; CHECK-NEXT:       - Offset:
@@ -95,19 +88,19 @@ entry:
 ; CHECK-NEXT:     Relocations:
 ; CHECK-NEXT:       - Type:            R_WASM_MEMORY_ADDR_SLEB
 ; CHECK-NEXT:         Index:           1
-; CHECK-NEXT:         Offset:          0x00000004
+; CHECK-NEXT:         Offset:          0x4
 ; CHECK-NEXT:       - Type:            R_WASM_FUNCTION_INDEX_LEB
 ; CHECK-NEXT:         Index:           2
-; CHECK-NEXT:         Offset:          0x0000000A
+; CHECK-NEXT:         Offset:          0xA
 ; CHECK-NEXT:       - Type:            R_WASM_FUNCTION_INDEX_LEB
 ; CHECK-NEXT:         Index:           4
-; CHECK-NEXT:         Offset:          0x00000013
+; CHECK-NEXT:         Offset:          0x13
 ; CHECK-NEXT:       - Type:            R_WASM_FUNCTION_INDEX_LEB
 ; CHECK-NEXT:         Index:           5
-; CHECK-NEXT:         Offset:          0x0000001A
+; CHECK-NEXT:         Offset:          0x1A
 ; CHECK-NEXT:       - Type:            R_WASM_MEMORY_ADDR_SLEB
 ; CHECK-NEXT:         Index:           7
-; CHECK-NEXT:         Offset:          0x00000026
+; CHECK-NEXT:         Offset:          0x26
 ; CHECK-NEXT:     Functions:
 ; CHECK-NEXT:       - Index:         3
 ; CHECK-NEXT:         Locals:
@@ -122,16 +115,16 @@ entry:
 ; NORMAL-NEXT:    Relocations:
 ; NORMAL-NEXT:      - Type:            R_WASM_TABLE_INDEX_I32
 ; NORMAL-NEXT:        Index:           3
-; NORMAL-NEXT:        Offset:          0x0000001A
+; NORMAL-NEXT:        Offset:          0x1A
 ; NORMAL-NEXT:      - Type:            R_WASM_TABLE_INDEX_I32
 ; NORMAL-NEXT:        Index:           4
-; NORMAL-NEXT:        Offset:          0x00000023
+; NORMAL-NEXT:        Offset:          0x23
 ; NORMAL-NEXT:      - Type:            R_WASM_TABLE_INDEX_I32
 ; NORMAL-NEXT:        Index:           5
-; NORMAL-NEXT:        Offset:          0x0000002C
+; NORMAL-NEXT:        Offset:          0x2C
 ; NORMAL-NEXT:      - Type:            R_WASM_MEMORY_ADDR_I32
 ; NORMAL-NEXT:        Index:           12
-; NORMAL-NEXT:        Offset:          0x00000035
+; NORMAL-NEXT:        Offset:          0x35
 ; NORMAL-NEXT:    Segments:
 ; NORMAL-NEXT:      - SectionOffset:   6
 ; NORMAL-NEXT:        InitFlags:       0

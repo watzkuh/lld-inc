@@ -1,4 +1,4 @@
-! RUN: %S/test_modfile.sh %s %f18 %t
+! RUN: %S/test_modfile.sh %s %t %f18
 module m
   logical b
   bind(C) :: /cb2/
@@ -26,10 +26,10 @@ end
 !  real(4)::v
 !  complex(4)::w
 !  real(4)::cb
-!  common/cb2/a,b,c
-!  bind(c)::/cb2/
 !  common//t,w,u,v
 !  common/cb/x,y,z
 !  bind(c, name="CB")::/cb/
+!  common/cb2/a,b,c
+!  bind(c)::/cb2/
 !  common/b/cb
 !end

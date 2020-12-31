@@ -1,5 +1,6 @@
 add_mlir_dialect_library(MLIRVector
   VectorOps.cpp
+  VectorTransferOpTransforms.cpp
   VectorTransforms.cpp
   VectorUtils.cpp
   EDSC/Builders.cpp
@@ -9,15 +10,16 @@ add_mlir_dialect_library(MLIRVector
 
   DEPENDS
   MLIRVectorOpsIncGen
-  MLIRVectorTransformPatternsIncGen
-  )
-target_link_libraries(MLIRVector
-  PUBLIC
+
+  LINK_LIBS PUBLIC
+  MLIRAffineEDSC
   MLIREDSC
   MLIRIR
-  MLIRStandardOps
+  MLIRStandard
   MLIRAffine
-  MLIRLoopOps
+  MLIRLinalg
+  MLIRSCF
   MLIRLoopAnalysis
-  MLIRSideEffects
+  MLIRSideEffectInterfaces
+  MLIRVectorInterfaces
   )

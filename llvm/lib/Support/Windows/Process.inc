@@ -43,6 +43,12 @@
 
 using namespace llvm;
 
+Process::Pid Process::getProcessId() {
+  static_assert(sizeof(Pid) >= sizeof(DWORD),
+                "Process::Pid should be big enough to store DWORD");
+  return Pid(::GetCurrentProcessId());
+}
+
 // This function retrieves the page size using GetNativeSystemInfo() and is
 // present solely so it can be called once to initialize the self_process member
 // below.
@@ -222,7 +228,8 @@ static std::error_code GetExecutableName(SmallVectorImpl<char> &Filename) {
   if (EC)
     return EC;
 
-  StringRef Base = sys::path::filename(Filename.data());
+  // Make a copy of the filename since assign makes the StringRef invalid.
+  std::string Base = sys::path::filename(Filename.data()).str();
   Filename.assign(Base.begin(), Base.end());
   return std::error_code();
 }

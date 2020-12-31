@@ -26,13 +26,13 @@
 #include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/TimeProfiler.h"
 
 using namespace llvm;
 using namespace llvm::sys;
 using namespace llvm::opt;
-
-namespace lld {
-namespace elf {
+using namespace lld;
+using namespace lld::elf;
 
 // Create OptTable
 
@@ -133,7 +133,7 @@ opt::InputArgList ELFOptTable::parse(ArrayRef<const char *> argv) {
   if (missingCount)
     error(Twine(args.getArgString(missingIndex)) + ": missing argument");
 
-  for (auto *arg : args.filtered(OPT_UNKNOWN)) {
+  for (opt::Arg *arg : args.filtered(OPT_UNKNOWN)) {
     std::string nearest;
     if (findNearest(arg->getAsString(args), nearest) > 1)
       error("unknown argument '" + arg->getAsString(args) + "'");
@@ -144,7 +144,7 @@ opt::InputArgList ELFOptTable::parse(ArrayRef<const char *> argv) {
   return args;
 }
 
-void printHelp() {
+void elf::printHelp() {
   ELFOptTable().PrintHelp(
       lld::outs(), (config->progName + " [options] file...").str().c_str(),
       "lld", false /*ShowHidden*/, true /*ShowAllAliases*/);
@@ -166,7 +166,7 @@ static std::string rewritePath(StringRef s) {
 
 // Reconstructs command line arguments so that so that you can re-run
 // the same command with the same inputs. This is for --reproduce.
-std::string createResponseFile(const opt::InputArgList &args) {
+std::string elf::createResponseFile(const opt::InputArgList &args) {
   SmallString<0> data;
   raw_svector_ostream os(data);
   os << "--chroot .\n";
@@ -184,10 +184,13 @@ std::string createResponseFile(const opt::InputArgList &args) {
       // fail because the archive we are creating doesn't contain empty
       // directories for the output path (-o doesn't create directories).
       // Strip directories to prevent the issue.
-      os << "-o " << quote(sys::path::filename(arg->getValue())) << "\n";
+      os << "-o " << quote(path::filename(arg->getValue())) << "\n";
       break;
+    case OPT_call_graph_ordering_file:
     case OPT_dynamic_list:
+    case OPT_just_symbols:
     case OPT_library_path:
+    case OPT_retain_symbols_file:
     case OPT_rpath:
     case OPT_script:
     case OPT_symbol_ordering_file:
@@ -217,7 +220,7 @@ static Optional<std::string> findFile(StringRef path1, const Twine &path2) {
   return None;
 }
 
-Optional<std::string> findFromSearchPaths(StringRef path) {
+Optional<std::string> elf::findFromSearchPaths(StringRef path) {
   for (StringRef dir : config->searchPaths)
     if (Optional<std::string> s = findFile(dir, path))
       return s;
@@ -226,7 +229,7 @@ Optional<std::string> findFromSearchPaths(StringRef path) {
 
 // This is for -l<basename>. We'll look for lib<basename>.so or lib<basename>.a from
 // search paths.
-Optional<std::string> searchLibraryBaseName(StringRef name) {
+Optional<std::string> elf::searchLibraryBaseName(StringRef name) {
   for (StringRef dir : config->searchPaths) {
     if (!config->isStatic)
       if (Optional<std::string> s = findFile(dir, "lib" + name + ".so"))
@@ -238,7 +241,8 @@ Optional<std::string> searchLibraryBaseName(StringRef name) {
 }
 
 // This is for -l<namespec>.
-Optional<std::string> searchLibrary(StringRef name) {
+Optional<std::string> elf::searchLibrary(StringRef name) {
+  llvm::TimeTraceScope timeScope("Locate library", name);
   if (name.startswith(":"))
     return findFromSearchPaths(name.substr(1));
   return searchLibraryBaseName(name);
@@ -247,11 +251,8 @@ Optional<std::string> searchLibrary(StringRef name) {
 // If a linker/version script doesn't exist in the current directory, we also
 // look for the script in the '-L' search paths. This matches the behaviour of
 // '-T', --version-script=, and linker script INPUT() command in ld.bfd.
-Optional<std::string> searchScript(StringRef name) {
+Optional<std::string> elf::searchScript(StringRef name) {
   if (fs::exists(name))
     return name.str();
   return findFromSearchPaths(name);
 }
-
-} // namespace elf
-} // namespace lld

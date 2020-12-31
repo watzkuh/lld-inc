@@ -1,32 +1,44 @@
 add_mlir_dialect_library(MLIRLinalgTransforms
+  Bufferize.cpp
+  CodegenStrategy.cpp
+  DropUnitDims.cpp
+  ElementwiseToLinalg.cpp
   Fusion.cpp
-  LinalgTransforms.cpp
-  LinalgToLoops.cpp
+  FusionOnTensors.cpp
+  Generalization.cpp
+  Hoisting.cpp
+  Interchange.cpp
+  Loops.cpp
   Promotion.cpp
+  Sparsification.cpp
   Tiling.cpp
+  Transforms.cpp
+  Vectorization.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Linalg
 
   DEPENDS
-  intrinsics_gen
   MLIRLinalgPassIncGen
-  MLIRLinalgTransformPatternsIncGen
-  )
-target_link_libraries(MLIRLinalgTransforms
-  PUBLIC
+
+  LINK_LIBS PUBLIC
   MLIRAffine
   MLIRAnalysis
   MLIREDSC
   MLIRIR
   MLIRLinalgAnalysis
   MLIRLinalgEDSC
-  MLIRLinalgOps
+  MLIRLinalg
   MLIRLinalgUtils
-  MLIRLoopOps
+  MLIRSCF
+  MLIRSCFTransforms
   MLIRPass
-  MLIRStandardOps
+  MLIRStandard
+  MLIRStandardOpsTransforms
   MLIRStandardToLLVM
+  MLIRTensor
+  MLIRTransforms
   MLIRTransformUtils
   MLIRVector
-  )
+  MLIRVectorToSCF
+)

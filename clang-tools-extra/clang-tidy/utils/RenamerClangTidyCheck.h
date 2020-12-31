@@ -12,6 +12,7 @@
 #include "../ClangTidyCheck.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/Optional.h"
 #include <string>
 #include <utility>
@@ -40,6 +41,10 @@ public:
                            Preprocessor *ModuleExpanderPP) override final;
   void onEndOfTranslationUnit() override final;
 
+  /// Derived classes that override this function should call this method from
+  /// the overridden method.
+  void storeOptions(ClangTidyOptions::OptionMap &Opts) override;
+
   /// This enum will be used in %select of the diagnostic message.
   /// Each value below IgnoreFailureThreshold should have an error message.
   enum class ShouldFixStatus {
@@ -53,6 +58,9 @@ public:
     /// definition, so we can't fix it
     /// automatically.
     ConflictsWithMacroDefinition,
+
+    /// The fixup results in an identifier that is not a valid c/c++ identifier.
+    FixInvalidIdentifier,
 
     /// Values pass this threshold will be ignored completely
     /// i.e no message, no fixup.
@@ -89,9 +97,8 @@ public:
 
     ShouldFixStatus FixStatus = ShouldFixStatus::ShouldFix;
 
-    /// A set of all the identifier usages starting SourceLocation, in
-    /// their encoded form.
-    llvm::DenseSet<unsigned> RawUsageLocs;
+    /// A set of all the identifier usages starting SourceLocation.
+    llvm::DenseSet<SourceLocation> RawUsageLocs;
 
     NamingCheckFailure() = default;
   };
@@ -107,6 +114,13 @@ public:
 
   /// Add a usage of a macro if it already has a violation.
   void expandMacro(const Token &MacroNameTok, const MacroInfo *MI);
+
+  void addUsage(const RenamerClangTidyCheck::NamingCheckId &Decl,
+                SourceRange Range, SourceManager *SourceMgr = nullptr);
+
+  /// Convenience method when the usage to be added is a NamedDecl.
+  void addUsage(const NamedDecl *Decl, SourceRange Range,
+                SourceManager *SourceMgr = nullptr);
 
 protected:
   /// Overridden by derived classes, returns information about if and how a Decl
@@ -142,6 +156,7 @@ protected:
 
 private:
   NamingCheckFailureMap NamingCheckFailures;
+  const bool AggressiveDependentMemberLookup;
 };
 
 } // namespace tidy

@@ -18,9 +18,8 @@
 using namespace llvm;
 using namespace llvm::support::endian;
 using namespace llvm::ELF;
-
-namespace lld {
-namespace elf {
+using namespace lld;
+using namespace lld::elf;
 
 namespace {
 class ARM final : public TargetInfo {
@@ -65,6 +64,7 @@ ARM::ARM() {
   ipltEntrySize = 16;
   trapInstr = {0xd4, 0xd4, 0xd4, 0xd4};
   needsThunks = true;
+  defaultMaxPageSize = 65536;
 }
 
 uint32_t ARM::calcEFlags() const {
@@ -121,6 +121,8 @@ RelExpr ARM::getRelExpr(RelType type, const Symbol &s,
     return R_TLSGD_PC;
   case R_ARM_TLS_LDM32:
     return R_TLSLD_PC;
+  case R_ARM_TLS_LDO32:
+    return R_DTPREL;
   case R_ARM_BASE_PREL:
     // B(S) + A - P
     // FIXME: currently B(S) assumed to be .got, this may not hold for all
@@ -148,7 +150,7 @@ RelExpr ARM::getRelExpr(RelType type, const Symbol &s,
   case R_ARM_NONE:
     return R_NONE;
   case R_ARM_TLS_LE32:
-    return R_TLS;
+    return R_TPREL;
   case R_ARM_V4BX:
     // V4BX is just a marker to indicate there's a "bx rN" instruction at the
     // given address. It can be used to implement a special linker mode which
@@ -844,10 +846,7 @@ int64_t ARM::getImplicitAddend(const uint8_t *buf, RelType type) const {
   }
 }
 
-TargetInfo *getARMTargetInfo() {
+TargetInfo *elf::getARMTargetInfo() {
   static ARM target;
   return &target;
 }
-
-} // namespace elf
-} // namespace lld

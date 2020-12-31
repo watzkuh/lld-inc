@@ -80,7 +80,7 @@ findAffectedValues(CallInst *CI,
 
   for (unsigned Idx = 0; Idx != CI->getNumOperandBundles(); Idx++) {
     if (CI->getOperandBundleAt(Idx).Inputs.size() > ABA_WasOn &&
-        CI->getOperandBundleAt(Idx).getTagName() != "ignore")
+        CI->getOperandBundleAt(Idx).getTagName() != IgnoreBundleTag)
       AddAffected(CI->getOperandBundleAt(Idx).Inputs[ABA_WasOn], Idx);
   }
 
@@ -102,13 +102,12 @@ findAffectedValues(CallInst *CI,
         }
 
         Value *B;
-        ConstantInt *C;
         // (A & B) or (A | B) or (A ^ B).
         if (match(V, m_BitwiseLogic(m_Value(A), m_Value(B)))) {
           AddAffected(A);
           AddAffected(B);
         // (A << C) or (A >>_s C) or (A >>_u C) where C is some constant.
-        } else if (match(V, m_Shift(m_Value(A), m_ConstantInt(C)))) {
+        } else if (match(V, m_Shift(m_Value(A), m_ConstantInt()))) {
           AddAffected(A);
         }
       };
@@ -116,6 +115,14 @@ findAffectedValues(CallInst *CI,
       AddAffectedFromEq(A);
       AddAffectedFromEq(B);
     }
+
+    Value *X;
+    // Handle (A + C1) u< C2, which is the canonical form of A > C3 && A < C4,
+    // and recognized by LVI at least.
+    if (Pred == ICmpInst::ICMP_ULT &&
+        match(A, m_Add(m_Value(X), m_ConstantInt())) &&
+        match(B, m_ConstantInt()))
+      AddAffected(X);
   }
 }
 
@@ -156,9 +163,7 @@ void AssumptionCache::unregisterAssumption(CallInst *CI) {
       AffectedValues.erase(AVI);
   }
 
-  AssumeHandles.erase(
-      remove_if(AssumeHandles, [CI](ResultElem &RE) { return CI == RE; }),
-      AssumeHandles.end());
+  erase_value(AssumeHandles, CI);
 }
 
 void AssumptionCache::AffectedValueCallbackVH::deleted() {
@@ -175,7 +180,7 @@ void AssumptionCache::transferAffectedValuesInCache(Value *OV, Value *NV) {
     return;
 
   for (auto &A : AVI->second)
-    if (std::find(NAVV.begin(), NAVV.end(), A) == NAVV.end())
+    if (!llvm::is_contained(NAVV, A))
       NAVV.push_back(A);
   AffectedValues.erase(OV);
 }

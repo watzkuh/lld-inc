@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/IR/StandardTypes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -38,7 +38,7 @@ void TestMemRefStrideCalculation::runOnFunction() {
     else
       llvm::outs() << offset;
     llvm::outs() << " strides: ";
-    interleaveComma(strides, llvm::outs(), [&](int64_t v) {
+    llvm::interleaveComma(strides, llvm::outs(), [&](int64_t v) {
       if (v == MemRefType::getDynamicStrideOrOffset())
         llvm::outs() << "?";
       else
@@ -50,8 +50,10 @@ void TestMemRefStrideCalculation::runOnFunction() {
 }
 
 namespace mlir {
+namespace test {
 void registerTestMemRefStrideCalculation() {
   PassRegistration<TestMemRefStrideCalculation> pass(
       "test-memref-stride-calculation", "Test operation constant folding");
 }
+} // namespace test
 } // namespace mlir

@@ -297,6 +297,10 @@ void ProTypeMemberInitCheck::check(const MatchFinder::MatchResult &Result) {
     // Skip declarations delayed by late template parsing without a body.
     if (!Ctor->getBody())
       return;
+    // Skip out-of-band explicitly defaulted special member functions
+    // (except the default constructor).
+    if (Ctor->isExplicitlyDefaulted() && !Ctor->isDefaultConstructor())
+      return;
     checkMissingMemberInitializer(*Result.Context, *Ctor->getParent(), Ctor);
     checkMissingBaseClassInitializer(*Result.Context, *Ctor->getParent(), Ctor);
   } else if (const auto *Record =
@@ -454,9 +458,9 @@ void ProTypeMemberInitCheck::checkMissingMemberInitializer(
       return;
     // Don't suggest fixes for enums because we don't know a good default.
     // Don't suggest fixes for bitfields because in-class initialization is not
-    // possible until C++2a.
+    // possible until C++20.
     if (F->getType()->isEnumeralType() ||
-        (!getLangOpts().CPlusPlus2a && F->isBitField()))
+        (!getLangOpts().CPlusPlus20 && F->isBitField()))
       return;
     if (!F->getParent()->isUnion() || UnionsSeen.insert(F->getParent()).second)
       FieldsToFix.insert(F);

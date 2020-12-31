@@ -1,18 +1,25 @@
 add_subdirectory(Utils)
 
 add_mlir_library(MLIRTransforms
+  BufferDeallocation.cpp
+  BufferOptimizations.cpp
+  BufferResultsToOutParams.cpp
+  BufferUtils.cpp
+  Bufferize.cpp
   Canonicalizer.cpp
+  CopyRemoval.cpp
   CSE.cpp
-  DialectConversion.cpp
   Inliner.cpp
   LocationSnapshot.cpp
   LoopCoalescing.cpp
   LoopFusion.cpp
   LoopInvariantCodeMotion.cpp
   MemRefDataFlowOpt.cpp
+  NormalizeMemRefs.cpp
   OpStats.cpp
   ParallelLoopCollapsing.cpp
   PipelineDataTransfer.cpp
+  SCCP.cpp
   StripDebugInfo.cpp
   SymbolDCE.cpp
   ViewOpGraph.cpp
@@ -24,14 +31,14 @@ add_mlir_library(MLIRTransforms
   DEPENDS
   MLIRStandardOpsIncGen
   MLIRTransformsPassIncGen
-  )
 
-target_link_libraries(MLIRTransforms
-  PUBLIC
+  LINK_LIBS PUBLIC
   MLIRAffine
   MLIRAnalysis
+  MLIRCopyOpInterface
+  MLIRLinalg
   MLIRLoopLikeInterface
-  MLIRLoopOps
+  MLIRSCF
   MLIRPass
   MLIRTransformUtils
   MLIRVector

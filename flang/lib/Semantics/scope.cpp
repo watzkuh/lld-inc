@@ -49,15 +49,27 @@ std::string EquivalenceObject::AsFortran() const {
   return ss.str();
 }
 
-bool Scope::IsModule() const {
-  return kind_ == Kind::Module && !symbol_->get<ModuleDetails>().isSubmodule();
-}
-bool Scope::IsSubmodule() const {
-  return kind_ == Kind::Module && symbol_->get<ModuleDetails>().isSubmodule();
-}
-
 Scope &Scope::MakeScope(Kind kind, Symbol *symbol) {
   return children_.emplace_back(*this, kind, symbol);
+}
+
+template <typename T>
+static std::vector<common::Reference<T>> GetSortedSymbols(
+    std::map<SourceName, MutableSymbolRef> symbols) {
+  std::vector<common::Reference<T>> result;
+  result.reserve(symbols.size());
+  for (auto &pair : symbols) {
+    result.push_back(*pair.second);
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+MutableSymbolVector Scope::GetSymbols() {
+  return GetSortedSymbols<Symbol>(symbols_);
+}
+SymbolVector Scope::GetSymbols() const {
+  return GetSortedSymbols<const Symbol>(symbols_);
 }
 
 Scope::iterator Scope::find(const SourceName &name) {
@@ -95,14 +107,6 @@ Symbol *Scope::FindComponent(SourceName name) const {
   }
 }
 
-std::optional<SourceName> Scope::GetName() const {
-  if (const auto *sym{GetSymbol()}) {
-    return sym->name();
-  } else {
-    return std::nullopt;
-  }
-}
-
 bool Scope::Contains(const Scope &that) const {
   for (const Scope *scope{&that};; scope = &scope->parent()) {
     if (*scope == *this) {
@@ -126,9 +130,6 @@ Symbol *Scope::CopySymbol(const Symbol &symbol) {
   }
 }
 
-const std::list<EquivalenceSet> &Scope::equivalenceSets() const {
-  return equivalenceSets_;
-}
 void Scope::add_equivalenceSet(EquivalenceSet &&set) {
   equivalenceSets_.emplace_back(std::move(set));
 }
@@ -199,14 +200,6 @@ const DeclTypeSpec &Scope::MakeCharacterType(
 DeclTypeSpec &Scope::MakeDerivedType(
     DeclTypeSpec::Category category, DerivedTypeSpec &&spec) {
   return declTypeSpecs_.emplace_back(category, std::move(spec));
-}
-
-void Scope::set_chars(parser::CookedSource &cooked) {
-  CHECK(kind_ == Kind::Module);
-  CHECK(parent_.IsGlobal() || parent_.IsModuleFile());
-  CHECK(DEREF(symbol_).test(Symbol::Flag::ModFile));
-  // TODO: Preserve the CookedSource rather than acquiring its string.
-  chars_ = cooked.AcquireData();
 }
 
 Scope::ImportKind Scope::GetImportKind() const {
@@ -292,6 +285,9 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const Scope &scope) {
   if (auto *symbol{scope.symbol()}) {
     os << *symbol << ' ';
   }
+  if (scope.derivedTypeSpec_) {
+    os << "instantiation of " << *scope.derivedTypeSpec_ << ' ';
+  }
   os << scope.children_.size() << " children\n";
   for (const auto &pair : scope.symbols_) {
     const Symbol &symbol{*pair.second};
@@ -312,6 +308,10 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const Scope &scope) {
     os << "  " << symbol << '\n';
   }
   return os;
+}
+
+bool Scope::IsStmtFunction() const {
+  return symbol_ && symbol_->test(Symbol::Flag::StmtFunction);
 }
 
 bool Scope::IsParameterizedDerivedType() const {
@@ -341,16 +341,6 @@ const DeclTypeSpec *Scope::FindInstantiatedDerivedType(
   } else {
     return parent().FindInstantiatedDerivedType(spec, category);
   }
-}
-
-const Symbol *Scope::GetSymbol() const {
-  if (symbol_) {
-    return symbol_;
-  }
-  if (derivedTypeSpec_) {
-    return &derivedTypeSpec_->typeSymbol();
-  }
-  return nullptr;
 }
 
 const Scope *Scope::GetDerivedTypeParent() const {

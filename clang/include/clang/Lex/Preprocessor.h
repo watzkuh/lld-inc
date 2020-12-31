@@ -67,6 +67,7 @@ class CodeCompletionHandler;
 class CommentHandler;
 class DirectoryEntry;
 class DirectoryLookup;
+class EmptylineHandler;
 class ExternalPreprocessorSource;
 class FileEntry;
 class FileManager;
@@ -256,6 +257,9 @@ class Preprocessor {
   /// with this preprocessor.
   std::vector<CommentHandler *> CommentHandlers;
 
+  /// Empty line handler.
+  EmptylineHandler *Emptyline = nullptr;
+
   /// True if we want to ignore EOF token and continue later on (thus
   /// avoid tearing the Lexer and etc. down).
   bool IncrementalProcessing = false;
@@ -418,6 +422,9 @@ class Preprocessor {
 
   /// The number of (LexLevel 0) preprocessor tokens.
   unsigned TokenCount = 0;
+
+  /// Preprocess every token regardless of LexLevel.
+  bool PreprocessToken = false;
 
   /// The maximum number of (LexLevel 0) tokens before issuing a -Wmax-tokens
   /// warning, or zero for unlimited.
@@ -1038,6 +1045,8 @@ public:
     OnToken = std::move(F);
   }
 
+  void setPreprocessToken(bool Preprocess) { PreprocessToken = Preprocess; }
+
   bool isMacroDefined(StringRef Id) {
     return isMacroDefined(&Identifiers.get(Id));
   }
@@ -1213,6 +1222,11 @@ public:
 
   /// Install empty handlers for all pragmas (making them ignored).
   void IgnorePragmas();
+
+  /// Set empty line handler.
+  void setEmptylineHandler(EmptylineHandler *Handler) { Emptyline = Handler; }
+
+  EmptylineHandler *getEmptylineHandler() const { return Emptyline; }
 
   /// Add the specified comment handler to the preprocessor.
   void addCommentHandler(CommentHandler *Handler);
@@ -2242,11 +2256,11 @@ private:
   };
 
   Optional<FileEntryRef> LookupHeaderIncludeOrImport(
-      const DirectoryLookup *&CurDir, StringRef Filename,
+      const DirectoryLookup *&CurDir, StringRef &Filename,
       SourceLocation FilenameLoc, CharSourceRange FilenameRange,
       const Token &FilenameTok, bool &IsFrameworkFound, bool IsImportDecl,
       bool &IsMapped, const DirectoryLookup *LookupFrom,
-      const FileEntry *LookupFromFile, StringRef LookupFilename,
+      const FileEntry *LookupFromFile, StringRef &LookupFilename,
       SmallVectorImpl<char> &RelativePath, SmallVectorImpl<char> &SearchPath,
       ModuleMap::KnownHeader &SuggestedModule, bool isAngled);
 
@@ -2278,20 +2292,22 @@ public:
   /// into a module, or is outside any module, returns nullptr.
   Module *getModuleForLocation(SourceLocation Loc);
 
-  /// We want to produce a diagnostic at location IncLoc concerning a
-  /// missing module import.
+  /// We want to produce a diagnostic at location IncLoc concerning an
+  /// unreachable effect at location MLoc (eg, where a desired entity was
+  /// declared or defined). Determine whether the right way to make MLoc
+  /// reachable is by #include, and if so, what header should be included.
   ///
-  /// \param IncLoc The location at which the missing import was detected.
-  /// \param M The desired module.
-  /// \param MLoc A location within the desired module at which some desired
-  ///        effect occurred (eg, where a desired entity was declared).
+  /// This is not necessarily fast, and might load unexpected module maps, so
+  /// should only be called by code that intends to produce an error.
   ///
-  /// \return A file that can be #included to import a module containing MLoc.
-  ///         Null if no such file could be determined or if a #include is not
-  ///         appropriate.
-  const FileEntry *getModuleHeaderToIncludeForDiagnostics(SourceLocation IncLoc,
-                                                          Module *M,
-                                                          SourceLocation MLoc);
+  /// \param IncLoc The location at which the missing effect was detected.
+  /// \param MLoc A location within an unimported module at which the desired
+  ///        effect occurred.
+  /// \return A file that can be #included to provide the desired effect. Null
+  ///         if no such file could be determined or if a #include is not
+  ///         appropriate (eg, if a module should be imported instead).
+  const FileEntry *getHeaderToIncludeForDiagnostics(SourceLocation IncLoc,
+                                                    SourceLocation MLoc);
 
   bool isRecordingPreamble() const {
     return PreambleConditionalStack.isRecording();
@@ -2381,6 +2397,16 @@ public:
   // The handler shall return true if it has pushed any tokens
   // to be read using e.g. EnterToken or EnterTokenStream.
   virtual bool HandleComment(Preprocessor &PP, SourceRange Comment) = 0;
+};
+
+/// Abstract base class that describes a handler that will receive
+/// source ranges for empty lines encountered in the source file.
+class EmptylineHandler {
+public:
+  virtual ~EmptylineHandler();
+
+  // The handler handles empty lines.
+  virtual void HandleEmptyline(SourceRange Range) = 0;
 };
 
 /// Registry of pragma handlers added by plugins

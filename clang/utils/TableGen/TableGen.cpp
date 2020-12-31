@@ -55,6 +55,8 @@ enum ActionType {
   GenClangTypeWriter,
   GenClangOpcodes,
   GenClangSACheckers,
+  GenClangSyntaxNodeList,
+  GenClangSyntaxNodeClasses,
   GenClangCommentHTMLTags,
   GenClangCommentHTMLTagsProperties,
   GenClangCommentHTMLNamedCharacterReferences,
@@ -63,6 +65,7 @@ enum ActionType {
   GenClangOpenCLBuiltins,
   GenArmNeon,
   GenArmFP16,
+  GenArmBF16,
   GenArmNeonSema,
   GenArmNeonTest,
   GenArmMveHeader,
@@ -74,6 +77,7 @@ enum ActionType {
   GenArmSveBuiltins,
   GenArmSveBuiltinCG,
   GenArmSveTypeFlags,
+  GenArmSveRangeChecks,
   GenArmCdeHeader,
   GenArmCdeBuiltinDef,
   GenArmCdeBuiltinSema,
@@ -164,6 +168,10 @@ cl::opt<ActionType> Action(
                    "Generate Clang constexpr interpreter opcodes"),
         clEnumValN(GenClangSACheckers, "gen-clang-sa-checkers",
                    "Generate Clang Static Analyzer checkers"),
+        clEnumValN(GenClangSyntaxNodeList, "gen-clang-syntax-node-list",
+                   "Generate list of Clang Syntax Tree node types"),
+        clEnumValN(GenClangSyntaxNodeClasses, "gen-clang-syntax-node-classes",
+                   "Generate definitions of Clang Syntax Tree node clasess"),
         clEnumValN(GenClangCommentHTMLTags, "gen-clang-comment-html-tags",
                    "Generate efficient matchers for HTML tag "
                    "names that are used in documentation comments"),
@@ -185,6 +193,7 @@ cl::opt<ActionType> Action(
                    "Generate OpenCL builtin declaration handlers"),
         clEnumValN(GenArmNeon, "gen-arm-neon", "Generate arm_neon.h for clang"),
         clEnumValN(GenArmFP16, "gen-arm-fp16", "Generate arm_fp16.h for clang"),
+        clEnumValN(GenArmBF16, "gen-arm-bf16", "Generate arm_bf16.h for clang"),
         clEnumValN(GenArmNeonSema, "gen-arm-neon-sema",
                    "Generate ARM NEON sema support for clang"),
         clEnumValN(GenArmNeonTest, "gen-arm-neon-test",
@@ -197,6 +206,8 @@ cl::opt<ActionType> Action(
                    "Generate arm_sve_builtin_cg_map.inc for clang"),
         clEnumValN(GenArmSveTypeFlags, "gen-arm-sve-typeflags",
                    "Generate arm_sve_typeflags.inc for clang"),
+        clEnumValN(GenArmSveRangeChecks, "gen-arm-sve-sema-rangechecks",
+                   "Generate arm_sve_sema_rangechecks.inc for clang"),
         clEnumValN(GenArmMveHeader, "gen-arm-mve-header",
                    "Generate arm_mve.h for clang"),
         clEnumValN(GenArmMveBuiltinDef, "gen-arm-mve-builtin-def",
@@ -351,11 +362,20 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
   case GenClangOpenCLBuiltins:
     EmitClangOpenCLBuiltins(Records, OS);
     break;
+  case GenClangSyntaxNodeList:
+    EmitClangSyntaxNodeList(Records, OS);
+    break;
+  case GenClangSyntaxNodeClasses:
+    EmitClangSyntaxNodeClasses(Records, OS);
+    break;
   case GenArmNeon:
     EmitNeon(Records, OS);
     break;
   case GenArmFP16:
     EmitFP16(Records, OS);
+    break;
+  case GenArmBF16:
+    EmitBF16(Records, OS);
     break;
   case GenArmNeonSema:
     EmitNeonSema(Records, OS);
@@ -389,6 +409,9 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
     break;
   case GenArmSveTypeFlags:
     EmitSveTypeFlags(Records, OS);
+    break;
+  case GenArmSveRangeChecks:
+    EmitSveRangeChecks(Records, OS);
     break;
   case GenArmCdeHeader:
     EmitCdeHeader(Records, OS);

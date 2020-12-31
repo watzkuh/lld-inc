@@ -18,9 +18,9 @@
 using namespace llvm;
 using namespace llvm::object;
 using namespace llvm::ELF;
+using namespace lld;
+using namespace lld::elf;
 
-namespace lld {
-namespace elf {
 namespace {
 template <class ELFT> class MIPS final : public TargetInfo {
 public:
@@ -146,7 +146,7 @@ RelExpr MIPS<ELFT>::getRelExpr(RelType type, const Symbol &s,
   case R_MIPS_TLS_TPREL64:
   case R_MICROMIPS_TLS_TPREL_HI16:
   case R_MICROMIPS_TLS_TPREL_LO16:
-    return R_TLS;
+    return R_TPREL;
   case R_MIPS_PC32:
   case R_MIPS_PC16:
   case R_MIPS_PC19_S2:
@@ -372,7 +372,7 @@ bool MIPS<ELFT>::needsThunk(RelExpr expr, RelType type, const InputFile *file,
   if (!f)
     return false;
   // If current file has PIC code, LA25 stub is not required.
-  if (f->getObj().getHeader()->e_flags & EF_MIPS_PIC)
+  if (f->getObj().getHeader().e_flags & EF_MIPS_PIC)
     return false;
   auto *d = dyn_cast<Defined>(&s);
   // LA25 is required if target file has PIC code
@@ -734,7 +734,7 @@ template <class ELFT> bool MIPS<ELFT>::usesOnlyLowPageBits(RelType type) const {
 }
 
 // Return true if the symbol is a PIC function.
-template <class ELFT> bool isMipsPIC(const Defined *sym) {
+template <class ELFT> bool elf::isMipsPIC(const Defined *sym) {
   if (!sym->isFunc())
     return false;
 
@@ -749,23 +749,20 @@ template <class ELFT> bool isMipsPIC(const Defined *sym) {
   if (!file)
     return false;
 
-  return file->getObj().getHeader()->e_flags & EF_MIPS_PIC;
+  return file->getObj().getHeader().e_flags & EF_MIPS_PIC;
 }
 
-template <class ELFT> TargetInfo *getMipsTargetInfo() {
+template <class ELFT> TargetInfo *elf::getMipsTargetInfo() {
   static MIPS<ELFT> target;
   return &target;
 }
 
-template TargetInfo *getMipsTargetInfo<ELF32LE>();
-template TargetInfo *getMipsTargetInfo<ELF32BE>();
-template TargetInfo *getMipsTargetInfo<ELF64LE>();
-template TargetInfo *getMipsTargetInfo<ELF64BE>();
+template TargetInfo *elf::getMipsTargetInfo<ELF32LE>();
+template TargetInfo *elf::getMipsTargetInfo<ELF32BE>();
+template TargetInfo *elf::getMipsTargetInfo<ELF64LE>();
+template TargetInfo *elf::getMipsTargetInfo<ELF64BE>();
 
-template bool isMipsPIC<ELF32LE>(const Defined *);
-template bool isMipsPIC<ELF32BE>(const Defined *);
-template bool isMipsPIC<ELF64LE>(const Defined *);
-template bool isMipsPIC<ELF64BE>(const Defined *);
-
-} // namespace elf
-} // namespace lld
+template bool elf::isMipsPIC<ELF32LE>(const Defined *);
+template bool elf::isMipsPIC<ELF32BE>(const Defined *);
+template bool elf::isMipsPIC<ELF64LE>(const Defined *);
+template bool elf::isMipsPIC<ELF64BE>(const Defined *);

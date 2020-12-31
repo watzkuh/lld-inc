@@ -17,9 +17,13 @@
 
 #include "llvm-objdump.h"
 #include "COFFDump.h"
+#include "ELFDump.h"
 #include "MachODump.h"
+#include "WasmDump.h"
 #include "XCOFFDump.h"
+#include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/StringExtras.h"
@@ -77,6 +81,8 @@ using namespace llvm;
 using namespace llvm::object;
 using namespace llvm::objdump;
 
+#define DEBUG_TYPE "objdump"
+
 static cl::OptionCategory ObjdumpCat("llvm-objdump Options");
 
 static cl::opt<uint64_t> AdjustVMA(
@@ -95,7 +101,7 @@ static cl::alias AllHeadersShort("x", cl::desc("Alias for --all-headers"),
 static cl::opt<std::string>
     ArchName("arch-name",
              cl::desc("Target arch to disassemble for, "
-                      "see -version for available targets"),
+                      "see --version for available targets"),
              cl::cat(ObjdumpCat));
 
 cl::opt<bool>
@@ -130,11 +136,11 @@ static cl::alias DisassembleAllShort("D",
                                      cl::NotHidden, cl::Grouping,
                                      cl::aliasopt(DisassembleAll));
 
-static cl::opt<bool>
-    SymbolDescription("symbol-description",
-                      cl::desc("Add symbol description for disassembly. This "
-                               "option is for XCOFF files only"),
-                      cl::init(false), cl::cat(ObjdumpCat));
+cl::opt<bool> objdump::SymbolDescription(
+    "symbol-description",
+    cl::desc("Add symbol description for disassembly. This "
+             "option is for XCOFF files only"),
+    cl::init(false), cl::cat(ObjdumpCat));
 
 static cl::list<std::string>
     DisassembleSymbols("disassemble-symbols", cl::CommaSeparated,
@@ -220,13 +226,13 @@ static cl::alias MachOm("m", cl::desc("Alias for --macho"), cl::NotHidden,
                         cl::Grouping, cl::aliasopt(MachOOpt));
 
 cl::opt<std::string> objdump::MCPU(
-    "mcpu", cl::desc("Target a specific cpu type (-mcpu=help for details)"),
+    "mcpu", cl::desc("Target a specific cpu type (--mcpu=help for details)"),
     cl::value_desc("cpu-name"), cl::init(""), cl::cat(ObjdumpCat));
 
-cl::list<std::string> objdump::MAttrs("mattr", cl::CommaSeparated,
-                                      cl::desc("Target specific attributes"),
-                                      cl::value_desc("a1,+a2,-a3,..."),
-                                      cl::cat(ObjdumpCat));
+cl::list<std::string> objdump::MAttrs(
+    "mattr", cl::CommaSeparated,
+    cl::desc("Target specific attributes (--mattr=help for details)"),
+    cl::value_desc("a1,+a2,-a3,..."), cl::cat(ObjdumpCat));
 
 cl::opt<bool> objdump::NoShowRawInsn(
     "no-show-raw-insn",
@@ -268,7 +274,7 @@ static cl::alias PrivateHeadersShort("p",
 cl::list<std::string>
     objdump::FilterSections("section",
                             cl::desc("Operate on the specified sections only. "
-                                     "With -macho dump segment,section"),
+                                     "With --macho dump segment,section"),
                             cl::cat(ObjdumpCat));
 static cl::alias FilterSectionsj("j", cl::desc("Alias for --section"),
                                  cl::NotHidden, cl::Grouping, cl::Prefix,
@@ -297,7 +303,7 @@ static cl::opt<bool> PrintSource(
     cl::desc(
         "Display source inlined with disassembly. Implies disassemble object"),
     cl::cat(ObjdumpCat));
-static cl::alias PrintSourceShort("S", cl::desc("Alias for -source"),
+static cl::alias PrintSourceShort("S", cl::desc("Alias for --source"),
                                   cl::NotHidden, cl::Grouping,
                                   cl::aliasopt(PrintSource));
 
@@ -315,6 +321,11 @@ static cl::alias SymbolTableShort("t", cl::desc("Alias for --syms"),
                                   cl::NotHidden, cl::Grouping,
                                   cl::aliasopt(SymbolTable));
 
+static cl::opt<bool> SymbolizeOperands(
+    "symbolize-operands",
+    cl::desc("Symbolize instruction operands when disassembling"),
+    cl::cat(ObjdumpCat));
+
 static cl::opt<bool> DynamicSymbolTable(
     "dynamic-syms",
     cl::desc("Display the contents of the dynamic symbol table"),
@@ -324,11 +335,11 @@ static cl::alias DynamicSymbolTableShort("T",
                                          cl::NotHidden, cl::Grouping,
                                          cl::aliasopt(DynamicSymbolTable));
 
-cl::opt<std::string> objdump::TripleName(
-    "triple",
-    cl::desc(
-        "Target triple to disassemble for, see -version for available targets"),
-    cl::cat(ObjdumpCat));
+cl::opt<std::string>
+    objdump::TripleName("triple",
+                        cl::desc("Target triple to disassemble for, see "
+                                 "--version for available targets"),
+                        cl::cat(ObjdumpCat));
 
 cl::opt<bool> objdump::UnwindInfo("unwind-info",
                                   cl::desc("Display unwind information"),
@@ -341,6 +352,32 @@ static cl::opt<bool>
     Wide("wide", cl::desc("Ignored for compatibility with GNU objdump"),
          cl::cat(ObjdumpCat));
 static cl::alias WideShort("w", cl::Grouping, cl::aliasopt(Wide));
+
+cl::opt<std::string> objdump::Prefix("prefix",
+                                     cl::desc("Add prefix to absolute paths"),
+                                     cl::cat(ObjdumpCat));
+
+enum DebugVarsFormat {
+  DVDisabled,
+  DVUnicode,
+  DVASCII,
+};
+
+static cl::opt<DebugVarsFormat> DbgVariables(
+    "debug-vars", cl::init(DVDisabled),
+    cl::desc("Print the locations (in registers or memory) of "
+             "source-level variables alongside disassembly"),
+    cl::ValueOptional,
+    cl::values(clEnumValN(DVUnicode, "", "unicode"),
+               clEnumValN(DVUnicode, "unicode", "unicode"),
+               clEnumValN(DVASCII, "ascii", "unicode")),
+    cl::cat(ObjdumpCat));
+
+static cl::opt<int>
+    DbgIndent("debug-vars-indent", cl::init(40),
+              cl::desc("Distance to indent the source-level variable display, "
+                       "relative to the start of the disassembly"),
+              cl::cat(ObjdumpCat));
 
 static cl::extrahelp
     HelpResponse("\nPass @FILE as argument to read options from FILE.\n");
@@ -384,9 +421,8 @@ static FilterResult checkSectionFilter(object::SectionRef S) {
           /*IncrementIndex=*/true};
 }
 
-namespace llvm {
-
-SectionFilter ToolSectionFilter(object::ObjectFile const &O, uint64_t *Idx) {
+SectionFilter objdump::ToolSectionFilter(object::ObjectFile const &O,
+                                         uint64_t *Idx) {
   // Start at UINT64_MAX so that the first index returned after an increment is
   // zero (after the unsigned wrap).
   if (Idx)
@@ -401,8 +437,8 @@ SectionFilter ToolSectionFilter(object::ObjectFile const &O, uint64_t *Idx) {
       O);
 }
 
-std::string getFileNameForError(const object::Archive::Child &C,
-                                unsigned Index) {
+std::string objdump::getFileNameForError(const object::Archive::Child &C,
+                                         unsigned Index) {
   Expected<StringRef> NameOrErr = C.getName();
   if (NameOrErr)
     return std::string(NameOrErr.get());
@@ -412,24 +448,26 @@ std::string getFileNameForError(const object::Archive::Child &C,
   return "<file index: " + std::to_string(Index) + ">";
 }
 
-void reportWarning(Twine Message, StringRef File) {
+void objdump::reportWarning(Twine Message, StringRef File) {
   // Output order between errs() and outs() matters especially for archive
   // files where the output is per member object.
   outs().flush();
   WithColor::warning(errs(), ToolName)
       << "'" << File << "': " << Message << "\n";
-  errs().flush();
 }
 
-LLVM_ATTRIBUTE_NORETURN void reportError(StringRef File, Twine Message) {
+LLVM_ATTRIBUTE_NORETURN void objdump::reportError(StringRef File,
+                                                  Twine Message) {
+  outs().flush();
   WithColor::error(errs(), ToolName) << "'" << File << "': " << Message << "\n";
   exit(1);
 }
 
-LLVM_ATTRIBUTE_NORETURN void reportError(Error E, StringRef FileName,
-                                         StringRef ArchiveName,
-                                         StringRef ArchitectureName) {
+LLVM_ATTRIBUTE_NORETURN void objdump::reportError(Error E, StringRef FileName,
+                                                  StringRef ArchiveName,
+                                                  StringRef ArchitectureName) {
   assert(E);
+  outs().flush();
   WithColor::error(errs(), ToolName);
   if (ArchiveName != "")
     errs() << ArchiveName << "(" << FileName << ")";
@@ -437,11 +475,8 @@ LLVM_ATTRIBUTE_NORETURN void reportError(Error E, StringRef FileName,
     errs() << "'" << FileName << "'";
   if (!ArchitectureName.empty())
     errs() << " (for architecture " << ArchitectureName << ")";
-  std::string Buf;
-  raw_string_ostream OS(Buf);
-  logAllUnhandledErrors(std::move(E), OS);
-  OS.flush();
-  errs() << ": " << Buf;
+  errs() << ": ";
+  logAllUnhandledErrors(std::move(E), errs());
   exit(1);
 }
 
@@ -495,7 +530,7 @@ static const Target *getTarget(const ObjectFile *Obj) {
   return TheTarget;
 }
 
-bool isRelocAddressLess(RelocationRef A, RelocationRef B) {
+bool objdump::isRelocAddressLess(RelocationRef A, RelocationRef B) {
   return A.getOffset() < B.getOffset();
 }
 
@@ -548,6 +583,358 @@ static bool getHidden(RelocationRef RelRef) {
 }
 
 namespace {
+
+/// Get the column at which we want to start printing the instruction
+/// disassembly, taking into account anything which appears to the left of it.
+unsigned getInstStartColumn(const MCSubtargetInfo &STI) {
+  return NoShowRawInsn ? 16 : STI.getTargetTriple().isX86() ? 40 : 24;
+}
+
+/// Stores a single expression representing the location of a source-level
+/// variable, along with the PC range for which that expression is valid.
+struct LiveVariable {
+  DWARFLocationExpression LocExpr;
+  const char *VarName;
+  DWARFUnit *Unit;
+  const DWARFDie FuncDie;
+
+  LiveVariable(const DWARFLocationExpression &LocExpr, const char *VarName,
+               DWARFUnit *Unit, const DWARFDie FuncDie)
+      : LocExpr(LocExpr), VarName(VarName), Unit(Unit), FuncDie(FuncDie) {}
+
+  bool liveAtAddress(object::SectionedAddress Addr) {
+    if (LocExpr.Range == None)
+      return false;
+    return LocExpr.Range->SectionIndex == Addr.SectionIndex &&
+           LocExpr.Range->LowPC <= Addr.Address &&
+           LocExpr.Range->HighPC > Addr.Address;
+  }
+
+  void print(raw_ostream &OS, const MCRegisterInfo &MRI) const {
+    DataExtractor Data({LocExpr.Expr.data(), LocExpr.Expr.size()},
+                       Unit->getContext().isLittleEndian(), 0);
+    DWARFExpression Expression(Data, Unit->getAddressByteSize());
+    Expression.printCompact(OS, MRI);
+  }
+};
+
+/// Helper class for printing source variable locations alongside disassembly.
+class LiveVariablePrinter {
+  // Information we want to track about one column in which we are printing a
+  // variable live range.
+  struct Column {
+    unsigned VarIdx = NullVarIdx;
+    bool LiveIn = false;
+    bool LiveOut = false;
+    bool MustDrawLabel  = false;
+
+    bool isActive() const { return VarIdx != NullVarIdx; }
+
+    static constexpr unsigned NullVarIdx = std::numeric_limits<unsigned>::max();
+  };
+
+  // All live variables we know about in the object/image file.
+  std::vector<LiveVariable> LiveVariables;
+
+  // The columns we are currently drawing.
+  IndexedMap<Column> ActiveCols;
+
+  const MCRegisterInfo &MRI;
+  const MCSubtargetInfo &STI;
+
+  void addVariable(DWARFDie FuncDie, DWARFDie VarDie) {
+    uint64_t FuncLowPC, FuncHighPC, SectionIndex;
+    FuncDie.getLowAndHighPC(FuncLowPC, FuncHighPC, SectionIndex);
+    const char *VarName = VarDie.getName(DINameKind::ShortName);
+    DWARFUnit *U = VarDie.getDwarfUnit();
+
+    Expected<DWARFLocationExpressionsVector> Locs =
+        VarDie.getLocations(dwarf::DW_AT_location);
+    if (!Locs) {
+      // If the variable doesn't have any locations, just ignore it. We don't
+      // report an error or warning here as that could be noisy on optimised
+      // code.
+      consumeError(Locs.takeError());
+      return;
+    }
+
+    for (const DWARFLocationExpression &LocExpr : *Locs) {
+      if (LocExpr.Range) {
+        LiveVariables.emplace_back(LocExpr, VarName, U, FuncDie);
+      } else {
+        // If the LocExpr does not have an associated range, it is valid for
+        // the whole of the function.
+        // TODO: technically it is not valid for any range covered by another
+        // LocExpr, does that happen in reality?
+        DWARFLocationExpression WholeFuncExpr{
+            DWARFAddressRange(FuncLowPC, FuncHighPC, SectionIndex),
+            LocExpr.Expr};
+        LiveVariables.emplace_back(WholeFuncExpr, VarName, U, FuncDie);
+      }
+    }
+  }
+
+  void addFunction(DWARFDie D) {
+    for (const DWARFDie &Child : D.children()) {
+      if (Child.getTag() == dwarf::DW_TAG_variable ||
+          Child.getTag() == dwarf::DW_TAG_formal_parameter)
+        addVariable(D, Child);
+      else
+        addFunction(Child);
+    }
+  }
+
+  // Get the column number (in characters) at which the first live variable
+  // line should be printed.
+  unsigned getIndentLevel() const {
+    return DbgIndent + getInstStartColumn(STI);
+  }
+
+  // Indent to the first live-range column to the right of the currently
+  // printed line, and return the index of that column.
+  // TODO: formatted_raw_ostream uses "column" to mean a number of characters
+  // since the last \n, and we use it to mean the number of slots in which we
+  // put live variable lines. Pick a less overloaded word.
+  unsigned moveToFirstVarColumn(formatted_raw_ostream &OS) {
+    // Logical column number: column zero is the first column we print in, each
+    // logical column is 2 physical columns wide.
+    unsigned FirstUnprintedLogicalColumn =
+        std::max((int)(OS.getColumn() - getIndentLevel() + 1) / 2, 0);
+    // Physical column number: the actual column number in characters, with
+    // zero being the left-most side of the screen.
+    unsigned FirstUnprintedPhysicalColumn =
+        getIndentLevel() + FirstUnprintedLogicalColumn * 2;
+
+    if (FirstUnprintedPhysicalColumn > OS.getColumn())
+      OS.PadToColumn(FirstUnprintedPhysicalColumn);
+
+    return FirstUnprintedLogicalColumn;
+  }
+
+  unsigned findFreeColumn() {
+    for (unsigned ColIdx = 0; ColIdx < ActiveCols.size(); ++ColIdx)
+      if (!ActiveCols[ColIdx].isActive())
+        return ColIdx;
+
+    size_t OldSize = ActiveCols.size();
+    ActiveCols.grow(std::max<size_t>(OldSize * 2, 1));
+    return OldSize;
+  }
+
+public:
+  LiveVariablePrinter(const MCRegisterInfo &MRI, const MCSubtargetInfo &STI)
+      : LiveVariables(), ActiveCols(Column()), MRI(MRI), STI(STI) {}
+
+  void dump() const {
+    for (const LiveVariable &LV : LiveVariables) {
+      dbgs() << LV.VarName << " @ " << LV.LocExpr.Range << ": ";
+      LV.print(dbgs(), MRI);
+      dbgs() << "\n";
+    }
+  }
+
+  void addCompileUnit(DWARFDie D) {
+    if (D.getTag() == dwarf::DW_TAG_subprogram)
+      addFunction(D);
+    else
+      for (const DWARFDie &Child : D.children())
+        addFunction(Child);
+  }
+
+  /// Update to match the state of the instruction between ThisAddr and
+  /// NextAddr. In the common case, any live range active at ThisAddr is
+  /// live-in to the instruction, and any live range active at NextAddr is
+  /// live-out of the instruction. If IncludeDefinedVars is false, then live
+  /// ranges starting at NextAddr will be ignored.
+  void update(object::SectionedAddress ThisAddr,
+              object::SectionedAddress NextAddr, bool IncludeDefinedVars) {
+    // First, check variables which have already been assigned a column, so
+    // that we don't change their order.
+    SmallSet<unsigned, 8> CheckedVarIdxs;
+    for (unsigned ColIdx = 0, End = ActiveCols.size(); ColIdx < End; ++ColIdx) {
+      if (!ActiveCols[ColIdx].isActive())
+        continue;
+      CheckedVarIdxs.insert(ActiveCols[ColIdx].VarIdx);
+      LiveVariable &LV = LiveVariables[ActiveCols[ColIdx].VarIdx];
+      ActiveCols[ColIdx].LiveIn = LV.liveAtAddress(ThisAddr);
+      ActiveCols[ColIdx].LiveOut = LV.liveAtAddress(NextAddr);
+      LLVM_DEBUG(dbgs() << "pass 1, " << ThisAddr.Address << "-"
+                        << NextAddr.Address << ", " << LV.VarName << ", Col "
+                        << ColIdx << ": LiveIn=" << ActiveCols[ColIdx].LiveIn
+                        << ", LiveOut=" << ActiveCols[ColIdx].LiveOut << "\n");
+
+      if (!ActiveCols[ColIdx].LiveIn && !ActiveCols[ColIdx].LiveOut)
+        ActiveCols[ColIdx].VarIdx = Column::NullVarIdx;
+    }
+
+    // Next, look for variables which don't already have a column, but which
+    // are now live.
+    if (IncludeDefinedVars) {
+      for (unsigned VarIdx = 0, End = LiveVariables.size(); VarIdx < End;
+           ++VarIdx) {
+        if (CheckedVarIdxs.count(VarIdx))
+          continue;
+        LiveVariable &LV = LiveVariables[VarIdx];
+        bool LiveIn = LV.liveAtAddress(ThisAddr);
+        bool LiveOut = LV.liveAtAddress(NextAddr);
+        if (!LiveIn && !LiveOut)
+          continue;
+
+        unsigned ColIdx = findFreeColumn();
+        LLVM_DEBUG(dbgs() << "pass 2, " << ThisAddr.Address << "-"
+                          << NextAddr.Address << ", " << LV.VarName << ", Col "
+                          << ColIdx << ": LiveIn=" << LiveIn
+                          << ", LiveOut=" << LiveOut << "\n");
+        ActiveCols[ColIdx].VarIdx = VarIdx;
+        ActiveCols[ColIdx].LiveIn = LiveIn;
+        ActiveCols[ColIdx].LiveOut = LiveOut;
+        ActiveCols[ColIdx].MustDrawLabel = true;
+      }
+    }
+  }
+
+  enum class LineChar {
+    RangeStart,
+    RangeMid,
+    RangeEnd,
+    LabelVert,
+    LabelCornerNew,
+    LabelCornerActive,
+    LabelHoriz,
+  };
+  const char *getLineChar(LineChar C) const {
+    bool IsASCII = DbgVariables == DVASCII;
+    switch (C) {
+    case LineChar::RangeStart:
+      return IsASCII ? "^" : (const char *)u8"\u2548";
+    case LineChar::RangeMid:
+      return IsASCII ? "|" : (const char *)u8"\u2503";
+    case LineChar::RangeEnd:
+      return IsASCII ? "v" : (const char *)u8"\u253b";
+    case LineChar::LabelVert:
+      return IsASCII ? "|" : (const char *)u8"\u2502";
+    case LineChar::LabelCornerNew:
+      return IsASCII ? "/" : (const char *)u8"\u250c";
+    case LineChar::LabelCornerActive:
+      return IsASCII ? "|" : (const char *)u8"\u2520";
+    case LineChar::LabelHoriz:
+      return IsASCII ? "-" : (const char *)u8"\u2500";
+    }
+    llvm_unreachable("Unhandled LineChar enum");
+  }
+
+  /// Print live ranges to the right of an existing line. This assumes the
+  /// line is not an instruction, so doesn't start or end any live ranges, so
+  /// we only need to print active ranges or empty columns. If AfterInst is
+  /// true, this is being printed after the last instruction fed to update(),
+  /// otherwise this is being printed before it.
+  void printAfterOtherLine(formatted_raw_ostream &OS, bool AfterInst) {
+    if (ActiveCols.size()) {
+      unsigned FirstUnprintedColumn = moveToFirstVarColumn(OS);
+      for (size_t ColIdx = FirstUnprintedColumn, End = ActiveCols.size();
+           ColIdx < End; ++ColIdx) {
+        if (ActiveCols[ColIdx].isActive()) {
+          if ((AfterInst && ActiveCols[ColIdx].LiveOut) ||
+              (!AfterInst && ActiveCols[ColIdx].LiveIn))
+            OS << getLineChar(LineChar::RangeMid);
+          else if (!AfterInst && ActiveCols[ColIdx].LiveOut)
+            OS << getLineChar(LineChar::LabelVert);
+          else
+            OS << " ";
+        }
+        OS << " ";
+      }
+    }
+    OS << "\n";
+  }
+
+  /// Print any live variable range info needed to the right of a
+  /// non-instruction line of disassembly. This is where we print the variable
+  /// names and expressions, with thin line-drawing characters connecting them
+  /// to the live range which starts at the next instruction. If MustPrint is
+  /// true, we have to print at least one line (with the continuation of any
+  /// already-active live ranges) because something has already been printed
+  /// earlier on this line.
+  void printBetweenInsts(formatted_raw_ostream &OS, bool MustPrint) {
+    bool PrintedSomething = false;
+    for (unsigned ColIdx = 0, End = ActiveCols.size(); ColIdx < End; ++ColIdx) {
+      if (ActiveCols[ColIdx].isActive() && ActiveCols[ColIdx].MustDrawLabel) {
+        // First we need to print the live range markers for any active
+        // columns to the left of this one.
+        OS.PadToColumn(getIndentLevel());
+        for (unsigned ColIdx2 = 0; ColIdx2 < ColIdx; ++ColIdx2) {
+          if (ActiveCols[ColIdx2].isActive()) {
+            if (ActiveCols[ColIdx2].MustDrawLabel &&
+                           !ActiveCols[ColIdx2].LiveIn)
+              OS << getLineChar(LineChar::LabelVert) << " ";
+            else
+              OS << getLineChar(LineChar::RangeMid) << " ";
+          } else
+            OS << "  ";
+        }
+
+        // Then print the variable name and location of the new live range,
+        // with box drawing characters joining it to the live range line.
+        OS << getLineChar(ActiveCols[ColIdx].LiveIn
+                              ? LineChar::LabelCornerActive
+                              : LineChar::LabelCornerNew)
+           << getLineChar(LineChar::LabelHoriz) << " ";
+        WithColor(OS, raw_ostream::GREEN)
+            << LiveVariables[ActiveCols[ColIdx].VarIdx].VarName;
+        OS << " = ";
+        {
+          WithColor ExprColor(OS, raw_ostream::CYAN);
+          LiveVariables[ActiveCols[ColIdx].VarIdx].print(OS, MRI);
+        }
+
+        // If there are any columns to the right of the expression we just
+        // printed, then continue their live range lines.
+        unsigned FirstUnprintedColumn = moveToFirstVarColumn(OS);
+        for (unsigned ColIdx2 = FirstUnprintedColumn, End = ActiveCols.size();
+             ColIdx2 < End; ++ColIdx2) {
+          if (ActiveCols[ColIdx2].isActive() && ActiveCols[ColIdx2].LiveIn)
+            OS << getLineChar(LineChar::RangeMid) << " ";
+          else
+            OS << "  ";
+        }
+
+        OS << "\n";
+        PrintedSomething = true;
+      }
+    }
+
+    for (unsigned ColIdx = 0, End = ActiveCols.size(); ColIdx < End; ++ColIdx)
+      if (ActiveCols[ColIdx].isActive())
+        ActiveCols[ColIdx].MustDrawLabel = false;
+
+    // If we must print something (because we printed a line/column number),
+    // but don't have any new variables to print, then print a line which
+    // just continues any existing live ranges.
+    if (MustPrint && !PrintedSomething)
+      printAfterOtherLine(OS, false);
+  }
+
+  /// Print the live variable ranges to the right of a disassembled instruction.
+  void printAfterInst(formatted_raw_ostream &OS) {
+    if (!ActiveCols.size())
+      return;
+    unsigned FirstUnprintedColumn = moveToFirstVarColumn(OS);
+    for (unsigned ColIdx = FirstUnprintedColumn, End = ActiveCols.size();
+         ColIdx < End; ++ColIdx) {
+      if (!ActiveCols[ColIdx].isActive())
+        OS << "  ";
+      else if (ActiveCols[ColIdx].LiveIn && ActiveCols[ColIdx].LiveOut)
+        OS << getLineChar(LineChar::RangeMid) << " ";
+      else if (ActiveCols[ColIdx].LiveOut)
+        OS << getLineChar(LineChar::RangeStart) << " ";
+      else if (ActiveCols[ColIdx].LiveIn)
+        OS << getLineChar(LineChar::RangeEnd) << " ";
+      else
+        llvm_unreachable("var must be live in or out!");
+    }
+  }
+};
+
 class SourcePrinter {
 protected:
   DILineInfo OldLineInfo;
@@ -565,11 +952,12 @@ protected:
 private:
   bool cacheSource(const DILineInfo& LineInfoFile);
 
-  void printLines(raw_ostream &OS, const DILineInfo &LineInfo,
-                  StringRef Delimiter);
+  void printLines(formatted_raw_ostream &OS, const DILineInfo &LineInfo,
+                  StringRef Delimiter, LiveVariablePrinter &LVP);
 
-  void printSources(raw_ostream &OS, const DILineInfo &LineInfo,
-                    StringRef ObjectFilename, StringRef Delimiter);
+  void printSources(formatted_raw_ostream &OS, const DILineInfo &LineInfo,
+                    StringRef ObjectFilename, StringRef Delimiter,
+                    LiveVariablePrinter &LVP);
 
 public:
   SourcePrinter() = default;
@@ -583,9 +971,10 @@ public:
     Symbolizer.reset(new symbolize::LLVMSymbolizer(SymbolizerOpts));
   }
   virtual ~SourcePrinter() = default;
-  virtual void printSourceLine(raw_ostream &OS,
+  virtual void printSourceLine(formatted_raw_ostream &OS,
                                object::SectionedAddress Address,
                                StringRef ObjectFilename,
+                               LiveVariablePrinter &LVP,
                                StringRef Delimiter = "; ");
 };
 
@@ -619,9 +1008,10 @@ bool SourcePrinter::cacheSource(const DILineInfo &LineInfo) {
   return true;
 }
 
-void SourcePrinter::printSourceLine(raw_ostream &OS,
+void SourcePrinter::printSourceLine(formatted_raw_ostream &OS,
                                     object::SectionedAddress Address,
                                     StringRef ObjectFilename,
+                                    LiveVariablePrinter &LVP,
                                     StringRef Delimiter) {
   if (!Symbolizer)
     return;
@@ -645,15 +1035,23 @@ void SourcePrinter::printSourceLine(raw_ostream &OS,
     }
   }
 
+  if (!Prefix.empty() && sys::path::is_absolute_gnu(LineInfo.FileName)) {
+    SmallString<128> FilePath;
+    sys::path::append(FilePath, Prefix, LineInfo.FileName);
+
+    LineInfo.FileName = std::string(FilePath);
+  }
+
   if (PrintLines)
-    printLines(OS, LineInfo, Delimiter);
+    printLines(OS, LineInfo, Delimiter, LVP);
   if (PrintSource)
-    printSources(OS, LineInfo, ObjectFilename, Delimiter);
+    printSources(OS, LineInfo, ObjectFilename, Delimiter, LVP);
   OldLineInfo = LineInfo;
 }
 
-void SourcePrinter::printLines(raw_ostream &OS, const DILineInfo &LineInfo,
-                               StringRef Delimiter) {
+void SourcePrinter::printLines(formatted_raw_ostream &OS,
+                               const DILineInfo &LineInfo, StringRef Delimiter,
+                               LiveVariablePrinter &LVP) {
   bool PrintFunctionName = LineInfo.FunctionName != DILineInfo::BadString &&
                            LineInfo.FunctionName != OldLineInfo.FunctionName;
   if (PrintFunctionName) {
@@ -666,13 +1064,16 @@ void SourcePrinter::printLines(raw_ostream &OS, const DILineInfo &LineInfo,
   }
   if (LineInfo.FileName != DILineInfo::BadString && LineInfo.Line != 0 &&
       (OldLineInfo.Line != LineInfo.Line ||
-       OldLineInfo.FileName != LineInfo.FileName || PrintFunctionName))
-    OS << Delimiter << LineInfo.FileName << ":" << LineInfo.Line << "\n";
+       OldLineInfo.FileName != LineInfo.FileName || PrintFunctionName)) {
+    OS << Delimiter << LineInfo.FileName << ":" << LineInfo.Line;
+    LVP.printBetweenInsts(OS, true);
+  }
 }
 
-void SourcePrinter::printSources(raw_ostream &OS, const DILineInfo &LineInfo,
-                                 StringRef ObjectFilename,
-                                 StringRef Delimiter) {
+void SourcePrinter::printSources(formatted_raw_ostream &OS,
+                                 const DILineInfo &LineInfo,
+                                 StringRef ObjectFilename, StringRef Delimiter,
+                                 LiveVariablePrinter &LVP) {
   if (LineInfo.FileName == DILineInfo::BadString || LineInfo.Line == 0 ||
       (OldLineInfo.Line == LineInfo.Line &&
        OldLineInfo.FileName == LineInfo.FileName))
@@ -692,7 +1093,8 @@ void SourcePrinter::printSources(raw_ostream &OS, const DILineInfo &LineInfo,
       return;
     }
     // Vector begins at 0, line numbers are non-zero
-    OS << Delimiter << LineBuffer->second[LineInfo.Line - 1] << '\n';
+    OS << Delimiter << LineBuffer->second[LineInfo.Line - 1];
+    LVP.printBetweenInsts(OS, true);
   }
 }
 
@@ -710,28 +1112,30 @@ static bool hasMappingSymbols(const ObjectFile *Obj) {
   return isArmElf(Obj) || isAArch64Elf(Obj);
 }
 
-static void printRelocation(StringRef FileName, const RelocationRef &Rel,
-                            uint64_t Address, bool Is64Bits) {
+static void printRelocation(formatted_raw_ostream &OS, StringRef FileName,
+                            const RelocationRef &Rel, uint64_t Address,
+                            bool Is64Bits) {
   StringRef Fmt = Is64Bits ? "\t\t%016" PRIx64 ":  " : "\t\t\t%08" PRIx64 ":  ";
   SmallString<16> Name;
   SmallString<32> Val;
   Rel.getTypeName(Name);
   if (Error E = getRelocationValueString(Rel, Val))
     reportError(std::move(E), FileName);
-  outs() << format(Fmt.data(), Address) << Name << "\t" << Val << "\n";
+  OS << format(Fmt.data(), Address) << Name << "\t" << Val;
 }
 
 class PrettyPrinter {
 public:
   virtual ~PrettyPrinter() = default;
-  virtual void printInst(MCInstPrinter &IP, const MCInst *MI,
-                         ArrayRef<uint8_t> Bytes,
-                         object::SectionedAddress Address, raw_ostream &OS,
-                         StringRef Annot, MCSubtargetInfo const &STI,
-                         SourcePrinter *SP, StringRef ObjectFilename,
-                         std::vector<RelocationRef> *Rels = nullptr) {
+  virtual void
+  printInst(MCInstPrinter &IP, const MCInst *MI, ArrayRef<uint8_t> Bytes,
+            object::SectionedAddress Address, formatted_raw_ostream &OS,
+            StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
+            StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
+            LiveVariablePrinter &LVP) {
     if (SP && (PrintSource || PrintLines))
-      SP->printSourceLine(OS, Address, ObjectFilename);
+      SP->printSourceLine(OS, Address, ObjectFilename, LVP);
+    LVP.printBetweenInsts(OS, false);
 
     size_t Start = OS.tell();
     if (!NoLeadingAddr)
@@ -743,7 +1147,7 @@ public:
 
     // The output of printInst starts with a tab. Print some spaces so that
     // the tab has 1 column and advances to the target tab stop.
-    unsigned TabStop = NoShowRawInsn ? 16 : 40;
+    unsigned TabStop = getInstStartColumn(STI);
     unsigned Column = OS.tell() - Start;
     OS.indent(Column < TabStop - 1 ? TabStop - 1 - Column : 7 - Column % 8);
 
@@ -764,7 +1168,7 @@ PrettyPrinter PrettyPrinterInst;
 class HexagonPrettyPrinter : public PrettyPrinter {
 public:
   void printLead(ArrayRef<uint8_t> Bytes, uint64_t Address,
-                 raw_ostream &OS) {
+                 formatted_raw_ostream &OS) {
     uint32_t opcode =
       (Bytes[3] << 24) | (Bytes[2] << 16) | (Bytes[1] << 8) | Bytes[0];
     if (!NoLeadingAddr)
@@ -776,12 +1180,12 @@ public:
     }
   }
   void printInst(MCInstPrinter &IP, const MCInst *MI, ArrayRef<uint8_t> Bytes,
-                 object::SectionedAddress Address, raw_ostream &OS,
+                 object::SectionedAddress Address, formatted_raw_ostream &OS,
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
-                 StringRef ObjectFilename,
-                 std::vector<RelocationRef> *Rels) override {
+                 StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
+                 LiveVariablePrinter &LVP) override {
     if (SP && (PrintSource || PrintLines))
-      SP->printSourceLine(OS, Address, ObjectFilename, "");
+      SP->printSourceLine(OS, Address, ObjectFilename, LVP, "");
     if (!MI) {
       printLead(Bytes, Address.Address, OS);
       OS << " <unknown>";
@@ -807,7 +1211,7 @@ public:
     auto PrintReloc = [&]() -> void {
       while ((RelCur != RelEnd) && (RelCur->getOffset() <= Address.Address)) {
         if (RelCur->getOffset() == Address.Address) {
-          printRelocation(ObjectFilename, *RelCur, Address.Address, false);
+          printRelocation(OS, ObjectFilename, *RelCur, Address.Address, false);
           return;
         }
         ++RelCur;
@@ -818,7 +1222,7 @@ public:
       OS << Separator;
       Separator = "\n";
       if (SP && (PrintSource || PrintLines))
-        SP->printSourceLine(OS, Address, ObjectFilename, "");
+        SP->printSourceLine(OS, Address, ObjectFilename, LVP, "");
       printLead(Bytes, Address.Address, OS);
       OS << Preamble;
       Preamble = "   ";
@@ -846,12 +1250,12 @@ HexagonPrettyPrinter HexagonPrettyPrinterInst;
 class AMDGCNPrettyPrinter : public PrettyPrinter {
 public:
   void printInst(MCInstPrinter &IP, const MCInst *MI, ArrayRef<uint8_t> Bytes,
-                 object::SectionedAddress Address, raw_ostream &OS,
+                 object::SectionedAddress Address, formatted_raw_ostream &OS,
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
-                 StringRef ObjectFilename,
-                 std::vector<RelocationRef> *Rels) override {
+                 StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
+                 LiveVariablePrinter &LVP) override {
     if (SP && (PrintSource || PrintLines))
-      SP->printSourceLine(OS, Address, ObjectFilename);
+      SP->printSourceLine(OS, Address, ObjectFilename, LVP);
 
     if (MI) {
       SmallString<40> InstStr;
@@ -898,12 +1302,12 @@ AMDGCNPrettyPrinter AMDGCNPrettyPrinterInst;
 class BPFPrettyPrinter : public PrettyPrinter {
 public:
   void printInst(MCInstPrinter &IP, const MCInst *MI, ArrayRef<uint8_t> Bytes,
-                 object::SectionedAddress Address, raw_ostream &OS,
+                 object::SectionedAddress Address, formatted_raw_ostream &OS,
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
-                 StringRef ObjectFilename,
-                 std::vector<RelocationRef> *Rels) override {
+                 StringRef ObjectFilename, std::vector<RelocationRef> *Rels,
+                 LiveVariablePrinter &LVP) override {
     if (SP && (PrintSource || PrintLines))
-      SP->printSourceLine(OS, Address, ObjectFilename);
+      SP->printSourceLine(OS, Address, ObjectFilename, LVP);
     if (!NoLeadingAddr)
       OS << format("%8" PRId64 ":", Address.Address / 8);
     if (!NoShowRawInsn) {
@@ -936,13 +1340,21 @@ PrettyPrinter &selectPrettyPrinter(Triple const &Triple) {
 static uint8_t getElfSymbolType(const ObjectFile *Obj, const SymbolRef &Sym) {
   assert(Obj->isELF());
   if (auto *Elf32LEObj = dyn_cast<ELF32LEObjectFile>(Obj))
-    return Elf32LEObj->getSymbol(Sym.getRawDataRefImpl())->getType();
+    return unwrapOrError(Elf32LEObj->getSymbol(Sym.getRawDataRefImpl()),
+                         Obj->getFileName())
+        ->getType();
   if (auto *Elf64LEObj = dyn_cast<ELF64LEObjectFile>(Obj))
-    return Elf64LEObj->getSymbol(Sym.getRawDataRefImpl())->getType();
+    return unwrapOrError(Elf64LEObj->getSymbol(Sym.getRawDataRefImpl()),
+                         Obj->getFileName())
+        ->getType();
   if (auto *Elf32BEObj = dyn_cast<ELF32BEObjectFile>(Obj))
-    return Elf32BEObj->getSymbol(Sym.getRawDataRefImpl())->getType();
+    return unwrapOrError(Elf32BEObj->getSymbol(Sym.getRawDataRefImpl()),
+                         Obj->getFileName())
+        ->getType();
   if (auto *Elf64BEObj = cast<ELF64BEObjectFile>(Obj))
-    return Elf64BEObj->getSymbol(Sym.getRawDataRefImpl())->getType();
+    return unwrapOrError(Elf64BEObj->getSymbol(Sym.getRawDataRefImpl()),
+                         Obj->getFileName())
+        ->getType();
   llvm_unreachable("Unsupported binary format");
 }
 
@@ -958,7 +1370,9 @@ addDynamicElfSymbols(const ELFObjectFile<ELFT> *Obj,
     // ELFSymbolRef::getAddress() returns size instead of value for common
     // symbols which is not desirable for disassembly output. Overriding.
     if (SymbolType == ELF::STT_COMMON)
-      Address = Obj->getSymbol(Symbol.getRawDataRefImpl())->st_value;
+      Address = unwrapOrError(Obj->getSymbol(Symbol.getRawDataRefImpl()),
+                              Obj->getFileName())
+                    ->st_value;
 
     StringRef Name = unwrapOrError(Symbol.getName(), Obj->getFileName());
     if (Name.empty())
@@ -1006,13 +1420,23 @@ static void addPltEntries(const ObjectFile *Obj,
     return;
   if (auto *ElfObj = dyn_cast<ELFObjectFileBase>(Obj)) {
     for (auto PltEntry : ElfObj->getPltAddresses()) {
-      SymbolRef Symbol(PltEntry.first, ElfObj);
-      uint8_t SymbolType = getElfSymbolType(Obj, Symbol);
-
-      StringRef Name = unwrapOrError(Symbol.getName(), Obj->getFileName());
-      if (!Name.empty())
-        AllSymbols[*Plt].emplace_back(
-            PltEntry.second, Saver.save((Name + "@plt").str()), SymbolType);
+      if (PltEntry.first) {
+        SymbolRef Symbol(*PltEntry.first, ElfObj);
+        uint8_t SymbolType = getElfSymbolType(Obj, Symbol);
+        if (Expected<StringRef> NameOrErr = Symbol.getName()) {
+          if (!NameOrErr->empty())
+            AllSymbols[*Plt].emplace_back(
+                PltEntry.second, Saver.save((*NameOrErr + "@plt").str()),
+                SymbolType);
+          continue;
+        } else {
+          // The warning has been reported in disassembleObject().
+          consumeError(NameOrErr.takeError());
+        }
+      }
+      reportWarning("PLT entry at 0x" + Twine::utohexstr(PltEntry.second) +
+                        " references an invalid symbol",
+                    Obj->getFileName());
     }
   }
 }
@@ -1089,37 +1513,31 @@ static char getMappingSymbolKind(ArrayRef<MappingSymbolPair> MappingSymbols,
   return (It - 1)->second;
 }
 
-static uint64_t
-dumpARMELFData(uint64_t SectionAddr, uint64_t Index, uint64_t End,
-               const ObjectFile *Obj, ArrayRef<uint8_t> Bytes,
-               ArrayRef<MappingSymbolPair> MappingSymbols) {
+static uint64_t dumpARMELFData(uint64_t SectionAddr, uint64_t Index,
+                               uint64_t End, const ObjectFile *Obj,
+                               ArrayRef<uint8_t> Bytes,
+                               ArrayRef<MappingSymbolPair> MappingSymbols,
+                               raw_ostream &OS) {
   support::endianness Endian =
       Obj->isLittleEndian() ? support::little : support::big;
-  while (Index < End) {
-    outs() << format("%8" PRIx64 ":", SectionAddr + Index);
-    outs() << "\t";
-    if (Index + 4 <= End) {
-      dumpBytes(Bytes.slice(Index, 4), outs());
-      outs() << "\t.word\t"
-             << format_hex(
-                    support::endian::read32(Bytes.data() + Index, Endian), 10);
-      Index += 4;
-    } else if (Index + 2 <= End) {
-      dumpBytes(Bytes.slice(Index, 2), outs());
-      outs() << "\t\t.short\t"
-             << format_hex(
-                    support::endian::read16(Bytes.data() + Index, Endian), 6);
-      Index += 2;
-    } else {
-      dumpBytes(Bytes.slice(Index, 1), outs());
-      outs() << "\t\t.byte\t" << format_hex(Bytes[0], 4);
-      ++Index;
-    }
-    outs() << "\n";
-    if (getMappingSymbolKind(MappingSymbols, Index) != 'd')
-      break;
+  OS << format("%8" PRIx64 ":\t", SectionAddr + Index);
+  if (Index + 4 <= End) {
+    dumpBytes(Bytes.slice(Index, 4), OS);
+    OS << "\t.word\t"
+           << format_hex(support::endian::read32(Bytes.data() + Index, Endian),
+                         10);
+    return 4;
   }
-  return Index;
+  if (Index + 2 <= End) {
+    dumpBytes(Bytes.slice(Index, 2), OS);
+    OS << "\t\t.short\t"
+           << format_hex(support::endian::read16(Bytes.data() + Index, Endian),
+                         6);
+    return 2;
+  }
+  dumpBytes(Bytes.slice(Index, 1), OS);
+  OS << "\t\t.byte\t" << format_hex(Bytes[0], 4);
+  return 1;
 }
 
 static void dumpELFData(uint64_t SectionAddr, uint64_t Index, uint64_t End,
@@ -1156,7 +1574,8 @@ static void dumpELFData(uint64_t SectionAddr, uint64_t Index, uint64_t End,
   }
 }
 
-SymbolInfoTy createSymbolInfo(const ObjectFile *Obj, const SymbolRef &Symbol) {
+SymbolInfoTy objdump::createSymbolInfo(const ObjectFile *Obj,
+                                       const SymbolRef &Symbol) {
   const StringRef FileName = Obj->getFileName();
   const uint64_t Addr = unwrapOrError(Symbol.getAddress(), FileName);
   const StringRef Name = unwrapOrError(Symbol.getName(), FileName);
@@ -1176,12 +1595,59 @@ SymbolInfoTy createSymbolInfo(const ObjectFile *Obj, const SymbolRef &Symbol) {
                                      : (uint8_t)ELF::STT_NOTYPE);
 }
 
-SymbolInfoTy createDummySymbolInfo(const ObjectFile *Obj, const uint64_t Addr,
-                                   StringRef &Name, uint8_t Type) {
+static SymbolInfoTy createDummySymbolInfo(const ObjectFile *Obj,
+                                          const uint64_t Addr, StringRef &Name,
+                                          uint8_t Type) {
   if (Obj->isXCOFF() && SymbolDescription)
     return SymbolInfoTy(Addr, Name, None, None, false);
   else
     return SymbolInfoTy(Addr, Name, Type);
+}
+
+static void
+collectLocalBranchTargets(ArrayRef<uint8_t> Bytes, const MCInstrAnalysis *MIA,
+                          MCDisassembler *DisAsm, MCInstPrinter *IP,
+                          const MCSubtargetInfo *STI, uint64_t SectionAddr,
+                          uint64_t Start, uint64_t End,
+                          std::unordered_map<uint64_t, std::string> &Labels) {
+  // So far only supports X86.
+  if (!STI->getTargetTriple().isX86())
+    return;
+
+  Labels.clear();
+  unsigned LabelCount = 0;
+  Start += SectionAddr;
+  End += SectionAddr;
+  uint64_t Index = Start;
+  while (Index < End) {
+    // Disassemble a real instruction and record function-local branch labels.
+    MCInst Inst;
+    uint64_t Size;
+    bool Disassembled = DisAsm->getInstruction(
+        Inst, Size, Bytes.slice(Index - SectionAddr), Index, nulls());
+    if (Size == 0)
+      Size = 1;
+
+    if (Disassembled && MIA) {
+      uint64_t Target;
+      bool TargetKnown = MIA->evaluateBranch(Inst, Index, Size, Target);
+      if (TargetKnown && (Target >= Start && Target < End) &&
+          !Labels.count(Target))
+        Labels[Target] = ("L" + Twine(LabelCount++)).str();
+    }
+
+    Index += Size;
+  }
+}
+
+static StringRef getSegmentName(const MachOObjectFile *MachO,
+                                const SectionRef &Section) {
+  if (MachO) {
+    DataRefImpl DR = Section.getRawDataRefImpl();
+    StringRef SegmentName = MachO->getSectionFinalSegmentName(DR);
+    return SegmentName;
+  }
+  return "";
 }
 
 static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
@@ -1210,8 +1676,12 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
   const StringRef FileName = Obj->getFileName();
   const MachOObjectFile *MachO = dyn_cast<const MachOObjectFile>(Obj);
   for (const SymbolRef &Symbol : Obj->symbols()) {
-    StringRef Name = unwrapOrError(Symbol.getName(), FileName);
-    if (Name.empty() && !(Obj->isXCOFF() && SymbolDescription))
+    Expected<StringRef> NameOrErr = Symbol.getName();
+    if (!NameOrErr) {
+      reportWarning(toString(NameOrErr.takeError()), FileName);
+      continue;
+    }
+    if (NameOrErr->empty() && !(Obj->isXCOFF() && SymbolDescription))
       continue;
 
     if (Obj->isELF() && getElfSymbolType(Obj, Symbol) == ELF::STT_SECTION)
@@ -1244,26 +1714,31 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
   addPltEntries(Obj, AllSymbols, Saver);
 
   // Create a mapping from virtual address to section. An empty section can
-  // cause more than one section at the same address. Use a stable sort to
-  // stabilize the output.
+  // cause more than one section at the same address. Sort such sections to be
+  // before same-addressed non-empty sections so that symbol lookups prefer the
+  // non-empty section.
   std::vector<std::pair<uint64_t, SectionRef>> SectionAddresses;
   for (SectionRef Sec : Obj->sections())
     SectionAddresses.emplace_back(Sec.getAddress(), Sec);
-  llvm::stable_sort(SectionAddresses, llvm::less_first());
+  llvm::stable_sort(SectionAddresses, [](const auto &LHS, const auto &RHS) {
+    if (LHS.first != RHS.first)
+      return LHS.first < RHS.first;
+    return LHS.second.getSize() < RHS.second.getSize();
+  });
 
   // Linked executables (.exe and .dll files) typically don't include a real
   // symbol table but they might contain an export table.
   if (const auto *COFFObj = dyn_cast<COFFObjectFile>(Obj)) {
     for (const auto &ExportEntry : COFFObj->export_directories()) {
       StringRef Name;
-      if (std::error_code EC = ExportEntry.getSymbolName(Name))
-        reportError(errorCodeToError(EC), Obj->getFileName());
+      if (Error E = ExportEntry.getSymbolName(Name))
+        reportError(std::move(E), Obj->getFileName());
       if (Name.empty())
         continue;
 
       uint32_t RVA;
-      if (std::error_code EC = ExportEntry.getExportRVA(RVA))
-        reportError(errorCodeToError(EC), Obj->getFileName());
+      if (Error E = ExportEntry.getExportRVA(RVA))
+        reportError(std::move(E), Obj->getFileName());
 
       uint64_t VA = COFFObj->getImageBase() + RVA;
       auto Sec = partition_point(
@@ -1283,8 +1758,19 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
   // the output.
   StringSet<> FoundDisasmSymbolSet;
   for (std::pair<const SectionRef, SectionSymbolsTy> &SecSyms : AllSymbols)
-    stable_sort(SecSyms.second);
-  stable_sort(AbsoluteSymbols);
+    llvm::stable_sort(SecSyms.second);
+  llvm::stable_sort(AbsoluteSymbols);
+
+  std::unique_ptr<DWARFContext> DICtx;
+  LiveVariablePrinter LVP(*Ctx.getRegisterInfo(), *STI);
+
+  if (DbgVariables != DVDisabled) {
+    DICtx = DWARFContext::create(*Obj);
+    for (const std::unique_ptr<DWARFUnit> &CU : DICtx->compile_units())
+      LVP.addCompileUnit(CU->getUnitDIE(false));
+  }
+
+  LLVM_DEBUG(LVP.dump());
 
   for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     if (FilterSections.empty() && !DisassembleAll &&
@@ -1328,12 +1814,7 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
       }
     }
 
-    StringRef SegmentName = "";
-    if (MachO) {
-      DataRefImpl DR = Section.getRawDataRefImpl();
-      SegmentName = MachO->getSectionFinalSegmentName(DR);
-    }
-
+    StringRef SegmentName = getSegmentName(MachO, Section);
     StringRef SectionName = unwrapOrError(Section.getName(), Obj->getFileName());
     // If the section has no symbol at the start, just insert a dummy one.
     if (Symbols.empty() || Symbols[0].Addr != 0) {
@@ -1394,30 +1875,12 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
         outs() << SectionName << ":\n";
       }
 
-      if (Obj->isELF() && Obj->getArch() == Triple::amdgcn) {
-        if (Symbols[SI].Type == ELF::STT_AMDGPU_HSA_KERNEL) {
-          // skip amd_kernel_code_t at the begining of kernel symbol (256 bytes)
-          Start += 256;
-        }
-        if (SI == SE - 1 ||
-            Symbols[SI + 1].Type == ELF::STT_AMDGPU_HSA_KERNEL) {
-          // cut trailing zeroes at the end of kernel
-          // cut up to 256 bytes
-          const uint64_t EndAlign = 256;
-          const auto Limit = End - (std::min)(EndAlign, End - Start);
-          while (End > Limit &&
-            *reinterpret_cast<const support::ulittle32_t*>(&Bytes[End - 4]) == 0)
-            End -= 4;
-        }
-      }
-
       outs() << '\n';
       if (!NoLeadingAddr)
         outs() << format(Is64Bits ? "%016" PRIx64 " " : "%08" PRIx64 " ",
                          SectionAddr + Start + VMAAdjustment);
       if (Obj->isXCOFF() && SymbolDescription) {
-        printXCOFFSymbolDescription(Symbols[SI], SymbolName);
-        outs() << ":\n";
+        outs() << getXCOFFSymbolDescription(Symbols[SI], SymbolName) << ":\n";
       } else
         outs() << '<' << SymbolName << ">:\n";
 
@@ -1428,10 +1891,37 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
         continue;
       }
 
-      // Some targets (like WebAssembly) have a special prelude at the start
-      // of each symbol.
-      DisAsm->onSymbolStart(SymbolName, Size, Bytes.slice(Start, End - Start),
-                            SectionAddr + Start, CommentStream);
+      auto Status = DisAsm->onSymbolStart(Symbols[SI], Size,
+                                          Bytes.slice(Start, End - Start),
+                                          SectionAddr + Start, CommentStream);
+      // To have round trippable disassembly, we fall back to decoding the
+      // remaining bytes as instructions.
+      //
+      // If there is a failure, we disassemble the failed region as bytes before
+      // falling back. The target is expected to print nothing in this case.
+      //
+      // If there is Success or SoftFail i.e no 'real' failure, we go ahead by
+      // Size bytes before falling back.
+      // So if the entire symbol is 'eaten' by the target:
+      //   Start += Size  // Now Start = End and we will never decode as
+      //                  // instructions
+      //
+      // Right now, most targets return None i.e ignore to treat a symbol
+      // separately. But WebAssembly decodes preludes for some symbols.
+      //
+      if (Status.hasValue()) {
+        if (Status.getValue() == MCDisassembler::Fail) {
+          outs() << "// Error in decoding " << SymbolName
+                 << " : Decoding failed region as bytes.\n";
+          for (uint64_t I = 0; I < Size; ++I) {
+            outs() << "\t.byte\t " << format_hex(Bytes[I], 1, /*Upper=*/true)
+                   << "\n";
+          }
+        }
+      } else {
+        Size = 0;
+      }
+
       Start += Size;
 
       Index = Start;
@@ -1452,119 +1942,175 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
       bool CheckARMELFData = hasMappingSymbols(Obj) &&
                              Symbols[SI].Type != ELF::STT_OBJECT &&
                              !DisassembleAll;
+      bool DumpARMELFData = false;
+      formatted_raw_ostream FOS(outs());
+
+      std::unordered_map<uint64_t, std::string> AllLabels;
+      if (SymbolizeOperands)
+        collectLocalBranchTargets(Bytes, MIA, DisAsm, IP, PrimarySTI,
+                                  SectionAddr, Index, End, AllLabels);
+
       while (Index < End) {
         // ARM and AArch64 ELF binaries can interleave data and text in the
         // same section. We rely on the markers introduced to understand what
         // we need to dump. If the data marker is within a function, it is
         // denoted as a word/short etc.
-        if (CheckARMELFData &&
-            getMappingSymbolKind(MappingSymbols, Index) == 'd') {
-          Index = dumpARMELFData(SectionAddr, Index, End, Obj, Bytes,
-                                 MappingSymbols);
-          continue;
-        }
-
-        // When -z or --disassemble-zeroes are given we always dissasemble
-        // them. Otherwise we might want to skip zero bytes we see.
-        if (!DisassembleZeroes) {
-          uint64_t MaxOffset = End - Index;
-          // For --reloc: print zero blocks patched by relocations, so that
-          // relocations can be shown in the dump.
-          if (RelCur != RelEnd)
-            MaxOffset = RelCur->getOffset() - Index;
-
-          if (size_t N =
-                  countSkippableZeroBytes(Bytes.slice(Index, MaxOffset))) {
-            outs() << "\t\t..." << '\n';
-            Index += N;
-            continue;
+        if (CheckARMELFData) {
+          char Kind = getMappingSymbolKind(MappingSymbols, Index);
+          DumpARMELFData = Kind == 'd';
+          if (SecondarySTI) {
+            if (Kind == 'a') {
+              STI = PrimaryIsThumb ? SecondarySTI : PrimarySTI;
+              DisAsm = PrimaryIsThumb ? SecondaryDisAsm : PrimaryDisAsm;
+            } else if (Kind == 't') {
+              STI = PrimaryIsThumb ? PrimarySTI : SecondarySTI;
+              DisAsm = PrimaryIsThumb ? PrimaryDisAsm : SecondaryDisAsm;
+            }
           }
         }
 
-        if (SecondarySTI) {
-          if (getMappingSymbolKind(MappingSymbols, Index) == 'a') {
-            STI = PrimaryIsThumb ? SecondarySTI : PrimarySTI;
-            DisAsm = PrimaryIsThumb ? SecondaryDisAsm : PrimaryDisAsm;
-          } else if (getMappingSymbolKind(MappingSymbols, Index) == 't') {
-            STI = PrimaryIsThumb ? PrimarySTI : SecondarySTI;
-            DisAsm = PrimaryIsThumb ? PrimaryDisAsm : SecondaryDisAsm;
+        if (DumpARMELFData) {
+          Size = dumpARMELFData(SectionAddr, Index, End, Obj, Bytes,
+                                MappingSymbols, FOS);
+        } else {
+          // When -z or --disassemble-zeroes are given we always dissasemble
+          // them. Otherwise we might want to skip zero bytes we see.
+          if (!DisassembleZeroes) {
+            uint64_t MaxOffset = End - Index;
+            // For --reloc: print zero blocks patched by relocations, so that
+            // relocations can be shown in the dump.
+            if (RelCur != RelEnd)
+              MaxOffset = RelCur->getOffset() - Index;
+
+            if (size_t N =
+                    countSkippableZeroBytes(Bytes.slice(Index, MaxOffset))) {
+              FOS << "\t\t..." << '\n';
+              Index += N;
+              continue;
+            }
           }
-        }
 
-        // Disassemble a real instruction or a data when disassemble all is
-        // provided
-        MCInst Inst;
-        bool Disassembled = DisAsm->getInstruction(
-            Inst, Size, Bytes.slice(Index), SectionAddr + Index, CommentStream);
-        if (Size == 0)
-          Size = 1;
+          // Print local label if there's any.
+          auto Iter = AllLabels.find(SectionAddr + Index);
+          if (Iter != AllLabels.end())
+            FOS << "<" << Iter->second << ">:\n";
 
-        PIP.printInst(*IP, Disassembled ? &Inst : nullptr,
-                      Bytes.slice(Index, Size),
-                      {SectionAddr + Index + VMAAdjustment, Section.getIndex()},
-                      outs(), "", *STI, &SP, Obj->getFileName(), &Rels);
-        outs() << CommentStream.str();
-        Comments.clear();
+          // Disassemble a real instruction or a data when disassemble all is
+          // provided
+          MCInst Inst;
+          bool Disassembled =
+              DisAsm->getInstruction(Inst, Size, Bytes.slice(Index),
+                                     SectionAddr + Index, CommentStream);
+          if (Size == 0)
+            Size = 1;
 
-        // If disassembly has failed, avoid analysing invalid/incomplete
-        // instruction information. Otherwise, try to resolve the target of a
-        // call, tail call, etc. to a specific symbol.
-        if (Disassembled && MIA &&
-            (MIA->isCall(Inst) || MIA->isUnconditionalBranch(Inst) ||
-             MIA->isConditionalBranch(Inst))) {
-          uint64_t Target;
-          if (MIA->evaluateBranch(Inst, SectionAddr + Index, Size, Target)) {
-            // In a relocatable object, the target's section must reside in
-            // the same section as the call instruction or it is accessed
-            // through a relocation.
-            //
-            // In a non-relocatable object, the target may be in any section.
-            //
-            // N.B. We don't walk the relocations in the relocatable case yet.
-            auto *TargetSectionSymbols = &Symbols;
-            if (!Obj->isRelocatableObject()) {
-              auto It = partition_point(
-                  SectionAddresses,
-                  [=](const std::pair<uint64_t, SectionRef> &O) {
-                    return O.first <= Target;
-                  });
-              if (It != SectionAddresses.begin()) {
-                --It;
-                TargetSectionSymbols = &AllSymbols[It->second];
+          LVP.update({Index, Section.getIndex()},
+                     {Index + Size, Section.getIndex()}, Index + Size != End);
+
+          PIP.printInst(
+              *IP, Disassembled ? &Inst : nullptr, Bytes.slice(Index, Size),
+              {SectionAddr + Index + VMAAdjustment, Section.getIndex()}, FOS,
+              "", *STI, &SP, Obj->getFileName(), &Rels, LVP);
+          FOS << CommentStream.str();
+          Comments.clear();
+
+          // If disassembly has failed, avoid analysing invalid/incomplete
+          // instruction information. Otherwise, try to resolve the target
+          // address (jump target or memory operand address) and print it on the
+          // right of the instruction.
+          if (Disassembled && MIA) {
+            uint64_t Target;
+            bool PrintTarget =
+                MIA->evaluateBranch(Inst, SectionAddr + Index, Size, Target);
+            if (!PrintTarget)
+              if (Optional<uint64_t> MaybeTarget =
+                      MIA->evaluateMemoryOperandAddress(
+                          Inst, SectionAddr + Index, Size)) {
+                Target = *MaybeTarget;
+                PrintTarget = true;
+                // Do not print real address when symbolizing.
+                if (!SymbolizeOperands)
+                  FOS << "  # " << Twine::utohexstr(Target);
+              }
+            if (PrintTarget) {
+              // In a relocatable object, the target's section must reside in
+              // the same section as the call instruction or it is accessed
+              // through a relocation.
+              //
+              // In a non-relocatable object, the target may be in any section.
+              // In that case, locate the section(s) containing the target
+              // address and find the symbol in one of those, if possible.
+              //
+              // N.B. We don't walk the relocations in the relocatable case yet.
+              std::vector<const SectionSymbolsTy *> TargetSectionSymbols;
+              if (!Obj->isRelocatableObject()) {
+                auto It = llvm::partition_point(
+                    SectionAddresses,
+                    [=](const std::pair<uint64_t, SectionRef> &O) {
+                      return O.first <= Target;
+                    });
+                uint64_t TargetSecAddr = 0;
+                while (It != SectionAddresses.begin()) {
+                  --It;
+                  if (TargetSecAddr == 0)
+                    TargetSecAddr = It->first;
+                  if (It->first != TargetSecAddr)
+                    break;
+                  TargetSectionSymbols.push_back(&AllSymbols[It->second]);
+                }
               } else {
-                TargetSectionSymbols = &AbsoluteSymbols;
+                TargetSectionSymbols.push_back(&Symbols);
+              }
+              TargetSectionSymbols.push_back(&AbsoluteSymbols);
+
+              // Find the last symbol in the first candidate section whose
+              // offset is less than or equal to the target. If there are no
+              // such symbols, try in the next section and so on, before finally
+              // using the nearest preceding absolute symbol (if any), if there
+              // are no other valid symbols.
+              const SymbolInfoTy *TargetSym = nullptr;
+              for (const SectionSymbolsTy *TargetSymbols :
+                   TargetSectionSymbols) {
+                auto It = llvm::partition_point(
+                    *TargetSymbols,
+                    [=](const SymbolInfoTy &O) { return O.Addr <= Target; });
+                if (It != TargetSymbols->begin()) {
+                  TargetSym = &*(It - 1);
+                  break;
+                }
+              }
+
+              // Print the labels corresponding to the target if there's any.
+              bool LabelAvailable = AllLabels.count(Target);
+              if (TargetSym != nullptr) {
+                uint64_t TargetAddress = TargetSym->Addr;
+                uint64_t Disp = Target - TargetAddress;
+                std::string TargetName = TargetSym->Name.str();
+                if (Demangle)
+                  TargetName = demangle(TargetName);
+
+                FOS << " <";
+                if (!Disp) {
+                  // Always Print the binary symbol precisely corresponding to
+                  // the target address.
+                  FOS << TargetName;
+                } else if (!LabelAvailable) {
+                  // Always Print the binary symbol plus an offset if there's no
+                  // local label corresponding to the target address.
+                  FOS << TargetName << "+0x" << Twine::utohexstr(Disp);
+                } else {
+                  FOS << AllLabels[Target];
+                }
+                FOS << ">";
+              } else if (LabelAvailable) {
+                FOS << " <" << AllLabels[Target] << ">";
               }
             }
-
-            // Find the last symbol in the section whose offset is less than
-            // or equal to the target. If there isn't a section that contains
-            // the target, find the nearest preceding absolute symbol.
-            auto TargetSym = partition_point(
-                *TargetSectionSymbols,
-                [=](const SymbolInfoTy &O) {
-                  return O.Addr <= Target;
-                });
-            if (TargetSym == TargetSectionSymbols->begin()) {
-              TargetSectionSymbols = &AbsoluteSymbols;
-              TargetSym = partition_point(
-                  AbsoluteSymbols,
-                  [=](const SymbolInfoTy &O) {
-                    return O.Addr <= Target;
-                  });
-            }
-            if (TargetSym != TargetSectionSymbols->begin()) {
-              --TargetSym;
-              uint64_t TargetAddress = TargetSym->Addr;
-              StringRef TargetName = TargetSym->Name;
-              outs() << " <" << TargetName;
-              uint64_t Disp = Target - TargetAddress;
-              if (Disp)
-                outs() << "+0x" << Twine::utohexstr(Disp);
-              outs() << '>';
-            }
           }
         }
-        outs() << "\n";
+
+        LVP.printAfterInst(FOS);
+        FOS << "\n";
 
         // Hexagon does this in pretty printer
         if (Obj->getArch() != Triple::hexagon) {
@@ -1594,8 +2140,9 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
                 Offset += AdjustVMA;
             }
 
-            printRelocation(Obj->getFileName(), *RelCur, SectionAddr + Offset,
-                            Is64Bits);
+            printRelocation(FOS, Obj->getFileName(), *RelCur,
+                            SectionAddr + Offset, Is64Bits);
+            LVP.printAfterOtherLine(FOS, true);
             ++RelCur;
           }
         }
@@ -1632,6 +2179,10 @@ static void disassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
   if (!AsmInfo)
     reportError(Obj->getFileName(),
                 "no assembly info for target " + TripleName);
+
+  if (MCPU.empty())
+    MCPU = Obj->tryGetCPUName().getValueOr("").str();
+
   std::unique_ptr<const MCSubtargetInfo> STI(
       TheTarget->createMCSubtargetInfo(TripleName, MCPU, Features.getString()));
   if (!STI)
@@ -1678,6 +2229,8 @@ static void disassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
                 "no instruction printer for target " + TripleName);
   IP->setPrintImmHex(PrintImmHex);
   IP->setPrintBranchImmAsAddress(true);
+  IP->setSymbolizeOperands(SymbolizeOperands);
+  IP->setMCInstrAnalysis(MIA.get());
 
   PrettyPrinter &PIP = selectPrettyPrinter(Triple(TripleName));
   SourcePrinter SP(Obj, TheTarget->getName());
@@ -1692,7 +2245,7 @@ static void disassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
                     SP, InlineRelocs);
 }
 
-void printRelocations(const ObjectFile *Obj) {
+void objdump::printRelocations(const ObjectFile *Obj) {
   StringRef Fmt = Obj->getBytesInAddress() > 4 ? "%016" PRIx64 :
                                                  "%08" PRIx64;
   // Regular objdump doesn't print relocations in non-relocatable object
@@ -1746,7 +2299,7 @@ void printRelocations(const ObjectFile *Obj) {
   }
 }
 
-void printDynamicRelocations(const ObjectFile *Obj) {
+void objdump::printDynamicRelocations(const ObjectFile *Obj) {
   // For the moment, this option is for ELF only
   if (!Obj->isELF())
     return;
@@ -1798,7 +2351,7 @@ static size_t getMaxSectionNameWidth(const ObjectFile *Obj) {
   return MaxWidth;
 }
 
-void printSectionHeaders(const ObjectFile *Obj) {
+void objdump::printSectionHeaders(const ObjectFile *Obj) {
   size_t NameWidth = getMaxSectionNameWidth(Obj);
   size_t AddressWidth = 2 * Obj->getBytesInAddress();
   bool HasLMAColumn = shouldDisplayLMA(Obj);
@@ -1843,7 +2396,9 @@ void printSectionHeaders(const ObjectFile *Obj) {
   outs() << "\n";
 }
 
-void printSectionContents(const ObjectFile *Obj) {
+void objdump::printSectionContents(const ObjectFile *Obj) {
+  const MachOObjectFile *MachO = dyn_cast<const MachOObjectFile>(Obj);
+
   for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     StringRef Name = unwrapOrError(Section.getName(), Obj->getFileName());
     uint64_t BaseAddr = Section.getAddress();
@@ -1851,7 +2406,11 @@ void printSectionContents(const ObjectFile *Obj) {
     if (!Size)
       continue;
 
-    outs() << "Contents of section " << Name << ":\n";
+    outs() << "Contents of section ";
+    StringRef SegmentName = getSegmentName(MachO, Section);
+    if (!SegmentName.empty())
+      outs() << SegmentName << ",";
+    outs() << Name << ":\n";
     if (Section.isBSS()) {
       outs() << format("<skipping contents of bss section at [%04" PRIx64
                        ", %04" PRIx64 ")>\n",
@@ -1887,8 +2446,8 @@ void printSectionContents(const ObjectFile *Obj) {
   }
 }
 
-void printSymbolTable(const ObjectFile *O, StringRef ArchiveName,
-                      StringRef ArchitectureName, bool DumpDynamic) {
+void objdump::printSymbolTable(const ObjectFile *O, StringRef ArchiveName,
+                               StringRef ArchitectureName, bool DumpDynamic) {
   if (O->isCOFF() && !DumpDynamic) {
     outs() << "SYMBOL TABLE:\n";
     printCOFFSymbolTable(cast<const COFFObjectFile>(O));
@@ -1918,9 +2477,9 @@ void printSymbolTable(const ObjectFile *O, StringRef ArchiveName,
     printSymbol(O, *I, FileName, ArchiveName, ArchitectureName, DumpDynamic);
 }
 
-void printSymbol(const ObjectFile *O, const SymbolRef &Symbol,
-                 StringRef FileName, StringRef ArchiveName,
-                 StringRef ArchitectureName, bool DumpDynamic) {
+void objdump::printSymbol(const ObjectFile *O, const SymbolRef &Symbol,
+                          StringRef FileName, StringRef ArchiveName,
+                          StringRef ArchitectureName, bool DumpDynamic) {
   const MachOObjectFile *MachO = dyn_cast<const MachOObjectFile>(O);
   uint64_t Address = unwrapOrError(Symbol.getAddress(), FileName, ArchiveName,
                                    ArchitectureName);
@@ -1928,7 +2487,8 @@ void printSymbol(const ObjectFile *O, const SymbolRef &Symbol,
     return;
   SymbolRef::Type Type =
       unwrapOrError(Symbol.getType(), FileName, ArchiveName, ArchitectureName);
-  uint32_t Flags = Symbol.getFlags();
+  uint32_t Flags =
+      unwrapOrError(Symbol.getFlags(), FileName, ArchiveName, ArchitectureName);
 
   // Don't ask a Mach-O STAB symbol for its section unless you know that
   // STAB symbol's section field refers to a valid section index. Otherwise
@@ -2008,11 +2568,9 @@ void printSymbol(const ObjectFile *O, const SymbolRef &Symbol,
   } else if (Section == O->section_end()) {
     outs() << "*UND*";
   } else {
-    if (MachO) {
-      DataRefImpl DR = Section->getRawDataRefImpl();
-      StringRef SegmentName = MachO->getSectionFinalSegmentName(DR);
+    StringRef SegmentName = getSegmentName(MachO, *Section);
+    if (!SegmentName.empty())
       outs() << SegmentName << ",";
-    }
     StringRef SectionName = unwrapOrError(Section->getName(), FileName);
     outs() << SectionName;
   }
@@ -2067,7 +2625,7 @@ static void printUnwindInfo(const ObjectFile *O) {
 
 /// Dump the raw contents of the __clangast section so the output can be piped
 /// into llvm-bcanalyzer.
-void printRawClangAST(const ObjectFile *Obj) {
+static void printRawClangAST(const ObjectFile *Obj) {
   if (outs().is_displayed()) {
     WithColor::error(errs(), ToolName)
         << "The -raw-clang-ast option will dump the raw binary contents of "
@@ -2396,7 +2954,6 @@ static void dumpInput(StringRef file) {
   else
     reportError(errorCodeToError(object_error::invalid_file_type), file);
 }
-} // namespace llvm
 
 int main(int argc, char **argv) {
   using namespace llvm;
@@ -2424,6 +2981,10 @@ int main(int argc, char **argv) {
   // Defaults to a.out if no filenames specified.
   if (InputFilenames.empty())
     InputFilenames.push_back("a.out");
+
+  // Removes trailing separators from prefix.
+  while (!Prefix.empty() && sys::path::is_separator(Prefix.back()))
+    Prefix.pop_back();
 
   if (AllHeaders)
     ArchiveHeaders = FileHeaders = PrivateHeaders = Relocations =

@@ -33,7 +33,7 @@
  * compatible, thus CINDEX_VERSION_MAJOR is expected to remain stable.
  */
 #define CINDEX_VERSION_MAJOR 0
-#define CINDEX_VERSION_MINOR 59
+#define CINDEX_VERSION_MINOR 61
 
 #define CINDEX_VERSION_ENCODE(major, minor) (((major)*10000) + ((minor)*1))
 
@@ -2163,7 +2163,7 @@ enum CXCursorKind {
    */
   CXCursor_ObjCSelfExpr = 146,
 
-  /** OpenMP 4.0 [2.4, Array Section].
+  /** OpenMP 5.0 [2.1.5, Array Section].
    */
   CXCursor_OMPArraySectionExpr = 147,
 
@@ -2185,7 +2185,11 @@ enum CXCursorKind {
    */
   CXCursor_OMPIteratorExpr = 151,
 
-  CXCursor_LastExpr = CXCursor_OMPIteratorExpr,
+  /** OpenCL's addrspace_cast<> expression.
+   */
+  CXCursor_CXXAddrspaceCastExpr = 152,
+
+  CXCursor_LastExpr = CXCursor_CXXAddrspaceCastExpr,
 
   /* Statements */
   CXCursor_FirstStmt = 200,
@@ -2937,6 +2941,26 @@ CINDEX_LINKAGE void
 clang_disposeCXPlatformAvailability(CXPlatformAvailability *availability);
 
 /**
+ * If cursor refers to a variable declaration and it has initializer returns
+ * cursor referring to the initializer otherwise return null cursor.
+ */
+CINDEX_LINKAGE CXCursor clang_Cursor_getVarDeclInitializer(CXCursor cursor);
+
+/**
+ * If cursor refers to a variable declaration that has global storage returns 1.
+ * If cursor refers to a variable declaration that doesn't have global storage
+ * returns 0. Otherwise returns -1.
+ */
+CINDEX_LINKAGE int clang_Cursor_hasVarDeclGlobalStorage(CXCursor cursor);
+
+/**
+ * If cursor refers to a variable declaration that has external storage
+ * returns 1. If cursor refers to a variable declaration that doesn't have
+ * external storage returns 0. Otherwise returns -1.
+ */
+CINDEX_LINKAGE int clang_Cursor_hasVarDeclExternalStorage(CXCursor cursor);
+
+/**
  * Describe the "language" of the entity referred to by a cursor.
  */
 enum CXLanguageKind {
@@ -3249,8 +3273,9 @@ enum CXTypeKind {
   CXType_UShortAccum = 36,
   CXType_UAccum = 37,
   CXType_ULongAccum = 38,
+  CXType_BFloat16 = 39,
   CXType_FirstBuiltin = CXType_Void,
-  CXType_LastBuiltin = CXType_ULongAccum,
+  CXType_LastBuiltin = CXType_BFloat16,
 
   CXType_Complex = 100,
   CXType_Pointer = 101,
@@ -3342,7 +3367,8 @@ enum CXTypeKind {
 
   CXType_OCLIntelSubgroupAVCImeDualRefStreamin = 175,
 
-  CXType_ExtVector = 176
+  CXType_ExtVector = 176,
+  CXType_Atomic = 177
 };
 
 /**
@@ -3835,7 +3861,15 @@ enum CXTypeNullabilityKind {
   /**
    * Nullability is not applicable to this type.
    */
-  CXTypeNullability_Invalid = 3
+  CXTypeNullability_Invalid = 3,
+
+  /**
+   * Generally behaves like Nullable, except when used in a block parameter that
+   * was imported into a swift async method. There, swift will assume that the
+   * parameter can get null even if no error occured. _Nullable parameters are
+   * assumed to only get null on error.
+   */
+  CXTypeNullability_NullableResult = 4
 };
 
 /**
@@ -3931,6 +3965,13 @@ CINDEX_LINKAGE long long clang_Type_getOffsetOf(CXType T, const char *S);
  * If the type is not an attributed type, an invalid type is returned.
  */
 CINDEX_LINKAGE CXType clang_Type_getModifiedType(CXType T);
+
+/**
+ * Gets the type contained by this atomic type.
+ *
+ * If a non-atomic type is passed in, an invalid type is returned.
+ */
+CINDEX_LINKAGE CXType clang_Type_getValueType(CXType CT);
 
 /**
  * Return the offset of the field represented by the Cursor.
@@ -5921,6 +5962,7 @@ typedef void *CXEvalResult;
  * If cursor is a statement declaration tries to evaluate the
  * statement and if its variable, tries to evaluate its initializer,
  * into its corresponding type.
+ * If it's an expression, tries to evaluate the expression.
  */
 CINDEX_LINKAGE CXEvalResult clang_Cursor_Evaluate(CXCursor C);
 

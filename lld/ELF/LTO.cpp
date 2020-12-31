@@ -41,9 +41,8 @@
 using namespace llvm;
 using namespace llvm::object;
 using namespace llvm::ELF;
-
-namespace lld {
-namespace elf {
+using namespace lld;
+using namespace lld::elf;
 
 // Creates an empty file to store a list of object files for final
 // linking of distributed ThinLTO.
@@ -56,6 +55,19 @@ static std::unique_ptr<raw_fd_ostream> openFile(StringRef file) {
     return nullptr;
   }
   return ret;
+}
+
+// The merged bitcode after LTO is large. Try openning a file stream that
+// supports reading, seeking and writing. Such a file allows BitcodeWriter to
+// flush buffered data to reduce memory comsuption. If this fails, open a file
+// stream that supports only write.
+static std::unique_ptr<raw_fd_ostream> openLTOOutputFile(StringRef file) {
+  std::error_code ec;
+  std::unique_ptr<raw_fd_ostream> fs =
+      std::make_unique<raw_fd_stream>(file, ec);
+  if (!ec)
+    return fs;
+  return openFile(file);
 }
 
 static std::string getThinLTOOutputFile(StringRef modulePath) {
@@ -77,9 +89,9 @@ static lto::Config createConfig() {
   c.Options.DataSections = true;
 
   // Check if basic block sections must be used.
-  // Allowed values for --lto-basicblock-sections are "all", "labels",
+  // Allowed values for --lto-basic-block-sections are "all", "labels",
   // "<file name specifying basic block ids>", or none.  This is the equivalent
-  // of -fbasicblock-sections= flag in clang.
+  // of -fbasic-block-sections= flag in clang.
   if (!config->ltoBasicBlockSections.empty()) {
     if (config->ltoBasicBlockSections == "all") {
       c.Options.BBSections = BasicBlockSection::All;
@@ -100,7 +112,8 @@ static lto::Config createConfig() {
     }
   }
 
-  c.Options.UniqueBBSectionNames = config->ltoUniqueBBSectionNames;
+  c.Options.UniqueBasicBlockSectionNames =
+      config->ltoUniqueBasicBlockSectionNames;
 
   if (auto relocModel = getRelocModelFromCMModel())
     c.RelocModel = *relocModel;
@@ -130,6 +143,7 @@ static lto::Config createConfig() {
   c.RemarksFilename = std::string(config->optRemarksFilename);
   c.RemarksPasses = std::string(config->optRemarksPasses);
   c.RemarksWithHotness = config->optRemarksWithHotness;
+  c.RemarksHotnessThreshold = config->optRemarksHotnessThreshold;
   c.RemarksFormat = std::string(config->optRemarksFormat);
 
   c.SampleProfile = std::string(config->ltoSampleProfile);
@@ -138,6 +152,10 @@ static lto::Config createConfig() {
   c.DwoDir = std::string(config->dwoDir);
 
   c.HasWholeProgramVisibility = config->ltoWholeProgramVisibility;
+  c.AlwaysEmitRegularLTOObj = !config->ltoObjPath.empty();
+
+  for (const llvm::StringRef &name : config->thinLTOModulesToCompile)
+    c.ThinLTOModulesToCompile.emplace_back(name);
 
   c.TimeTraceEnabled = config->timeTraceEnabled;
   c.TimeTraceGranularity = config->timeTraceGranularity;
@@ -147,11 +165,15 @@ static lto::Config createConfig() {
 
   if (config->emitLLVM) {
     c.PostInternalizeModuleHook = [](size_t task, const Module &m) {
-      if (std::unique_ptr<raw_fd_ostream> os = openFile(config->outputFile))
+      if (std::unique_ptr<raw_fd_ostream> os =
+              openLTOOutputFile(config->outputFile))
         WriteBitcodeToFile(m, *os, false);
       return false;
     };
   }
+
+  if (config->ltoEmitAsm)
+    c.CGFileType = CGFT_AssemblyFile;
 
   if (config->saveTemps)
     checkError(c.addSaveTemps(config->outputFile.str() + ".",
@@ -251,7 +273,7 @@ void BitcodeCompiler::add(BitcodeFile &f) {
 // distributed build system that depends on that behavior.
 static void thinLTOCreateEmptyIndexFiles() {
   for (LazyObjFile *f : lazyObjFiles) {
-    if (!isBitcode(f->mb))
+    if (f->fetched || !isBitcode(f->mb))
       continue;
     std::string path = replaceThinLTOSuffix(getThinLTOOutputFile(f->getName()));
     std::unique_ptr<raw_fd_ostream> os = openFile(path + ".thinlto.bc");
@@ -292,12 +314,14 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
         },
         cache));
 
-  // Emit empty index files for non-indexed files
-  for (StringRef s : thinIndices) {
-    std::string path = getThinLTOOutputFile(s);
-    openFile(path + ".thinlto.bc");
-    if (config->thinLTOEmitImportsFiles)
-      openFile(path + ".imports");
+  // Emit empty index files for non-indexed files but not in single-module mode.
+  if (config->thinLTOModulesToCompile.empty()) {
+    for (StringRef s : thinIndices) {
+      std::string path = getThinLTOOutputFile(s);
+      openFile(path + ".thinlto.bc");
+      if (config->thinLTOEmitImportsFiles)
+        openFile(path + ".imports");
+    }
   }
 
   if (config->thinLTOIndexOnly) {
@@ -324,9 +348,17 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
   }
 
   if (config->saveTemps) {
-    saveBuffer(buf[0], config->outputFile + ".lto.o");
+    if (!buf[0].empty())
+      saveBuffer(buf[0], config->outputFile + ".lto.o");
     for (unsigned i = 1; i != maxTasks; ++i)
       saveBuffer(buf[i], config->outputFile + Twine(i) + ".lto.o");
+  }
+
+  if (config->ltoEmitAsm) {
+    saveBuffer(buf[0], config->outputFile);
+    for (unsigned i = 1; i != maxTasks; ++i)
+      saveBuffer(buf[i], config->outputFile + Twine(i));
+    return {};
   }
 
   std::vector<InputFile *> ret;
@@ -339,6 +371,3 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
       ret.push_back(createObjectFile(*file));
   return ret;
 }
-
-} // namespace elf
-} // namespace lld

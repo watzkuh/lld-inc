@@ -1,4 +1,4 @@
-! RUN: %B/test/Semantics/test_errors.sh %s %flang %t
+! RUN: %S/test_errors.sh %s %t %f18
 ! Forward references to derived types (error cases)
 ! C732 A parent-type-name shall be the name of a previously defined
 ! extensible type (7.5.7).
@@ -68,5 +68,14 @@ end subroutine
 subroutine s7(x)
   !ERROR: Derived type 'undef' not found
   type, extends(undef) :: t
+  end type
+end subroutine
+
+subroutine s8
+  implicit type(t2)(x)
+  !ERROR: Cannot construct value for derived type 't2' before it is defined
+  parameter(y=t2(12.3))
+  type t2
+    real :: c
   end type
 end subroutine

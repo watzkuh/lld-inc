@@ -23,6 +23,105 @@
 
 using namespace llvm;
 
+// For now we use x18, a.k.a s2, as pointer to shadow call stack.
+// User should explicitly set -ffixed-x18 and not use x18 in their asm.
+static void emitSCSPrologue(MachineFunction &MF, MachineBasicBlock &MBB,
+                            MachineBasicBlock::iterator MI,
+                            const DebugLoc &DL) {
+  if (!MF.getFunction().hasFnAttribute(Attribute::ShadowCallStack))
+    return;
+
+  const auto &STI = MF.getSubtarget<RISCVSubtarget>();
+  Register RAReg = STI.getRegisterInfo()->getRARegister();
+
+  // Do not save RA to the SCS if it's not saved to the regular stack,
+  // i.e. RA is not at risk of being overwritten.
+  std::vector<CalleeSavedInfo> &CSI = MF.getFrameInfo().getCalleeSavedInfo();
+  if (std::none_of(CSI.begin(), CSI.end(),
+                   [&](CalleeSavedInfo &CSR) { return CSR.getReg() == RAReg; }))
+    return;
+
+  Register SCSPReg = RISCVABI::getSCSPReg();
+
+  auto &Ctx = MF.getFunction().getContext();
+  if (!STI.isRegisterReservedByUser(SCSPReg)) {
+    Ctx.diagnose(DiagnosticInfoUnsupported{
+        MF.getFunction(), "x18 not reserved by user for Shadow Call Stack."});
+    return;
+  }
+
+  const auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
+  if (RVFI->useSaveRestoreLibCalls(MF)) {
+    Ctx.diagnose(DiagnosticInfoUnsupported{
+        MF.getFunction(),
+        "Shadow Call Stack cannot be combined with Save/Restore LibCalls."});
+    return;
+  }
+
+  const RISCVInstrInfo *TII = STI.getInstrInfo();
+  bool IsRV64 = STI.hasFeature(RISCV::Feature64Bit);
+  int64_t SlotSize = STI.getXLen() / 8;
+  // Store return address to shadow call stack
+  // s[w|d]  ra, 0(s2)
+  // addi    s2, s2, [4|8]
+  BuildMI(MBB, MI, DL, TII->get(IsRV64 ? RISCV::SD : RISCV::SW))
+      .addReg(RAReg)
+      .addReg(SCSPReg)
+      .addImm(0);
+  BuildMI(MBB, MI, DL, TII->get(RISCV::ADDI))
+      .addReg(SCSPReg, RegState::Define)
+      .addReg(SCSPReg)
+      .addImm(SlotSize);
+}
+
+static void emitSCSEpilogue(MachineFunction &MF, MachineBasicBlock &MBB,
+                            MachineBasicBlock::iterator MI,
+                            const DebugLoc &DL) {
+  if (!MF.getFunction().hasFnAttribute(Attribute::ShadowCallStack))
+    return;
+
+  const auto &STI = MF.getSubtarget<RISCVSubtarget>();
+  Register RAReg = STI.getRegisterInfo()->getRARegister();
+
+  // See emitSCSPrologue() above.
+  std::vector<CalleeSavedInfo> &CSI = MF.getFrameInfo().getCalleeSavedInfo();
+  if (std::none_of(CSI.begin(), CSI.end(),
+                   [&](CalleeSavedInfo &CSR) { return CSR.getReg() == RAReg; }))
+    return;
+
+  Register SCSPReg = RISCVABI::getSCSPReg();
+
+  auto &Ctx = MF.getFunction().getContext();
+  if (!STI.isRegisterReservedByUser(SCSPReg)) {
+    Ctx.diagnose(DiagnosticInfoUnsupported{
+        MF.getFunction(), "x18 not reserved by user for Shadow Call Stack."});
+    return;
+  }
+
+  const auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
+  if (RVFI->useSaveRestoreLibCalls(MF)) {
+    Ctx.diagnose(DiagnosticInfoUnsupported{
+        MF.getFunction(),
+        "Shadow Call Stack cannot be combined with Save/Restore LibCalls."});
+    return;
+  }
+
+  const RISCVInstrInfo *TII = STI.getInstrInfo();
+  bool IsRV64 = STI.hasFeature(RISCV::Feature64Bit);
+  int64_t SlotSize = STI.getXLen() / 8;
+  // Load return address from shadow call stack
+  // l[w|d]  ra, -[4|8](s2)
+  // addi    s2, s2, -[4|8]
+  BuildMI(MBB, MI, DL, TII->get(IsRV64 ? RISCV::LD : RISCV::LW))
+      .addReg(RAReg, RegState::Define)
+      .addReg(SCSPReg)
+      .addImm(-SlotSize);
+  BuildMI(MBB, MI, DL, TII->get(RISCV::ADDI))
+      .addReg(SCSPReg, RegState::Define)
+      .addReg(SCSPReg)
+      .addImm(-SlotSize);
+}
+
 // Get the ID of the libcall used for spilling and restoring callee saved
 // registers. The ID is representative of the number of registers saved or
 // restored by the libcall, except it is zero-indexed - ID 0 corresponds to a
@@ -31,7 +130,7 @@ static int getLibCallID(const MachineFunction &MF,
                         const std::vector<CalleeSavedInfo> &CSI) {
   const auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
 
-  if (CSI.empty() || !RVFI->useSaveRestoreLibCalls())
+  if (CSI.empty() || !RVFI->useSaveRestoreLibCalls(MF))
     return -1;
 
   Register MaxReg = RISCV::NoRegister;
@@ -222,14 +321,22 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
   Register SPReg = getSPReg(STI);
   Register BPReg = RISCVABI::getBPReg();
 
+  // Debug location must be unknown since the first debug location is used
+  // to determine the end of the prologue.
+  DebugLoc DL;
+
+  // All calls are tail calls in GHC calling conv, and functions have no
+  // prologue/epilogue.
+  if (MF.getFunction().getCallingConv() == CallingConv::GHC)
+    return;
+
+  // Emit prologue for shadow call stack.
+  emitSCSPrologue(MF, MBB, MBBI, DL);
+
   // Since spillCalleeSavedRegisters may have inserted a libcall, skip past
   // any instructions marked as FrameSetup
   while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
     ++MBBI;
-
-  // Debug location must be unknown since the first debug location is used
-  // to determine the end of the prologue.
-  DebugLoc DL;
 
   // Determine the correct frame layout
   determineFrameLayout(MF);
@@ -286,7 +393,7 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
 
   // Emit ".cfi_def_cfa_offset RealStackSize"
   unsigned CFIIndex = MF.addFrameInst(
-      MCCFIInstruction::createDefCfaOffset(nullptr, -RealStackSize));
+      MCCFIInstruction::cfiDefCfaOffset(nullptr, RealStackSize));
   BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::CFI_INSTRUCTION))
       .addCFIIndex(CFIIndex);
 
@@ -329,9 +436,9 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
               RealStackSize - RVFI->getVarArgsSaveSize(),
               MachineInstr::FrameSetup);
 
-    // Emit ".cfi_def_cfa $fp, -RVFI->getVarArgsSaveSize()"
-    unsigned CFIIndex = MF.addFrameInst(MCCFIInstruction::createDefCfa(
-        nullptr, RI->getDwarfRegNum(FPReg, true), -RVFI->getVarArgsSaveSize()));
+    // Emit ".cfi_def_cfa $fp, RVFI->getVarArgsSaveSize()"
+    unsigned CFIIndex = MF.addFrameInst(MCCFIInstruction::cfiDefCfa(
+        nullptr, RI->getDwarfRegNum(FPReg, true), RVFI->getVarArgsSaveSize()));
     BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::CFI_INSTRUCTION))
         .addCFIIndex(CFIIndex);
   }
@@ -349,7 +456,7 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
     if (!hasFP(MF)) {
       // Emit ".cfi_def_cfa_offset StackSize"
       unsigned CFIIndex = MF.addFrameInst(
-          MCCFIInstruction::createDefCfaOffset(nullptr, -MFI.getStackSize()));
+          MCCFIInstruction::cfiDefCfaOffset(nullptr, MFI.getStackSize()));
       BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::CFI_INSTRUCTION))
           .addCFIIndex(CFIIndex);
     }
@@ -397,6 +504,11 @@ void RISCVFrameLowering::emitEpilogue(MachineFunction &MF,
   auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
   Register FPReg = getFPReg(STI);
   Register SPReg = getSPReg(STI);
+
+  // All calls are tail calls in GHC calling conv, and functions have no
+  // prologue/epilogue.
+  if (MF.getFunction().getCallingConv() == CallingConv::GHC)
+    return;
 
   // Get the insert location for the epilogue. If there were no terminators in
   // the block, get the last instruction.
@@ -457,11 +569,14 @@ void RISCVFrameLowering::emitEpilogue(MachineFunction &MF,
 
   // Deallocate stack
   adjustReg(MBB, MBBI, DL, SPReg, SPReg, StackSize, MachineInstr::FrameDestroy);
+
+  // Emit epilogue for shadow call stack.
+  emitSCSEpilogue(MF, MBB, MBBI, DL);
 }
 
-int RISCVFrameLowering::getFrameIndexReference(const MachineFunction &MF,
-                                               int FI,
-                                               Register &FrameReg) const {
+StackOffset
+RISCVFrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
+                                           Register &FrameReg) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   const TargetRegisterInfo *RI = MF.getSubtarget().getRegisterInfo();
   const auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
@@ -513,7 +628,7 @@ int RISCVFrameLowering::getFrameIndexReference(const MachineFunction &MF,
         Offset += RVFI->getLibCallStackSize();
     }
   }
-  return Offset;
+  return StackOffset::getFixed(Offset);
 }
 
 void RISCVFrameLowering::determineCalleeSaves(MachineFunction &MF,
@@ -547,14 +662,14 @@ void RISCVFrameLowering::determineCalleeSaves(MachineFunction &MF,
     for (unsigned i = 0; CSRegs[i]; ++i)
       SavedRegs.set(CSRegs[i]);
 
-    if (MF.getSubtarget<RISCVSubtarget>().hasStdExtD() ||
-        MF.getSubtarget<RISCVSubtarget>().hasStdExtF()) {
+    if (MF.getSubtarget<RISCVSubtarget>().hasStdExtF()) {
 
       // If interrupt is enabled, this list contains all FP registers.
       const MCPhysReg * Regs = MF.getRegInfo().getCalleeSavedRegs();
 
       for (unsigned i = 0; Regs[i]; ++i)
-        if (RISCV::FPR32RegClass.contains(Regs[i]) ||
+        if (RISCV::FPR16RegClass.contains(Regs[i]) ||
+            RISCV::FPR32RegClass.contains(Regs[i]) ||
             RISCV::FPR64RegClass.contains(Regs[i]))
           SavedRegs.set(Regs[i]);
     }
@@ -573,8 +688,8 @@ void RISCVFrameLowering::processFunctionBeforeFrameFinalized(
   // still needs an emergency spill slot for branch relaxation. This case
   // would currently be missed.
   if (!isInt<11>(MFI.estimateStackSize(MF))) {
-    int RegScavFI = MFI.CreateStackObject(
-        RegInfo->getSpillSize(*RC), RegInfo->getSpillAlignment(*RC), false);
+    int RegScavFI = MFI.CreateStackObject(RegInfo->getSpillSize(*RC),
+                                          RegInfo->getSpillAlign(*RC), false);
     RS->addScavengingFrameIndex(RegScavFI);
   }
 }
@@ -731,9 +846,10 @@ bool RISCVFrameLowering::restoreCalleeSavedRegisters(
 
 bool RISCVFrameLowering::canUseAsPrologue(const MachineBasicBlock &MBB) const {
   MachineBasicBlock *TmpMBB = const_cast<MachineBasicBlock *>(&MBB);
-  const auto *RVFI = MBB.getParent()->getInfo<RISCVMachineFunctionInfo>();
+  const MachineFunction *MF = MBB.getParent();
+  const auto *RVFI = MF->getInfo<RISCVMachineFunctionInfo>();
 
-  if (!RVFI->useSaveRestoreLibCalls())
+  if (!RVFI->useSaveRestoreLibCalls(*MF))
     return true;
 
   // Inserting a call to a __riscv_save libcall requires the use of the register
@@ -746,10 +862,11 @@ bool RISCVFrameLowering::canUseAsPrologue(const MachineBasicBlock &MBB) const {
 }
 
 bool RISCVFrameLowering::canUseAsEpilogue(const MachineBasicBlock &MBB) const {
+  const MachineFunction *MF = MBB.getParent();
   MachineBasicBlock *TmpMBB = const_cast<MachineBasicBlock *>(&MBB);
-  const auto *RVFI = MBB.getParent()->getInfo<RISCVMachineFunctionInfo>();
+  const auto *RVFI = MF->getInfo<RISCVMachineFunctionInfo>();
 
-  if (!RVFI->useSaveRestoreLibCalls())
+  if (!RVFI->useSaveRestoreLibCalls(*MF))
     return true;
 
   // Using the __riscv_restore libcalls to restore CSRs requires a tail call.

@@ -1,34 +1,36 @@
 set(LLVM_OPTIONAL_SOURCES
   AffineAnalysis.cpp
   AffineStructures.cpp
+  BufferAliasAnalysis.cpp
   CallGraph.cpp
-  Dominance.cpp
   Liveness.cpp
   LoopAnalysis.cpp
   NestedMatcher.cpp
+  NumberOfExecutions.cpp
+  PresburgerSet.cpp
   SliceAnalysis.cpp
   Utils.cpp
-  Verifier.cpp
   )
 
 add_mlir_library(MLIRAnalysis
+  BufferAliasAnalysis.cpp
   CallGraph.cpp
   Liveness.cpp
+  NumberOfExecutions.cpp
   SliceAnalysis.cpp
-  Dominance.cpp
-  Verifier.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Analysis
-  )
 
-target_link_libraries(MLIRAnalysis
-  PUBLIC
+  DEPENDS
+  mlir-headers
+
+  LINK_LIBS PUBLIC
   MLIRAffine
   MLIRCallInterfaces
   MLIRControlFlowInterfaces
   MLIRInferTypeOpInterface
-  MLIRLoopOps
+  MLIRSCF
   )
 
 add_mlir_library(MLIRLoopAnalysis
@@ -36,16 +38,22 @@ add_mlir_library(MLIRLoopAnalysis
   AffineStructures.cpp
   LoopAnalysis.cpp
   NestedMatcher.cpp
+  PresburgerSet.cpp
   Utils.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Analysis
-  )
 
-target_link_libraries(MLIRLoopAnalysis
-  PUBLIC
+  DEPENDS
+  mlir-headers
+
+  LINK_LIBS PUBLIC
   MLIRAffine
   MLIRCallInterfaces
   MLIRControlFlowInterfaces
   MLIRInferTypeOpInterface
-  MLIRLoopOps)
+  MLIRPresburger
+  MLIRSCF
+  )
+
+add_subdirectory(Presburger)

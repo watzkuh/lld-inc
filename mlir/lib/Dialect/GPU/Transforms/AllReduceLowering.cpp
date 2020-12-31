@@ -31,7 +31,7 @@ struct GpuAllReduceRewriter {
       : funcOp(funcOp_), reduceOp(reduceOp_), rewriter(rewriter_),
         loc(reduceOp.getLoc()), valueType(reduceOp.value().getType()),
         indexType(IndexType::get(reduceOp.getContext())),
-        int32Type(IntegerType::get(/*width=*/32, reduceOp.getContext())) {}
+        int32Type(IntegerType::get(reduceOp.getContext(), /*width=*/32)) {}
 
   /// Creates an all_reduce across the workgroup.
   ///
@@ -151,7 +151,8 @@ private:
 
   /// Adds type to funcOp's workgroup attributions.
   Value createWorkgroupBuffer() {
-    int workgroupMemoryAddressSpace = 3;
+    int workgroupMemoryAddressSpace =
+        gpu::GPUDialect::getWorkgroupAddressSpace();
     auto bufferType =
         MemRefType::get({kSubgroupSize}, valueType, ArrayRef<AffineMap>{},
                         workgroupMemoryAddressSpace);
@@ -180,8 +181,8 @@ private:
 
       // Insert accumulator body between split block.
       BlockAndValueMapping mapping;
-      mapping.map(body.front().getArgument(0), lhs);
-      mapping.map(body.front().getArgument(1), rhs);
+      mapping.map(body.getArgument(0), lhs);
+      mapping.map(body.getArgument(1), rhs);
       rewriter.cloneRegionBefore(body, *split->getParent(),
                                  split->getIterator(), mapping);
 
@@ -396,7 +397,7 @@ struct GpuAllReduceConversion : public RewritePattern {
 };
 } // namespace
 
-void mlir::populateGpuRewritePatterns(MLIRContext *context,
-                                      OwningRewritePatternList &patterns) {
+void mlir::populateGpuAllReducePatterns(MLIRContext *context,
+                                        OwningRewritePatternList &patterns) {
   patterns.insert<GpuAllReduceConversion>(context);
 }

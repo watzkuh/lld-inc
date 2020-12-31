@@ -1521,6 +1521,12 @@ this makes the size of the SmallVector itself large, so you don't want to
 allocate lots of them (doing so will waste a lot of space).  As such,
 SmallVectors are most useful when on the stack.
 
+In the absence of a well-motivated choice for the number of
+inlined elements ``N``, it is recommended to use ``SmallVector<T>`` (that is,
+omitting the ``N``). This will choose a default number of
+inlined elements reasonable for allocation on the stack (for example, trying
+to keep ``sizeof(SmallVector<T>)`` around 64 bytes).
+
 SmallVector also provides a nice portable and efficient replacement for
 ``alloca``.
 
@@ -1530,7 +1536,7 @@ SmallVector has grown a few other minor advantages over std::vector, causing
 #. std::vector is exception-safe, and some implementations have pessimizations
    that copy elements when SmallVector would move them.
 
-#. SmallVector understands ``llvm::is_trivially_copyable<Type>`` and uses realloc aggressively.
+#. SmallVector understands ``std::is_trivially_copyable<Type>`` and uses realloc aggressively.
 
 #. Many LLVM APIs take a SmallVectorImpl as an out parameter (see the note
    below).
@@ -1541,30 +1547,43 @@ SmallVector has grown a few other minor advantages over std::vector, causing
 
 .. note::
 
-   Prefer to use ``SmallVectorImpl<T>`` as a parameter type.
+   Prefer to use ``ArrayRef<T>`` or ``SmallVectorImpl<T>`` as a parameter type.
 
-   In APIs that don't care about the "small size" (most?), prefer to use
-   the ``SmallVectorImpl<T>`` class, which is basically just the "vector
-   header" (and methods) without the elements allocated after it. Note that
-   ``SmallVector<T, N>`` inherits from ``SmallVectorImpl<T>`` so the
-   conversion is implicit and costs nothing. E.g.
+   It's rarely appropriate to use ``SmallVector<T, N>`` as a parameter type.
+   If an API only reads from the vector, it should use :ref:`ArrayRef
+   <dss_arrayref>`.  Even if an API updates the vector the "small size" is
+   unlikely to be relevant; such an API should use the ``SmallVectorImpl<T>``
+   class, which is the "vector header" (and methods) without the elements
+   allocated after it. Note that ``SmallVector<T, N>`` inherits from
+   ``SmallVectorImpl<T>`` so the conversion is implicit and costs nothing. E.g.
 
    .. code-block:: c++
 
-      // BAD: Clients cannot pass e.g. SmallVector<Foo, 4>.
+      // DISCOURAGED: Clients cannot pass e.g. raw arrays.
+      hardcodedContiguousStorage(const SmallVectorImpl<Foo> &In);
+      // ENCOURAGED: Clients can pass any contiguous storage of Foo.
+      allowsAnyContiguousStorage(ArrayRef<Foo> In);
+
+      void someFunc1() {
+        Foo Vec[] = { /* ... */ };
+        hardcodedContiguousStorage(Vec); // Error.
+        allowsAnyContiguousStorage(Vec); // Works.
+      }
+
+      // DISCOURAGED: Clients cannot pass e.g. SmallVector<Foo, 8>.
       hardcodedSmallSize(SmallVector<Foo, 2> &Out);
-      // GOOD: Clients can pass any SmallVector<Foo, N>.
+      // ENCOURAGED: Clients can pass any SmallVector<Foo, N>.
       allowsAnySmallSize(SmallVectorImpl<Foo> &Out);
 
-      void someFunc() {
+      void someFunc2() {
         SmallVector<Foo, 8> Vec;
         hardcodedSmallSize(Vec); // Error.
         allowsAnySmallSize(Vec); // Works.
       }
 
-   Even though it has "``Impl``" in the name, this is so widely used that
-   it really isn't "private to the implementation" anymore. A name like
-   ``SmallVectorHeader`` would be more appropriate.
+   Even though it has "``Impl``" in the name, SmallVectorImpl is widely used
+   and is no longer "private to the implementation". A name like
+   ``SmallVectorHeader`` might be more appropriate.
 
 .. _dss_vector:
 
@@ -2620,7 +2639,7 @@ want to do:
   for each Function f in the Module
     for each BasicBlock b in f
       for each Instruction i in b
-        if (i is a CallInst and calls the given function)
+        if (i a Call and calls the given function)
           increment callCounter
 
 And the actual code is (remember, because we're writing a ``FunctionPass``, our
@@ -2638,11 +2657,11 @@ method):
       virtual runOnFunction(Function& F) {
         for (BasicBlock &B : F) {
           for (Instruction &I: B) {
-            if (auto *CallInst = dyn_cast<CallInst>(&I)) {
-              // We know we've encountered a call instruction, so we
-              // need to determine if it's a call to the
-              // function pointed to by m_func or not.
-              if (CallInst->getCalledFunction() == targetFunc)
+            if (auto *CB = dyn_cast<CallBase>(&I)) {
+              // We know we've encountered some kind of call instruction (call,
+              // invoke, or callbr), so we need to determine if it's a call to
+              // the function pointed to by m_func or not.
+              if (CB->getCalledFunction() == targetFunc)
                 ++callCounter;
             }
           }
@@ -2652,27 +2671,6 @@ method):
     private:
       unsigned callCounter;
   };
-
-.. _calls_and_invokes:
-
-Treating calls and invokes the same way
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-You may have noticed that the previous example was a bit oversimplified in that
-it did not deal with call sites generated by 'invoke' instructions.  In this,
-and in other situations, you may find that you want to treat ``CallInst``\ s and
-``InvokeInst``\ s the same way, even though their most-specific common base
-class is ``Instruction``, which includes lots of less closely-related things.
-For these cases, LLVM provides a handy wrapper class called ``CallSite``
-(`doxygen <https://llvm.org/doxygen/classllvm_1_1CallSite.html>`__) It is
-essentially a wrapper around an ``Instruction`` pointer, with some methods that
-provide functionality common to ``CallInst``\ s and ``InvokeInst``\ s.
-
-This class has "value semantics": it should be passed by value, not by reference
-and it should not be dynamically allocated or deallocated using ``operator new``
-or ``operator delete``.  It is efficiently copyable, assignable and
-constructable, with costs equivalents to that of a bare pointer.  If you look at
-its definition, it has only a single pointer member.
 
 .. _iterate_chains:
 
@@ -3187,140 +3185,6 @@ memory layouts:
 *(In the above figures* '``P``' *stands for the* ``Use**`` *that is stored in
 each* ``Use`` *object in the member* ``Use::Prev`` *)*
 
-.. _Waymarking:
-
-The waymarking algorithm
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-Since the ``Use`` objects are deprived of the direct (back)pointer to their
-``User`` objects, there must be a fast and exact method to recover it.  This is
-accomplished by the following scheme:
-
-A bit-encoding in the 2 LSBits (least significant bits) of the ``Use::Prev``
-allows to find the start of the ``User`` object:
-
-* ``00`` --- binary digit 0
-
-* ``01`` --- binary digit 1
-
-* ``10`` --- stop and calculate (``s``)
-
-* ``11`` --- full stop (``S``)
-
-Given a ``Use*``, all we have to do is to walk till we get a stop and we either
-have a ``User`` immediately behind or we have to walk to the next stop picking
-up digits and calculating the offset:
-
-.. code-block:: none
-
-  .---.---.---.---.---.---.---.---.---.---.---.---.---.---.---.---.----------------
-  | 1 | s | 1 | 0 | 1 | 0 | s | 1 | 1 | 0 | s | 1 | 1 | s | 1 | S | User (or User*)
-  '---'---'---'---'---'---'---'---'---'---'---'---'---'---'---'---'----------------
-      |+15                |+10            |+6         |+3     |+1
-      |                   |               |           |       | __>
-      |                   |               |           | __________>
-      |                   |               | ______________________>
-      |                   | ______________________________________>
-      | __________________________________________________________>
-
-Only the significant number of bits need to be stored between the stops, so that
-the *worst case is 20 memory accesses* when there are 1000 ``Use`` objects
-associated with a ``User``.
-
-.. _ReferenceImpl:
-
-Reference implementation
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-The following literate Haskell fragment demonstrates the concept:
-
-.. code-block:: haskell
-
-  > import Test.QuickCheck
-  >
-  > digits :: Int -> [Char] -> [Char]
-  > digits 0 acc = '0' : acc
-  > digits 1 acc = '1' : acc
-  > digits n acc = digits (n `div` 2) $ digits (n `mod` 2) acc
-  >
-  > dist :: Int -> [Char] -> [Char]
-  > dist 0 [] = ['S']
-  > dist 0 acc = acc
-  > dist 1 acc = let r = dist 0 acc in 's' : digits (length r) r
-  > dist n acc = dist (n - 1) $ dist 1 acc
-  >
-  > takeLast n ss = reverse $ take n $ reverse ss
-  >
-  > test = takeLast 40 $ dist 20 []
-  >
-
-Printing <test> gives: ``"1s100000s11010s10100s1111s1010s110s11s1S"``
-
-The reverse algorithm computes the length of the string just by examining a
-certain prefix:
-
-.. code-block:: haskell
-
-  > pref :: [Char] -> Int
-  > pref "S" = 1
-  > pref ('s':'1':rest) = decode 2 1 rest
-  > pref (_:rest) = 1 + pref rest
-  >
-  > decode walk acc ('0':rest) = decode (walk + 1) (acc * 2) rest
-  > decode walk acc ('1':rest) = decode (walk + 1) (acc * 2 + 1) rest
-  > decode walk acc _ = walk + acc
-  >
-
-Now, as expected, printing <pref test> gives ``40``.
-
-We can *quickCheck* this with following property:
-
-.. code-block:: haskell
-
-  > testcase = dist 2000 []
-  > testcaseLength = length testcase
-  >
-  > identityProp n = n > 0 && n <= testcaseLength ==> length arr == pref arr
-  >     where arr = takeLast n testcase
-  >
-
-As expected <quickCheck identityProp> gives:
-
-::
-
-  *Main> quickCheck identityProp
-  OK, passed 100 tests.
-
-Let's be a bit more exhaustive:
-
-.. code-block:: haskell
-
-  >
-  > deepCheck p = check (defaultConfig { configMaxTest = 500 }) p
-  >
-
-And here is the result of <deepCheck identityProp>:
-
-::
-
-  *Main> deepCheck identityProp
-  OK, passed 500 tests.
-
-.. _Tagging:
-
-Tagging considerations
-^^^^^^^^^^^^^^^^^^^^^^
-
-To maintain the invariant that the 2 LSBits of each ``Use**`` in ``Use`` never
-change after being set up, setters of ``Use::Prev`` must re-tag the new
-``Use**`` on every modification.  Accordingly getters must strip the tag bits.
-
-For layout b) instead of the ``User`` we find a pointer (``User*`` with LSBit
-set).  Following this pointer brings us to the ``User``.  A portable trick
-ensures that the first bytes of ``User`` (if interpreted as a pointer) never has
-the LSBit set. (Portability is relying on the fact that all known compilers
-place the ``vptr`` in the first word of the instances.)
-
 .. _polymorphism:
 
 Designing Type Hierarchies and Polymorphic Interfaces
@@ -3798,7 +3662,7 @@ Important Subclasses of the ``Instruction`` class
 * ``CmpInst``
 
   This subclass represents the two comparison instructions,
-  `ICmpInst <LangRef.html#i_icmp>`_ (integer opreands), and
+  `ICmpInst <LangRef.html#i_icmp>`_ (integer operands), and
   `FCmpInst <LangRef.html#i_fcmp>`_ (floating point operands).
 
 .. _m_Instruction:
@@ -4100,7 +3964,7 @@ Important Public Members of the ``GlobalVariable`` class
 
 * ``bool hasInitializer()``
 
-  Returns true if this ``GlobalVariable`` has an intializer.
+  Returns true if this ``GlobalVariable`` has an initializer.
 
 * ``Constant *getInitializer()``
 

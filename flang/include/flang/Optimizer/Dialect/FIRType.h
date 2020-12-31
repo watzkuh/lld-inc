@@ -9,8 +9,8 @@
 #ifndef OPTIMIZER_DIALECT_FIRTYPE_H
 #define OPTIMIZER_DIALECT_FIRTYPE_H
 
-#include "mlir/IR/Attributes.h"
-#include "mlir/IR/Types.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
@@ -24,6 +24,8 @@ class hash_code;
 namespace mlir {
 class DialectAsmParser;
 class DialectAsmPrinter;
+class ComplexType;
+class FloatType;
 } // namespace mlir
 
 namespace fir {
@@ -52,29 +54,6 @@ struct SequenceTypeStorage;
 struct TypeDescTypeStorage;
 } // namespace detail
 
-/// Integral identifier for all the types comprising the FIR type system
-enum TypeKind {
-  // The enum starts at the range reserved for this dialect.
-  FIR_TYPE = mlir::Type::FIRST_FIR_TYPE,
-  FIR_BOX,       // (static) descriptor
-  FIR_BOXCHAR,   // CHARACTER pointer and length
-  FIR_BOXPROC,   // procedure with host association
-  FIR_CHARACTER, // intrinsic type
-  FIR_COMPLEX,   // intrinsic type
-  FIR_DERIVED,   // derived
-  FIR_DIMS,
-  FIR_FIELD,
-  FIR_HEAP,
-  FIR_INT, // intrinsic type
-  FIR_LEN,
-  FIR_LOGICAL, // intrinsic type
-  FIR_POINTER, // POINTER attr
-  FIR_REAL,    // intrinsic type
-  FIR_REFERENCE,
-  FIR_SEQUENCE, // DIMENSION attr
-  FIR_TYPEDESC,
-};
-
 // These isa_ routines follow the precedent of llvm::isa_or_null<>
 
 /// Is `t` any of the FIR dialect types?
@@ -89,19 +68,25 @@ bool isa_fir_or_std_type(mlir::Type t);
 /// Is `t` a FIR dialect type that implies a memory (de)reference?
 bool isa_ref_type(mlir::Type t);
 
+/// Is `t` a type that is always trivially pass-by-reference?
+bool isa_passbyref_type(mlir::Type t);
+
+/// Is `t` a boxed type?
+bool isa_box_type(mlir::Type t);
+
+/// Is `t` a type that can conform to be pass-by-reference? Depending on the
+/// context, these types may simply demote to pass-by-reference or a reference
+/// to them may have to be passed instead.
+inline bool conformsWithPassByRef(mlir::Type t) {
+  return isa_ref_type(t) || isa_box_type(t);
+}
+
 /// Is `t` a FIR dialect aggregate type?
 bool isa_aggregate(mlir::Type t);
 
 /// Extract the `Type` pointed to from a FIR memory reference type. If `t` is
 /// not a memory reference type, then returns a null `Type`.
 mlir::Type dyn_cast_ptrEleTy(mlir::Type t);
-
-/// Boilerplate mixin template
-template <typename A, unsigned Id>
-struct IntrinsicTypeMixin {
-  static constexpr bool kindof(unsigned kind) { return kind == getId(); }
-  static constexpr unsigned getId() { return Id; }
-};
 
 // Intrinsic types
 
@@ -110,8 +95,7 @@ struct IntrinsicTypeMixin {
 /// is thus the type of a single character value.
 class CharacterType
     : public mlir::Type::TypeBase<CharacterType, mlir::Type,
-                                  detail::CharacterTypeStorage>,
-      public IntrinsicTypeMixin<CharacterType, TypeKind::FIR_CHARACTER> {
+                                  detail::CharacterTypeStorage> {
 public:
   using Base::Base;
   static CharacterType get(mlir::MLIRContext *ctxt, KindTy kind);
@@ -122,19 +106,21 @@ public:
 /// parameter. COMPLEX is a floating point type with a real and imaginary
 /// member.
 class CplxType : public mlir::Type::TypeBase<CplxType, mlir::Type,
-                                             detail::CplxTypeStorage>,
-                 public IntrinsicTypeMixin<CplxType, TypeKind::FIR_COMPLEX> {
+                                             detail::CplxTypeStorage> {
 public:
   using Base::Base;
   static CplxType get(mlir::MLIRContext *ctxt, KindTy kind);
+
+  /// Get the corresponding fir.real<k> type.
+  mlir::Type getElementType() const;
+
   KindTy getFKind() const;
 };
 
 /// Model of a Fortran INTEGER intrinsic type, including the KIND type
 /// parameter.
 class IntType
-    : public mlir::Type::TypeBase<IntType, mlir::Type, detail::IntTypeStorage>,
-      public IntrinsicTypeMixin<IntType, TypeKind::FIR_INT> {
+    : public mlir::Type::TypeBase<IntType, mlir::Type, detail::IntTypeStorage> {
 public:
   using Base::Base;
   static IntType get(mlir::MLIRContext *ctxt, KindTy kind);
@@ -145,8 +131,7 @@ public:
 /// parameter.
 class LogicalType
     : public mlir::Type::TypeBase<LogicalType, mlir::Type,
-                                  detail::LogicalTypeStorage>,
-      public IntrinsicTypeMixin<LogicalType, TypeKind::FIR_LOGICAL> {
+                                  detail::LogicalTypeStorage> {
 public:
   using Base::Base;
   static LogicalType get(mlir::MLIRContext *ctxt, KindTy kind);
@@ -156,8 +141,7 @@ public:
 /// Model of a Fortran REAL (and DOUBLE PRECISION) intrinsic type, including the
 /// KIND type parameter.
 class RealType : public mlir::Type::TypeBase<RealType, mlir::Type,
-                                             detail::RealTypeStorage>,
-                 public IntrinsicTypeMixin<RealType, TypeKind::FIR_REAL> {
+                                             detail::RealTypeStorage> {
 public:
   using Base::Base;
   static RealType get(mlir::MLIRContext *ctxt, KindTy kind);
@@ -175,7 +159,6 @@ class BoxType
 public:
   using Base::Base;
   static BoxType get(mlir::Type eleTy, mlir::AffineMapAttr map = {});
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_BOX; }
   mlir::Type getEleTy() const;
   mlir::AffineMapAttr getLayoutMap() const;
 
@@ -192,7 +175,6 @@ class BoxCharType : public mlir::Type::TypeBase<BoxCharType, mlir::Type,
 public:
   using Base::Base;
   static BoxCharType get(mlir::MLIRContext *ctxt, KindTy kind);
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_BOXCHAR; }
   CharacterType getEleTy() const;
 };
 
@@ -204,7 +186,6 @@ class BoxProcType : public mlir::Type::TypeBase<BoxProcType, mlir::Type,
 public:
   using Base::Base;
   static BoxProcType get(mlir::Type eleTy);
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_BOXPROC; }
   mlir::Type getEleTy() const;
 
   static mlir::LogicalResult verifyConstructionInvariants(mlir::Location,
@@ -220,10 +201,9 @@ class DimsType : public mlir::Type::TypeBase<DimsType, mlir::Type,
 public:
   using Base::Base;
   static DimsType get(mlir::MLIRContext *ctx, unsigned rank);
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_DIMS; }
 
   /// returns -1 if the rank is unknown
-  int getRank() const;
+  unsigned getRank() const;
 };
 
 /// The type of a field name. Implementations may defer the layout of a Fortran
@@ -234,7 +214,6 @@ class FieldType : public mlir::Type::TypeBase<FieldType, mlir::Type,
 public:
   using Base::Base;
   static FieldType get(mlir::MLIRContext *ctxt);
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_FIELD; }
 };
 
 /// The type of a heap pointer. Fortran entities with the ALLOCATABLE attribute
@@ -246,7 +225,6 @@ class HeapType : public mlir::Type::TypeBase<HeapType, mlir::Type,
 public:
   using Base::Base;
   static HeapType get(mlir::Type elementType);
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_HEAP; }
 
   mlir::Type getEleTy() const;
 
@@ -262,7 +240,6 @@ class LenType
 public:
   using Base::Base;
   static LenType get(mlir::MLIRContext *ctxt);
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_LEN; }
 };
 
 /// The type of entities with the POINTER attribute.  These pointers are
@@ -273,7 +250,6 @@ class PointerType : public mlir::Type::TypeBase<PointerType, mlir::Type,
 public:
   using Base::Base;
   static PointerType get(mlir::Type elementType);
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_POINTER; }
 
   mlir::Type getEleTy() const;
 
@@ -288,7 +264,6 @@ class ReferenceType
 public:
   using Base::Base;
   static ReferenceType get(mlir::Type elementType);
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_REFERENCE; }
 
   mlir::Type getEleTy() const;
 
@@ -324,10 +299,23 @@ public:
   /// The number of dimensions of the sequence
   unsigned getDimension() const { return getShape().size(); }
 
+  /// Number of rows of constant extent
+  unsigned getConstantRows() const;
+
+  /// Is the shape of the sequence constant?
+  bool hasConstantShape() const { return getConstantRows() == getDimension(); }
+
+  /// Does the sequence have unknown shape? (`array<* x T>`)
+  bool hasUnknownShape() const { return getShape().empty(); }
+
+  /// Is the interior of the sequence constant? Check if the array is
+  /// one of constant shape (`array<C...xCxT>`), unknown shape
+  /// (`array<*xT>`), or rows with shape and ending with column(s) of
+  /// unknown extent (`array<C...xCx?...x?xT>`).
+  bool hasConstantInterior() const;
+
   /// The value `-1` represents an unknown extent for a dimension
   static constexpr Extent getUnknownExtent() { return -1; }
-
-  static bool kindof(unsigned kind) { return kind == TypeKind::FIR_SEQUENCE; }
 
   static mlir::LogicalResult
   verifyConstructionInvariants(mlir::Location loc, const Shape &shape,
@@ -345,9 +333,6 @@ class TypeDescType : public mlir::Type::TypeBase<TypeDescType, mlir::Type,
 public:
   using Base::Base;
   static TypeDescType get(mlir::Type ofType);
-  static constexpr bool kindof(unsigned kind) {
-    return kind == TypeKind::FIR_TYPEDESC;
-  }
   mlir::Type getOfTy() const;
 
   static mlir::LogicalResult verifyConstructionInvariants(mlir::Location,
@@ -381,8 +366,6 @@ public:
   static RecordType get(mlir::MLIRContext *ctxt, llvm::StringRef name);
   void finalize(llvm::ArrayRef<TypePair> lenPList,
                 llvm::ArrayRef<TypePair> typeList);
-  static constexpr bool kindof(unsigned kind) { return kind == getId(); }
-  static constexpr unsigned getId() { return TypeKind::FIR_DERIVED; }
 
   detail::RecordTypeStorage const *uniqueKey() const;
 
@@ -393,6 +376,26 @@ public:
 mlir::Type parseFirType(FIROpsDialect *, mlir::DialectAsmParser &parser);
 
 void printFirType(FIROpsDialect *, mlir::Type ty, mlir::DialectAsmPrinter &p);
+
+/// Guarantee `type` is a scalar integral type (standard Integer, standard
+/// Index, or FIR Int). Aborts execution if condition is false.
+void verifyIntegralType(mlir::Type type);
+
+/// Is `t` a FIR Real or MLIR Float type?
+inline bool isa_real(mlir::Type t) {
+  return t.isa<fir::RealType>() || t.isa<mlir::FloatType>();
+}
+
+/// Is `t` an integral type?
+inline bool isa_integer(mlir::Type t) {
+  return t.isa<mlir::IndexType>() || t.isa<mlir::IntegerType>() ||
+         t.isa<fir::IntType>();
+}
+
+/// Is `t` a FIR or MLIR Complex type?
+inline bool isa_complex(mlir::Type t) {
+  return t.isa<fir::CplxType>() || t.isa<mlir::ComplexType>();
+}
 
 } // namespace fir
 

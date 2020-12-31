@@ -48,7 +48,7 @@ namespace {
 
 class FlattenedSpelling {
   std::string V, N, NS;
-  bool K;
+  bool K = false;
 
 public:
   FlattenedSpelling(const std::string &Variety, const std::string &Name,
@@ -61,8 +61,6 @@ public:
            "Given a GCC spelling, which means this hasn't been flattened!");
     if (V == "CXX11" || V == "C2x" || V == "Pragma")
       NS = std::string(Spelling.getValueAsString("Namespace"));
-    bool Unset;
-    K = Spelling.getValueAsBitOrUnset("KnownToGCC", Unset);
   }
 
   const std::string &variety() const { return V; }
@@ -82,9 +80,10 @@ GetFlattenedSpellings(const Record &Attr) {
     StringRef Variety = Spelling->getValueAsString("Variety");
     StringRef Name = Spelling->getValueAsString("Name");
     if (Variety == "GCC") {
-      // Gin up two new spelling objects to add into the list.
       Ret.emplace_back("GNU", std::string(Name), "", true);
       Ret.emplace_back("CXX11", std::string(Name), "gnu", true);
+      if (Spelling->getValueAsBit("AllowInC"))
+        Ret.emplace_back("C2x", std::string(Name), "gnu", true);
     } else if (Variety == "Clang") {
       Ret.emplace_back("GNU", std::string(Name), "", false);
       Ret.emplace_back("CXX11", std::string(Name), "clang", false);
@@ -330,6 +329,8 @@ namespace {
         // empty string but are then recorded as a nullptr.
         OS << "\" << (get" << getUpperName() << "() ? get" << getUpperName()
            << "()->getName() : \"\") << \"";
+      else if (type == "VarDecl *")
+        OS << "\" << get" << getUpperName() << "()->getName() << \"";
       else if (type == "TypeSourceInfo *")
         OS << "\" << get" << getUpperName() << "().getAsString() << \"";
       else if (type == "ParamIdx")
@@ -339,7 +340,7 @@ namespace {
     }
 
     void writeDump(raw_ostream &OS) const override {
-      if (type == "FunctionDecl *" || type == "NamedDecl *") {
+      if (StringRef(type).endswith("Decl *")) {
         OS << "    OS << \" \";\n";
         OS << "    dumpBareDeclRef(SA->get" << getUpperName() << "());\n";
       } else if (type == "IdentifierInfo *") {
@@ -481,6 +482,7 @@ namespace {
 
     void writeAccessors(raw_ostream &OS) const override {
       OS << "  bool is" << getUpperName() << "Dependent() const;\n";
+      OS << "  bool is" << getUpperName() << "ErrorDependent() const;\n";
 
       OS << "  unsigned get" << getUpperName() << "(ASTContext &Ctx) const;\n";
 
@@ -509,6 +511,15 @@ namespace {
       OS << "  else\n";
       OS << "    return " << getLowerName()
          << "Type->getType()->isDependentType();\n";
+      OS << "}\n";
+
+      OS << "bool " << getAttrName() << "Attr::is" << getUpperName()
+         << "ErrorDependent() const {\n";
+      OS << "  if (is" << getLowerName() << "Expr)\n";
+      OS << "    return " << getLowerName() << "Expr && " << getLowerName()
+         << "Expr->containsErrors();\n";
+      OS << "  return " << getLowerName()
+         << "Type->getType()->containsErrors();\n";
       OS << "}\n";
 
       // FIXME: Do not do the calculation here
@@ -1138,8 +1149,9 @@ namespace {
          << "Unevaluated(S, Sema::ExpressionEvaluationContext::Unevaluated);\n";
       OS << "        ExprResult " << "Result = S.SubstExpr("
          << "A->get" << getUpperName() << "(), TemplateArgs);\n";
-      OS << "        tempInst" << getUpperName() << " = "
-         << "Result.getAs<Expr>();\n";
+      OS << "        if (Result.isInvalid())\n";
+      OS << "          return nullptr;\n";
+      OS << "        tempInst" << getUpperName() << " = Result.get();\n";
       OS << "      }\n";
     }
 
@@ -1191,7 +1203,9 @@ namespace {
          << "_end();\n";
       OS << "        for (; I != E; ++I, ++TI) {\n";
       OS << "          ExprResult Result = S.SubstExpr(*I, TemplateArgs);\n";
-      OS << "          *TI = Result.getAs<Expr>();\n";
+      OS << "          if (Result.isInvalid())\n";
+      OS << "            return nullptr;\n";
+      OS << "          *TI = Result.get();\n";
       OS << "        }\n";
       OS << "      }\n";
     }
@@ -1262,8 +1276,16 @@ namespace {
       OS << "      return false;\n";
     }
 
+    void writeTemplateInstantiation(raw_ostream &OS) const override {
+      OS << "      " << getType() << " tempInst" << getUpperName() << " =\n";
+      OS << "        S.SubstType(A->get" << getUpperName() << "Loc(), "
+         << "TemplateArgs, A->getLoc(), A->getAttrName());\n";
+      OS << "      if (!tempInst" << getUpperName() << ")\n";
+      OS << "        return nullptr;\n";
+    }
+
     void writeTemplateInstantiationArgs(raw_ostream &OS) const override {
-      OS << "A->get" << getUpperName() << "Loc()";
+      OS << "tempInst" << getUpperName();
     }
 
     void writePCHWrite(raw_ostream &OS) const override {
@@ -1290,10 +1312,9 @@ createArgument(const Record &Arg, StringRef Attr,
     Ptr = std::make_unique<EnumArgument>(Arg, Attr);
   else if (ArgName == "ExprArgument")
     Ptr = std::make_unique<ExprArgument>(Arg, Attr);
-  else if (ArgName == "FunctionArgument")
-    Ptr = std::make_unique<SimpleArgument>(Arg, Attr, "FunctionDecl *");
-  else if (ArgName == "NamedArgument")
-    Ptr = std::make_unique<SimpleArgument>(Arg, Attr, "NamedDecl *");
+  else if (ArgName == "DeclArgument")
+    Ptr = std::make_unique<SimpleArgument>(
+        Arg, Attr, (Arg.getValueAsDef("Kind")->getName() + "Decl *").str());
   else if (ArgName == "IdentifierArgument")
     Ptr = std::make_unique<SimpleArgument>(Arg, Attr, "IdentifierInfo *");
   else if (ArgName == "DefaultBoolArgument")
@@ -2004,10 +2025,10 @@ PragmaClangAttributeSupport::generateStrictConformsTo(const Record &Attr,
     return;
   // Generate a function that constructs a set of matching rules that describe
   // to which declarations the attribute should apply to.
-  OS << "virtual void getPragmaAttributeMatchRules("
+  OS << "void getPragmaAttributeMatchRules("
      << "llvm::SmallVectorImpl<std::pair<"
      << AttributeSubjectMatchRule::EnumName
-     << ", bool>> &MatchRules, const LangOptions &LangOpts) const {\n";
+     << ", bool>> &MatchRules, const LangOptions &LangOpts) const override {\n";
   const Record *SubjectObj = Attr.getValueAsDef("Subjects");
   std::vector<Record *> Subjects = SubjectObj->getValueAsListOfDefs("Subjects");
   for (const auto *Subject : Subjects) {
@@ -2357,7 +2378,7 @@ static void emitAttributes(RecordKeeper &Records, raw_ostream &OS,
         ai->writeCtorParameters(OS);
       }
       OS << ", const AttributeCommonInfo &CommonInfo";
-      if (Header)
+      if (Header && Implicit)
         OS << " = {SourceRange{}}";
       OS << ")";
       if (Header) {
@@ -2672,6 +2693,7 @@ static const AttrClassDescriptor AttrClassDescriptors[] = {
   { "ATTR", "Attr" },
   { "TYPE_ATTR", "TypeAttr" },
   { "STMT_ATTR", "StmtAttr" },
+  { "DECL_OR_STMT_ATTR", "DeclOrStmtAttr" },
   { "INHERITABLE_ATTR", "InheritableAttr" },
   { "DECL_OR_TYPE_ATTR", "DeclOrTypeAttr" },
   { "INHERITABLE_PARAM_ATTR", "InheritableParamAttr" },
@@ -3056,18 +3078,22 @@ static void GenerateHasAttrSpellingStringSwitch(
     // attribute version information should be taken from the SD-6 standing
     // document, which can be found at:
     // https://isocpp.org/std/standing-documents/sd-6-sg10-feature-test-recommendations
+    //
+    // C2x-style attributes have the same kind of version information
+    // associated with them. The unscoped attribute version information should
+    // be taken from the specification of the attribute in the C Standard.
     int Version = 1;
 
-    if (Variety == "CXX11") {
-        std::vector<Record *> Spellings = Attr->getValueAsListOfDefs("Spellings");
-        for (const auto &Spelling : Spellings) {
-          if (Spelling->getValueAsString("Variety") == "CXX11") {
-            Version = static_cast<int>(Spelling->getValueAsInt("Version"));
-            if (Scope.empty() && Version == 1)
-              PrintError(Spelling->getLoc(), "C++ standard attributes must "
-              "have valid version information.");
-            break;
-          }
+    if (Variety == "CXX11" || Variety == "C2x") {
+      std::vector<Record *> Spellings = Attr->getValueAsListOfDefs("Spellings");
+      for (const auto &Spelling : Spellings) {
+        if (Spelling->getValueAsString("Variety") == Variety) {
+          Version = static_cast<int>(Spelling->getValueAsInt("Version"));
+          if (Scope.empty() && Version == 1)
+            PrintError(Spelling->getLoc(), "Standard attributes must have "
+                                           "valid version information.");
+          break;
+        }
       }
     }
 
@@ -3305,12 +3331,13 @@ void EmitClangAttrTemplateInstantiateHelper(const std::vector<Record *> &Attrs,
     for (auto const &ai : Args)
       ai->writeTemplateInstantiation(OS);
 
-    OS << "        return new (C) " << R.getName() << "Attr(C, *A";
+    OS << "      return new (C) " << R.getName() << "Attr(C, *A";
     for (auto const &ai : Args) {
       OS << ", ";
       ai->writeTemplateInstantiationArgs(OS);
     }
-    OS << ");\n    }\n";
+    OS << ");\n"
+       << "    }\n";
   }
   OS << "  } // end switch\n"
      << "  llvm_unreachable(\"Unknown attribute!\");\n"
@@ -3511,8 +3538,8 @@ static void GenerateAppertainsTo(const Record &Attr, raw_ostream &OS) {
   // at all (for instance because it was applied to a type), or that the caller
   // has determined that the check should fail (perhaps prior to the creation
   // of the declaration).
-  OS << "virtual bool diagAppertainsToDecl(Sema &S, ";
-  OS << "const ParsedAttr &Attr, const Decl *D) const {\n";
+  OS << "bool diagAppertainsToDecl(Sema &S, ";
+  OS << "const ParsedAttr &Attr, const Decl *D) const override {\n";
   OS << "  if (";
   for (auto I = Subjects.begin(), E = Subjects.end(); I != E; ++I) {
     // If the subject has custom code associated with it, use the generated
@@ -3586,8 +3613,8 @@ static void GenerateLangOptRequirements(const Record &R,
   if (LangOpts.empty())
     return;
 
-  OS << "virtual bool diagLangOpts(Sema &S, const ParsedAttr &Attr) ";
-  OS << "const {\n";
+  OS << "bool diagLangOpts(Sema &S, const ParsedAttr &Attr) ";
+  OS << "const override {\n";
   OS << "  auto &LangOpts = S.LangOpts;\n";
   OS << "  if (" << GenerateTestExpression(LangOpts) << ")\n";
   OS << "    return true;\n\n";
@@ -3631,7 +3658,7 @@ static void GenerateTargetRequirements(const Record &Attr,
   std::string Test;
   bool UsesT = GenerateTargetSpecificAttrChecks(R, Arches, Test, &FnName);
 
-  OS << "virtual bool existsInTarget(const TargetInfo &Target) const {\n";
+  OS << "bool existsInTarget(const TargetInfo &Target) const override {\n";
   if (UsesT)
     OS << "  const llvm::Triple &T = Target.getTriple(); (void)T;\n";
   OS << "  return " << Test << ";\n";
@@ -3656,8 +3683,8 @@ static void GenerateSpellingIndexToSemanticSpelling(const Record &Attr,
   std::string Enum = CreateSemanticSpellings(Spellings, SemanticToSyntacticMap);
   std::string Name = Attr.getName().str() + "AttrSpellingMap";
 
-  OS << "virtual unsigned spellingIndexToSemanticSpelling(";
-  OS << "const ParsedAttr &Attr) const {\n";
+  OS << "unsigned spellingIndexToSemanticSpelling(";
+  OS << "const ParsedAttr &Attr) const override {\n";
   OS << Enum;
   OS << "  unsigned Idx = Attr.getAttributeSpellingListIndex();\n";
   WriteSemanticSpellingSwitch("Idx", SemanticToSyntacticMap, OS);
@@ -3670,8 +3697,8 @@ static void GenerateHandleDeclAttribute(const Record &Attr, raw_ostream &OS) {
     return;
 
   // Generate a function which just converts from ParsedAttr to the Attr type.
-  OS << "virtual AttrHandling handleDeclAttribute(Sema &S, Decl *D,";
-  OS << "const ParsedAttr &Attr) const {\n";
+  OS << "AttrHandling handleDeclAttribute(Sema &S, Decl *D,";
+  OS << "const ParsedAttr &Attr) const override {\n";
   OS << "  D->addAttr(::new (S.Context) " << Attr.getName();
   OS << "Attr(S.Context, Attr));\n";
   OS << "  return AttributeApplied;\n";
@@ -3753,7 +3780,8 @@ void EmitClangAttrParsedAttrImpl(RecordKeeper &Records, raw_ostream &OS) {
     OS << (Attr.isSubClassOf("TypeAttr") ||
            Attr.isSubClassOf("DeclOrTypeAttr")) << ";\n";
     OS << "    IsStmt = ";
-    OS << Attr.isSubClassOf("StmtAttr") << ";\n";
+    OS << (Attr.isSubClassOf("StmtAttr") || Attr.isSubClassOf("DeclOrStmtAttr"))
+       << ";\n";
     OS << "    IsKnownToGCC = ";
     OS << IsKnownToGCC(Attr) << ";\n";
     OS << "    IsSupportedByPragmaAttribute = ";

@@ -8,16 +8,11 @@
 
 #include "flang/Optimizer/Dialect/FIRAttr.h"
 #include "flang/Optimizer/Dialect/FIRDialect.h"
-#include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Support/KindMapping.h"
 #include "mlir/IR/AttributeSupport.h"
-#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Types.h"
-#include "mlir/Parser.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Twine.h"
 
 using namespace fir;
 
@@ -79,13 +74,13 @@ private:
 } // namespace detail
 
 ExactTypeAttr ExactTypeAttr::get(mlir::Type value) {
-  return Base::get(value.getContext(), FIR_EXACTTYPE, value);
+  return Base::get(value.getContext(), value);
 }
 
 mlir::Type ExactTypeAttr::getType() const { return getImpl()->getType(); }
 
 SubclassAttr SubclassAttr::get(mlir::Type value) {
-  return Base::get(value.getContext(), FIR_SUBCLASS, value);
+  return Base::get(value.getContext(), value);
 }
 
 mlir::Type SubclassAttr::getType() const { return getImpl()->getType(); }
@@ -93,26 +88,26 @@ mlir::Type SubclassAttr::getType() const { return getImpl()->getType(); }
 using AttributeUniquer = mlir::detail::AttributeUniquer;
 
 ClosedIntervalAttr ClosedIntervalAttr::get(mlir::MLIRContext *ctxt) {
-  return AttributeUniquer::get<ClosedIntervalAttr>(ctxt, getId());
+  return AttributeUniquer::get<ClosedIntervalAttr>(ctxt);
 }
 
 UpperBoundAttr UpperBoundAttr::get(mlir::MLIRContext *ctxt) {
-  return AttributeUniquer::get<UpperBoundAttr>(ctxt, getId());
+  return AttributeUniquer::get<UpperBoundAttr>(ctxt);
 }
 
 LowerBoundAttr LowerBoundAttr::get(mlir::MLIRContext *ctxt) {
-  return AttributeUniquer::get<LowerBoundAttr>(ctxt, getId());
+  return AttributeUniquer::get<LowerBoundAttr>(ctxt);
 }
 
 PointIntervalAttr PointIntervalAttr::get(mlir::MLIRContext *ctxt) {
-  return AttributeUniquer::get<PointIntervalAttr>(ctxt, getId());
+  return AttributeUniquer::get<PointIntervalAttr>(ctxt);
 }
 
 // RealAttr
 
 RealAttr RealAttr::get(mlir::MLIRContext *ctxt,
                        const RealAttr::ValueType &key) {
-  return Base::get(ctxt, getId(), key);
+  return Base::get(ctxt, key);
 }
 
 int RealAttr::getFKind() const { return getImpl()->getFKind(); }

@@ -2,8 +2,6 @@
 
 // -----
 
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> (d0, d1)>
-
 // Test with just loop IVs.
 func @test0(%arg0 : index, %arg1 : index) {
   %0 = alloc() : memref<100x100xf32>
@@ -17,8 +15,6 @@ func @test0(%arg0 : index, %arg1 : index) {
 }
 
 // -----
-
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 + 3, d1 + 7)>
 
 // Test with loop IVs and constants.
 func @test1(%arg0 : index, %arg1 : index) {
@@ -36,8 +32,6 @@ func @test1(%arg0 : index, %arg1 : index) {
 
 // -----
 
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1, d2, d3) -> (d0 + d1, d2 + d3)>
-
 // Test with loop IVs and function args without 'symbol' keyword (should
 // be parsed as dim identifiers).
 func @test2(%arg0 : index, %arg1 : index) {
@@ -54,8 +48,6 @@ func @test2(%arg0 : index, %arg1 : index) {
 }
 
 // -----
-
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1)[s0, s1] -> (d0 + s0, d1 + s1)>
 
 // Test with loop IVs and function args with 'symbol' keyword (should
 // be parsed as symbol identifiers).
@@ -76,8 +68,6 @@ func @test3(%arg0 : index, %arg1 : index) {
 
 // -----
 
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1)[s0, s1] -> ((d0 + s0) floordiv 3 + 11, (d1 + s1) mod 4 + 7)>
-
 // Test with loop IVs, symbols and constants in nested affine expressions.
 func @test4(%arg0 : index, %arg1 : index) {
   %0 = alloc() : memref<100x100xf32>
@@ -96,8 +86,6 @@ func @test4(%arg0 : index, %arg1 : index) {
 
 // -----
 
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
-
 // Test with swizzled loop IVs.
 func @test5(%arg0 : index, %arg1 : index) {
   %0 = alloc() : memref<10x10x10xf32>
@@ -115,8 +103,6 @@ func @test5(%arg0 : index, %arg1 : index) {
 }
 
 // -----
-
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0 + d1, d2 + d3, d3 + d1 + d4)>
 
 // Test with swizzled loop IVs, duplicate args, and function args used as dims.
 // Dim identifiers are assigned in parse order:
@@ -139,8 +125,6 @@ func @test6(%arg0 : index, %arg1 : index) {
 }
 
 // -----
-
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1, d2)[s0, s1] -> (d0 + s0, d1 + d2, d2 + s0 + s1)>
 
 // Test with swizzled loop IVs, duplicate args, and function args used as syms.
 // Dim and symbol identifiers are assigned in parse order:
@@ -169,7 +153,7 @@ func @test6(%arg0 : index, %arg1 : index) {
 
 // -----
 
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0) -> (d0 + 1)>
+// CHECK: [[MAP0:#map[0-9]*]] = affine_map<(d0) -> (d0 + 1)>
 
 // Test with operands without special SSA name.
 func @test7() {
@@ -197,9 +181,6 @@ func @zero_dim(%arg0 : memref<i32>, %arg1 : memref<i32>) {
 
 // -----
 
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 + 3, d1 + 7)>
-// CHECK: [[MAP1:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 + 3, d1 + 11)>
-
 // Test with loop IVs and constants.
 func @test_prefetch(%arg0 : index, %arg1 : index) {
   %0 = alloc() : memref<100x100xf32>
@@ -210,6 +191,62 @@ func @test_prefetch(%arg0 : index, %arg1 : index) {
       // CHECK: affine.prefetch %{{.*}}[%{{.*}} + 3, %{{.*}} + 11], write, locality<0>, data : memref<100x100xf32>
       affine.prefetch %0[%i0, %i1 + 1], read, locality<3>, instr : memref<100x100xf32>
       // CHECK: affine.prefetch %{{.*}}[%{{.*}}, %{{.*}} + 1], read, locality<3>, instr : memref<100x100xf32>
+    }
+  }
+  return
+}
+
+// -----
+
+// Test with just loop IVs.
+func @vector_load_vector_store_iv() {
+  %0 = alloc() : memref<100x100xf32>
+  affine.for %i0 = 0 to 16 {
+    affine.for %i1 = 0 to 16 step 8 {
+      %1 = affine.vector_load %0[%i0, %i1] : memref<100x100xf32>, vector<8xf32>
+      affine.vector_store %1, %0[%i0, %i1] : memref<100x100xf32>, vector<8xf32>
+// CHECK:      %[[buf:.*]] = alloc
+// CHECK-NEXT: affine.for %[[i0:.*]] = 0
+// CHECK-NEXT:   affine.for %[[i1:.*]] = 0
+// CHECK-NEXT:     %[[val:.*]] = affine.vector_load %[[buf]][%[[i0]], %[[i1]]] : memref<100x100xf32>, vector<8xf32>
+// CHECK-NEXT:     affine.vector_store %[[val]], %[[buf]][%[[i0]], %[[i1]]] : memref<100x100xf32>, vector<8xf32>
+    }
+  }
+  return
+}
+
+// -----
+
+// Test with loop IVs and constants.
+func @vector_load_vector_store_iv_constant() {
+  %0 = alloc() : memref<100x100xf32>
+  affine.for %i0 = 0 to 10 {
+    affine.for %i1 = 0 to 16 step 4 {
+      %1 = affine.vector_load %0[%i0 + 3, %i1 + 7] : memref<100x100xf32>, vector<4xf32>
+      affine.vector_store %1, %0[%i0 + 3, %i1 + 7] : memref<100x100xf32>, vector<4xf32>
+// CHECK:      %[[buf:.*]] = alloc
+// CHECK-NEXT: affine.for %[[i0:.*]] = 0
+// CHECK-NEXT:   affine.for %[[i1:.*]] = 0
+// CHECK-NEXT:     %[[val:.*]] = affine.vector_load %{{.*}}[%{{.*}} + 3, %{{.*}} + 7] : memref<100x100xf32>, vector<4xf32>
+// CHECK-NEXT:     affine.vector_store %[[val]], %[[buf]][%[[i0]] + 3, %[[i1]] + 7] : memref<100x100xf32>, vector<4xf32>
+    }
+  }
+  return
+}
+
+// -----
+
+func @vector_load_vector_store_2d() {
+  %0 = alloc() : memref<100x100xf32>
+  affine.for %i0 = 0 to 16 step 2{
+    affine.for %i1 = 0 to 16 step 8 {
+      %1 = affine.vector_load %0[%i0, %i1] : memref<100x100xf32>, vector<2x8xf32>
+      affine.vector_store %1, %0[%i0, %i1] : memref<100x100xf32>, vector<2x8xf32>
+// CHECK:      %[[buf:.*]] = alloc
+// CHECK-NEXT: affine.for %[[i0:.*]] = 0
+// CHECK-NEXT:   affine.for %[[i1:.*]] = 0
+// CHECK-NEXT:     %[[val:.*]] = affine.vector_load %[[buf]][%[[i0]], %[[i1]]] : memref<100x100xf32>, vector<2x8xf32>
+// CHECK-NEXT:     affine.vector_store %[[val]], %[[buf]][%[[i0]], %[[i1]]] : memref<100x100xf32>, vector<2x8xf32>
     }
   }
   return

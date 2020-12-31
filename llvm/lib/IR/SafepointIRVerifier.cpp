@@ -208,7 +208,7 @@ PreservedAnalyses SafepointIRVerifierPass::run(Function &F,
   Verify(F, DT, CD);
   return PreservedAnalyses::all();
 }
-}
+} // namespace llvm
 
 namespace {
 
@@ -561,8 +561,7 @@ GCPtrTracker::GCPtrTracker(const Function &F, const DominatorTree &DT,
 }
 
 BasicBlockState *GCPtrTracker::getBasicBlockState(const BasicBlock *BB) {
-  auto it = BlockMap.find(BB);
-  return it != BlockMap.end() ? it->second : nullptr;
+  return BlockMap.lookup(BB);
 }
 
 const BasicBlockState *GCPtrTracker::getBasicBlockState(
@@ -783,7 +782,7 @@ void GCPtrTracker::transferBlock(const BasicBlock *BB, BasicBlockState &BBS,
 
 void GCPtrTracker::transferInstruction(const Instruction &I, bool &Cleared,
                                        AvailableValueSet &Available) {
-  if (isStatepoint(I)) {
+  if (isa<GCStatepointInst>(I)) {
     Cleared = true;
     Available.clear();
   } else if (containsGCPtrType(I.getType()))

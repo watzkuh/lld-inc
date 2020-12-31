@@ -13,20 +13,6 @@
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"
 
-namespace llvm {
-class raw_ostream;
-class StringRef;
-} // namespace llvm
-
-namespace mlir {
-class Attribute;
-class DialectAsmParser;
-class DialectAsmPrinter;
-class Location;
-class MLIRContext;
-class Type;
-} // namespace mlir
-
 namespace fir {
 
 /// FIR dialect
@@ -46,18 +32,18 @@ public:
                       mlir::DialectAsmPrinter &p) const override;
 };
 
-/// Register the dialect with MLIR
-inline void registerFIR() {
-  // we want to register exactly once
-  [[maybe_unused]] static bool init_once = [] {
-    mlir::registerDialect<mlir::AffineDialect>();
-    mlir::registerDialect<mlir::LLVM::LLVMDialect>();
-    mlir::registerDialect<mlir::loop::LoopOpsDialect>();
-    mlir::registerDialect<mlir::StandardOpsDialect>();
-    mlir::registerDialect<mlir::vector::VectorDialect>();
-    mlir::registerDialect<FIROpsDialect>();
-    return true;
-  }();
+/// Register the dialect with the provided registry.
+inline void registerFIRDialects(mlir::DialectRegistry &registry) {
+  // clang-format off
+  registry.insert<mlir::AffineDialect,
+                  mlir::LLVM::LLVMDialect,
+                  mlir::acc::OpenACCDialect,
+                  mlir::omp::OpenMPDialect,
+                  mlir::scf::SCFDialect,
+                  mlir::StandardOpsDialect,
+                  mlir::vector::VectorDialect,
+                  FIROpsDialect>();
+  // clang-format on
 }
 
 /// Register the standard passes we use. This comes from registerAllPasses(),

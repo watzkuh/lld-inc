@@ -1,4 +1,4 @@
-! RUN: %B/test/Semantics/test_errors.sh %s %flang %t
+! RUN: %S/test_errors.sh %s %t %f18
 ! 9.4.5
 subroutine s1
   type :: t(k, l)
@@ -43,7 +43,7 @@ subroutine s3
   !ERROR: Left-hand side of assignment is not modifiable
   y%a(i) = 2
   x%b = 4
-  !ERROR: Left-hand side of assignment is not modifiable
+  !ERROR: Assignment to constant 'y%b' is not allowed
   y%b = 5
 end
 
@@ -94,7 +94,7 @@ subroutine s6(x)
   x(:3) = [1, 2, 3]
   !ERROR: Assumed-size array 'x' must have explicit final subscript upper bound value
   x(:) = [1, 2, 3]
-  !ERROR: Left-hand side of assignment may not be a whole assumed-size array
+  !ERROR: Whole assumed-size array 'x' may not appear here without subscripts
   x = [1, 2, 3]
 end
 
@@ -106,7 +106,7 @@ contains
   subroutine s7(x)
     type(t) :: x(*)
     x(:3)%i = [1, 2, 3]
-    !ERROR: Left-hand side of assignment may not be a whole assumed-size array
+    !ERROR: Whole assumed-size array 'x' may not appear here without subscripts
     x%i = [1, 2, 3]
   end
 end
@@ -114,4 +114,30 @@ end
 subroutine s7
   integer :: a(10), v(10)
   a(v(:)) = 1  ! vector subscript is ok
+end
+
+subroutine s8
+  !ERROR: Assignment to subprogram 's8' is not allowed
+  s8 = 1.0
+end
+
+real function f9() result(r)
+  !ERROR: Assignment to subprogram 'f9' is not allowed
+  f9 = 1.0
+end
+
+!ERROR: No explicit type declared for 'n'
+subroutine s10(a, n)
+  implicit none
+  real a(n)
+  a(1:n) = 0.0  ! should not get a second error here
+end
+
+subroutine s11
+  intrinsic :: sin
+  real :: a
+  !ERROR: Function call must have argument list
+  a = sin
+  !ERROR: Subroutine name is not allowed here
+  a = s11
 end

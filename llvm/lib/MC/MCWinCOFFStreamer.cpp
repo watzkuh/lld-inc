@@ -48,7 +48,7 @@ MCWinCOFFStreamer::MCWinCOFFStreamer(MCContext &Context,
     : MCObjectStreamer(Context, std::move(MAB), std::move(OW), std::move(CE)),
       CurSymbol(nullptr) {}
 
-void MCWinCOFFStreamer::EmitInstToData(const MCInst &Inst,
+void MCWinCOFFStreamer::emitInstToData(const MCInst &Inst,
                                        const MCSubtargetInfo &STI) {
   MCDataFragment *DF = getOrCreateDataFragment();
 
@@ -308,6 +308,16 @@ void MCWinCOFFStreamer::emitLocalCommonSymbol(MCSymbol *S, uint64_t Size,
   PopSection();
 }
 
+void MCWinCOFFStreamer::emitWeakReference(MCSymbol *AliasS,
+                                          const MCSymbol *Symbol) {
+  auto *Alias = cast<MCSymbolCOFF>(AliasS);
+  emitSymbolAttribute(Alias, MCSA_Weak);
+
+  getAssembler().registerSymbol(*Symbol);
+  Alias->setVariableValue(MCSymbolRefExpr::create(
+      Symbol, MCSymbolRefExpr::VK_WEAKREF, getContext()));
+}
+
 void MCWinCOFFStreamer::emitZerofill(MCSection *Section, MCSymbol *Symbol,
                                      uint64_t Size, unsigned ByteAlignment,
                                      SMLoc Loc) {
@@ -328,8 +338,33 @@ void MCWinCOFFStreamer::EmitWinEHHandlerData(SMLoc Loc) {
   llvm_unreachable("not implemented");
 }
 
-void MCWinCOFFStreamer::FinishImpl() {
-  MCObjectStreamer::FinishImpl();
+void MCWinCOFFStreamer::emitCGProfileEntry(const MCSymbolRefExpr *From,
+                                           const MCSymbolRefExpr *To,
+                                           uint64_t Count) {
+  // Ignore temporary symbols for now.
+  if (!From->getSymbol().isTemporary() && !To->getSymbol().isTemporary())
+    getAssembler().CGProfile.push_back({From, To, Count});
+}
+
+void MCWinCOFFStreamer::finalizeCGProfileEntry(const MCSymbolRefExpr *&SRE) {
+  const MCSymbol *S = &SRE->getSymbol();
+  bool Created;
+  getAssembler().registerSymbol(*S, &Created);
+  if (Created)
+    cast<MCSymbolCOFF>(S)->setExternal(true);
+}
+
+void MCWinCOFFStreamer::finalizeCGProfile() {
+  for (MCAssembler::CGProfileEntry &E : getAssembler().CGProfile) {
+    finalizeCGProfileEntry(E.From);
+    finalizeCGProfileEntry(E.To);
+  }
+}
+
+void MCWinCOFFStreamer::finishImpl() {
+  finalizeCGProfile();
+
+  MCObjectStreamer::finishImpl();
 }
 
 void MCWinCOFFStreamer::Error(const Twine &Msg) const {

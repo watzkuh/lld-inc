@@ -128,9 +128,9 @@ private:
 // KIND(x), which is then folded to a constant value.
 // "Bare" type parameter references within a derived type definition do
 // not have base objects.
-template <int KIND> class TypeParamInquiry {
+class TypeParamInquiry {
 public:
-  using Result = Type<TypeCategory::Integer, KIND>;
+  using Result = SubscriptInteger;
   CLASS_BOILERPLATE(TypeParamInquiry)
   TypeParamInquiry(NamedEntity &&x, const Symbol &param)
       : base_{std::move(x)}, parameter_{param} {}
@@ -149,9 +149,6 @@ private:
   std::optional<NamedEntity> base_;
   SymbolRef parameter_;
 };
-
-EXPAND_FOR_EACH_INTEGER_KIND(
-    TEMPLATE_INSTANTIATION, extern template class TypeParamInquiry, )
 
 // R921 subscript-triplet
 class Triplet {
@@ -397,24 +394,6 @@ public:
 
 FOR_EACH_CHARACTER_KIND(extern template class Designator, )
 
-template <typename T> struct Variable {
-  using Result = T;
-  static_assert(IsSpecificIntrinsicType<Result> ||
-      std::is_same_v<Result, SomeKind<TypeCategory::Derived>>);
-  EVALUATE_UNION_CLASS_BOILERPLATE(Variable)
-  std::optional<DynamicType> GetType() const {
-    return std::visit([](const auto &x) { return x.GetType(); }, u);
-  }
-  int Rank() const {
-    return std::visit([](const auto &x) { return x.Rank(); }, u);
-  }
-  llvm::raw_ostream &AsFortran(llvm::raw_ostream &o) const {
-    std::visit([&](const auto &x) { x.AsFortran(o); }, u);
-    return o;
-  }
-  std::variant<Designator<Result>, FunctionRef<Result>> u;
-};
-
 class DescriptorInquiry {
 public:
   using Result = SubscriptInteger;
@@ -440,8 +419,6 @@ private:
 };
 
 #define INSTANTIATE_VARIABLE_TEMPLATES \
-  EXPAND_FOR_EACH_INTEGER_KIND( \
-      TEMPLATE_INSTANTIATION, template class TypeParamInquiry, ) \
   FOR_EACH_SPECIFIC_TYPE(template class Designator, )
 } // namespace Fortran::evaluate
 #endif // FORTRAN_EVALUATE_VARIABLE_H_

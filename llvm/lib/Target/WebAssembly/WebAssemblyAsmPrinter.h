@@ -16,9 +16,7 @@
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
-class MCSymbol;
 class WebAssemblyTargetStreamer;
-class WebAssemblyMCInstLower;
 
 class LLVM_LIBRARY_VISIBILITY WebAssemblyAsmPrinter final : public AsmPrinter {
   const WebAssemblySubtarget *Subtarget;
@@ -79,6 +77,9 @@ public:
   MVT getRegType(unsigned RegNo) const;
   std::string regToString(const MachineOperand &MO);
   WebAssemblyTargetStreamer *getTargetStreamer();
+  MCSymbolWasm *getMCSymbolForFunction(const Function *F, bool EnableEmEH,
+                                       wasm::WasmSignature *Sig,
+                                       bool &InvokeDetected);
 };
 
 } // end namespace llvm

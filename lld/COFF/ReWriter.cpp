@@ -6,11 +6,11 @@
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "WriterUtils.h"
-#include "lld/Common/Threads.h"
 #include <lld/Common/ErrorHandler.h>
 #include <lld/Common/Timer.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/FileOutputBuffer.h>
+#include "llvm/Support/Parallel.h"
 #include <llvm/Support/xxhash.h>
 
 using namespace llvm;
@@ -41,7 +41,7 @@ void abortIncrementalLink() {
   std::vector<char *> args;
   for (auto &a : incrementalLinkFile->arguments)
     args.push_back(&a[0]);
-  driver->link(ArrayRef<char *>(args));
+  driver->linkerMain(ArrayRef<char *>(args));
   exit(0);
 }
 

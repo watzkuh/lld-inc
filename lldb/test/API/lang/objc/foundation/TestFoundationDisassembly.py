@@ -10,7 +10,6 @@ from lldbsuite.test.lldbtest import *
 from lldbsuite.test import lldbutil
 
 
-@skipUnlessDarwin
 class FoundationDisassembleTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
@@ -61,7 +60,7 @@ class FoundationDisassembleTestCase(TestBase):
             if match:
                 func = match.group(1)
                 self.runCmd('image lookup -s "%s"' % func)
-                self.runCmd('disassemble -n "%s"' % func)
+                self.runCmd('disassemble --force -n "%s"' % func)
 
     @skipIfAsan
     def test_simple_disasm(self):

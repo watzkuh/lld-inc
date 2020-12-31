@@ -17,9 +17,8 @@ using namespace llvm;
 using namespace llvm::object;
 using namespace llvm::support::endian;
 using namespace llvm::ELF;
-
-namespace lld {
-namespace elf {
+using namespace lld;
+using namespace lld::elf;
 
 namespace {
 class AMDGPU final : public TargetInfo {
@@ -42,7 +41,7 @@ AMDGPU::AMDGPU() {
 }
 
 static uint32_t getEFlags(InputFile *file) {
-  return cast<ObjFile<ELF64LE>>(file)->getObj().getHeader()->e_flags;
+  return cast<ObjFile<ELF64LE>>(file)->getObj().getHeader().e_flags;
 }
 
 uint32_t AMDGPU::calcEFlags() const {
@@ -109,10 +108,7 @@ RelType AMDGPU::getDynRel(RelType type) const {
   return R_AMDGPU_NONE;
 }
 
-TargetInfo *getAMDGPUTargetInfo() {
+TargetInfo *elf::getAMDGPUTargetInfo() {
   static AMDGPU target;
   return &target;
 }
-
-} // namespace elf
-} // namespace lld

@@ -13,6 +13,7 @@
 #include "flang/Common/Fortran.h"
 #include "flang/Common/enum-set.h"
 #include "flang/Common/reference.h"
+#include "llvm/ADT/DenseMapInfo.h"
 #include <array>
 #include <list>
 #include <optional>
@@ -35,6 +36,8 @@ class ProgramTree;
 
 using SymbolRef = common::Reference<const Symbol>;
 using SymbolVector = std::vector<SymbolRef>;
+using MutableSymbolRef = common::Reference<Symbol>;
+using MutableSymbolVector = std::vector<MutableSymbolRef>;
 
 // A module or submodule.
 class ModuleDetails {
@@ -145,10 +148,14 @@ public:
   AssocEntityDetails &operator=(const AssocEntityDetails &) = default;
   AssocEntityDetails &operator=(AssocEntityDetails &&) = default;
   const MaybeExpr &expr() const { return expr_; }
+  void set_rank(int rank);
+  std::optional<int> rank() const { return rank_; }
 
 private:
   MaybeExpr expr_;
+  std::optional<int> rank_;
 };
+llvm::raw_ostream &operator<<(llvm::raw_ostream &, const AssocEntityDetails &);
 
 // An entity known to be an object.
 class ObjectEntityDetails : public EntityDetails {
@@ -160,8 +167,6 @@ public:
   MaybeExpr &init() { return init_; }
   const MaybeExpr &init() const { return init_; }
   void set_init(MaybeExpr &&expr) { init_ = std::move(expr); }
-  bool initWasValidated() const { return initWasValidated_; }
-  void set_initWasValidated(bool yes = true) { initWasValidated_ = yes; }
   ArraySpec &shape() { return shape_; }
   const ArraySpec &shape() const { return shape_; }
   ArraySpec &coshape() { return coshape_; }
@@ -183,7 +188,6 @@ public:
 
 private:
   MaybeExpr init_;
-  bool initWasValidated_{false};
   ArraySpec shape_;
   ArraySpec coshape_;
   const Symbol *commonBlock_{nullptr}; // common block this object is in
@@ -214,6 +218,9 @@ public:
   const ProcInterface &interface() const { return interface_; }
   ProcInterface &interface() { return interface_; }
   void set_interface(const ProcInterface &interface) { interface_ = interface; }
+  bool IsInterfaceSet() {
+    return interface_.symbol() != nullptr || interface_.type() != nullptr;
+  }
   inline bool HasExplicitInterface() const;
 
   // Be advised: !init().has_value() => uninitialized pointer,
@@ -239,6 +246,8 @@ public:
   const std::list<SourceName> &paramNames() const { return paramNames_; }
   const SymbolVector &paramDecls() const { return paramDecls_; }
   bool sequence() const { return sequence_; }
+  std::map<SourceName, SymbolRef> &finals() { return finals_; }
+  const std::map<SourceName, SymbolRef> &finals() const { return finals_; }
   bool isForwardReferenced() const { return isForwardReferenced_; }
   void add_paramName(const SourceName &name) { paramNames_.push_back(name); }
   void add_paramDecl(const Symbol &symbol) { paramDecls_.push_back(symbol); }
@@ -260,6 +269,8 @@ public:
     }
   }
 
+  const Symbol *GetFinalForRank(int) const;
+
 private:
   // These are (1) the names of the derived type parameters in the order
   // in which they appear on the type definition statement(s), and (2) the
@@ -270,6 +281,7 @@ private:
   // These are the names of the derived type's components in component
   // order.  A parent component, if any, appears first in this list.
   std::list<SourceName> componentNames_;
+  std::map<SourceName, SymbolRef> finals_; // FINAL :: subr
   bool sequence_{false};
   bool isForwardReferenced_{false};
   friend llvm::raw_ostream &operator<<(
@@ -299,23 +311,25 @@ private:
 
 class CommonBlockDetails {
 public:
-  const SymbolVector &objects() const { return objects_; }
-  void add_object(const Symbol &object) { objects_.emplace_back(object); }
+  MutableSymbolVector &objects() { return objects_; }
+  const MutableSymbolVector &objects() const { return objects_; }
+  void add_object(Symbol &object) { objects_.emplace_back(object); }
   MaybeExpr bindName() const { return bindName_; }
   void set_bindName(MaybeExpr &&expr) { bindName_ = std::move(expr); }
+  std::size_t alignment() const { return alignment_; }
+  void set_alignment(std::size_t alignment) { alignment_ = alignment; }
 
 private:
-  SymbolVector objects_;
+  MutableSymbolVector objects_;
   MaybeExpr bindName_;
+  std::size_t alignment_{0}; // required alignment in bytes
 };
-
-class FinalProcDetails {}; // TODO
 
 class MiscDetails {
 public:
   ENUM_CLASS(Kind, None, ConstructName, ScopeName, PassName, ComplexPartRe,
-      ComplexPartIm, KindParamInquiry, LenParamInquiry, SelectTypeAssociateName,
-      TypeBoundDefinedOp);
+      ComplexPartIm, KindParamInquiry, LenParamInquiry, SelectRankAssociateName,
+      SelectTypeAssociateName, TypeBoundDefinedOp);
   MiscDetails(Kind kind) : kind_{kind} {}
   Kind kind() const { return kind_; }
 
@@ -349,7 +363,6 @@ public:
       : location_{location}, symbol_{symbol} {}
   const SourceName &location() const { return location_; }
   const Symbol &symbol() const { return symbol_; }
-  const Symbol &module() const;
 
 private:
   SourceName location_;
@@ -374,6 +387,8 @@ class HostAssocDetails {
 public:
   HostAssocDetails(const Symbol &symbol) : symbol_{symbol} {}
   const Symbol &symbol() const { return symbol_; }
+  bool implicitOrSpecExprError{false};
+  bool implicitOrExplicitTypeError{false};
 
 private:
   SymbolRef symbol_;
@@ -408,7 +423,6 @@ private:
 class GenericDetails {
 public:
   GenericDetails() {}
-  GenericDetails(const SymbolVector &specificProcs);
 
   GenericKind kind() const { return kind_; }
   void set_kind(GenericKind kind) { kind_ = kind; }
@@ -416,6 +430,7 @@ public:
   const SymbolVector &specificProcs() const { return specificProcs_; }
   const std::vector<SourceName> &bindingNames() const { return bindingNames_; }
   void AddSpecificProc(const Symbol &, SourceName bindingName);
+  const SymbolVector &uses() const { return uses_; }
 
   // specific and derivedType indicate a specific procedure or derived type
   // with the same name as this generic. Only one of them may be set.
@@ -425,6 +440,7 @@ public:
   Symbol *derivedType() { return derivedType_; }
   const Symbol *derivedType() const { return derivedType_; }
   void set_derivedType(Symbol &derivedType);
+  void AddUse(const Symbol &);
 
   // Copy in specificProcs, specific, and derivedType from another generic
   void CopyFrom(const GenericDetails &);
@@ -434,22 +450,19 @@ public:
   const Symbol *CheckSpecific() const;
   Symbol *CheckSpecific();
 
-  const std::optional<UseDetails> &useDetails() const { return useDetails_; }
-  void set_useDetails(const UseDetails &details) { useDetails_ = details; }
-
 private:
   GenericKind kind_;
   // all of the specific procedures for this generic
   SymbolVector specificProcs_;
   std::vector<SourceName> bindingNames_;
+  // Symbols used from other modules merged into this one
+  SymbolVector uses_;
   // a specific procedure with the same name as this generic, if any
   Symbol *specific_{nullptr};
   // a derived type with the same name as this generic, if any
   Symbol *derivedType_{nullptr};
-  // If two USEs of generics were merged to form this one, this is the
-  // UseDetails for one of them. Used for reporting USE errors.
-  std::optional<UseDetails> useDetails_;
 };
+llvm::raw_ostream &operator<<(llvm::raw_ostream &, const GenericDetails &);
 
 class UnknownDetails {};
 
@@ -458,17 +471,18 @@ using Details = std::variant<UnknownDetails, MainProgramDetails, ModuleDetails,
     ObjectEntityDetails, ProcEntityDetails, AssocEntityDetails,
     DerivedTypeDetails, UseDetails, UseErrorDetails, HostAssocDetails,
     GenericDetails, ProcBindingDetails, NamelistDetails, CommonBlockDetails,
-    FinalProcDetails, TypeParamDetails, MiscDetails>;
+    TypeParamDetails, MiscDetails>;
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Details &);
 std::string DetailsToString(const Details &);
 
 class Symbol {
 public:
   ENUM_CLASS(Flag,
-      Error, // an error has been reported on this symbol
       Function, // symbol is a function
       Subroutine, // symbol is a subroutine
+      StmtFunction, // symbol is a statement function (Function is set too)
       Implicit, // symbol is implicitly typed
+      ImplicitOrError, // symbol must be implicitly typed or it's an error
       ModFile, // symbol came from .mod file
       ParentComp, // symbol is the "parent component" of an extended type
       CrayPointer, CrayPointee,
@@ -476,15 +490,23 @@ public:
       LocalityLocalInit, // named in LOCAL_INIT locality-spec
       LocalityShared, // named in SHARED locality-spec
       InDataStmt, // initialized in a DATA statement
-
+      InNamelist, // flag is set if the symbol is in Namelist statement
+      // OpenACC data-sharing attribute
+      AccPrivate, AccFirstPrivate, AccShared,
+      // OpenACC data-mapping attribute
+      AccCopyIn, AccCopyOut, AccCreate, AccDelete, AccPresent,
+      // OpenACC miscellaneous flags
+      AccCommonBlock, AccThreadPrivate, AccReduction, AccNone, AccPreDetermined,
       // OpenMP data-sharing attribute
       OmpShared, OmpPrivate, OmpLinear, OmpFirstPrivate, OmpLastPrivate,
       // OpenMP data-mapping attribute
       OmpMapTo, OmpMapFrom, OmpMapAlloc, OmpMapRelease, OmpMapDelete,
+      // OpenMP data-copying attribute
+      OmpCopyIn,
       // OpenMP miscellaneous flags
-      OmpCommonBlock, OmpReduction, OmpDeclareSimd, OmpDeclareTarget,
-      OmpThreadprivate, OmpDeclareReduction, OmpFlushed, OmpCriticalLock,
-      OmpIfSpecified, OmpNone, OmpPreDetermined);
+      OmpCommonBlock, OmpReduction, OmpAllocate, OmpDeclareSimd,
+      OmpDeclareTarget, OmpThreadprivate, OmpDeclareReduction, OmpFlushed,
+      OmpCriticalLock, OmpIfSpecified, OmpNone, OmpPreDetermined, OmpAligned);
   using Flags = common::EnumSet<Flag, Flag_enumSize>;
 
   const Scope &owner() const { return *owner_; }
@@ -499,6 +521,10 @@ public:
   Scope *scope() { return scope_; }
   const Scope *scope() const { return scope_; }
   void set_scope(Scope *scope) { scope_ = scope; }
+  std::size_t size() const { return size_; }
+  void set_size(std::size_t size) { size_ = size; }
+  std::size_t offset() const { return offset_; }
+  void set_offset(std::size_t offset) { offset_ = offset; }
   // Give the symbol a name with a different source location but same chars.
   void ReplaceName(const SourceName &);
 
@@ -533,52 +559,13 @@ public:
   bool CanReplaceDetails(const Details &details) const;
 
   // Follow use-associations and host-associations to get the ultimate entity.
-  Symbol &GetUltimate() {
-    return const_cast<Symbol &>(
-        const_cast<const Symbol *>(this)->GetUltimate());
-  }
-  const Symbol &GetUltimate() const {
-    if (const auto *details{detailsIf<UseDetails>()}) {
-      return details->symbol().GetUltimate();
-    } else if (const auto *details{detailsIf<HostAssocDetails>()}) {
-      return details->symbol().GetUltimate();
-    } else {
-      return *this;
-    }
-  }
+  inline Symbol &GetUltimate();
+  inline const Symbol &GetUltimate() const;
 
-  DeclTypeSpec *GetType() {
-    return const_cast<DeclTypeSpec *>(
-        const_cast<const Symbol *>(this)->GetType());
-  }
-  const DeclTypeSpec *GetType() const {
-    return std::visit(
-        common::visitors{
-            [](const EntityDetails &x) { return x.type(); },
-            [](const ObjectEntityDetails &x) { return x.type(); },
-            [](const AssocEntityDetails &x) { return x.type(); },
-            [](const SubprogramDetails &x) {
-              return x.isFunction() ? x.result().GetType() : nullptr;
-            },
-            [](const ProcEntityDetails &x) {
-              if (const Symbol * symbol{x.interface().symbol()}) {
-                return symbol->GetType();
-              } else {
-                return x.interface().type();
-              }
-            },
-            [&](const ProcBindingDetails &x) { return x.symbol().GetType(); },
-            [](const TypeParamDetails &x) { return x.type(); },
-            [](const UseDetails &x) { return x.symbol().GetType(); },
-            [](const HostAssocDetails &x) { return x.symbol().GetType(); },
-            [](const auto &) -> const DeclTypeSpec * { return nullptr; },
-        },
-        details_);
-  }
+  inline DeclTypeSpec *GetType();
+  inline const DeclTypeSpec *GetType() const;
 
   void SetType(const DeclTypeSpec &);
-
-  bool IsDummy() const;
   bool IsFuncResult() const;
   bool IsObjectArray() const;
   bool IsSubprogram() const;
@@ -627,7 +614,11 @@ public:
             [](const ObjectEntityDetails &oed) { return oed.shape().Rank(); },
             [](const AssocEntityDetails &aed) {
               if (const auto &expr{aed.expr()}) {
-                return expr->Rank();
+                if (auto assocRank{aed.rank()}) {
+                  return *assocRank;
+                } else {
+                  return expr->Rank();
+                }
               } else {
                 return 0;
               }
@@ -659,15 +650,14 @@ public:
   // for a parameterized derived type instantiation with the instance's scope.
   const DerivedTypeSpec *GetParentTypeSpec(const Scope * = nullptr) const;
 
-  // Clones the Symbol into a parameterized derived type instance.
-  Symbol &InstantiateComponent(Scope &, SemanticsContext &) const;
-
 private:
   const Scope *owner_;
   SourceName name_;
   Attrs attrs_;
   Flags flags_;
   Scope *scope_{nullptr};
+  std::size_t size_{0}; // size in bytes
+  std::size_t offset_{0}; // byte offset in scope or common block
   Details details_;
 
   Symbol() {} // only created in class Symbols
@@ -732,8 +722,76 @@ inline bool ProcEntityDetails::HasExplicitInterface() const {
   return false;
 }
 
+inline Symbol &Symbol::GetUltimate() {
+  return const_cast<Symbol &>(const_cast<const Symbol *>(this)->GetUltimate());
+}
+inline const Symbol &Symbol::GetUltimate() const {
+  if (const auto *details{detailsIf<UseDetails>()}) {
+    return details->symbol().GetUltimate();
+  } else if (const auto *details{detailsIf<HostAssocDetails>()}) {
+    return details->symbol().GetUltimate();
+  } else {
+    return *this;
+  }
+}
+
+inline DeclTypeSpec *Symbol::GetType() {
+  return const_cast<DeclTypeSpec *>(
+      const_cast<const Symbol *>(this)->GetType());
+}
+inline const DeclTypeSpec *Symbol::GetType() const {
+  return std::visit(
+      common::visitors{
+          [](const EntityDetails &x) { return x.type(); },
+          [](const ObjectEntityDetails &x) { return x.type(); },
+          [](const AssocEntityDetails &x) { return x.type(); },
+          [](const SubprogramDetails &x) {
+            return x.isFunction() ? x.result().GetType() : nullptr;
+          },
+          [](const ProcEntityDetails &x) {
+            const Symbol *symbol{x.interface().symbol()};
+            return symbol ? symbol->GetType() : x.interface().type();
+          },
+          [](const ProcBindingDetails &x) { return x.symbol().GetType(); },
+          [](const TypeParamDetails &x) { return x.type(); },
+          [](const UseDetails &x) { return x.symbol().GetType(); },
+          [](const HostAssocDetails &x) { return x.symbol().GetType(); },
+          [](const auto &) -> const DeclTypeSpec * { return nullptr; },
+      },
+      details_);
+}
+
 inline bool operator<(SymbolRef x, SymbolRef y) { return *x < *y; }
+inline bool operator<(MutableSymbolRef x, MutableSymbolRef y) {
+  return *x < *y;
+}
 using SymbolSet = std::set<SymbolRef>;
 
 } // namespace Fortran::semantics
+
+// Define required  info so that SymbolRef can be used inside llvm::DenseMap.
+namespace llvm {
+template <> struct DenseMapInfo<Fortran::semantics::SymbolRef> {
+  static inline Fortran::semantics::SymbolRef getEmptyKey() {
+    auto ptr = DenseMapInfo<const Fortran::semantics::Symbol *>::getEmptyKey();
+    return *reinterpret_cast<Fortran::semantics::SymbolRef *>(&ptr);
+  }
+
+  static inline Fortran::semantics::SymbolRef getTombstoneKey() {
+    auto ptr =
+        DenseMapInfo<const Fortran::semantics::Symbol *>::getTombstoneKey();
+    return *reinterpret_cast<Fortran::semantics::SymbolRef *>(&ptr);
+  }
+
+  static unsigned getHashValue(const Fortran::semantics::SymbolRef &sym) {
+    return DenseMapInfo<const Fortran::semantics::Symbol *>::getHashValue(
+        &sym.get());
+  }
+
+  static bool isEqual(const Fortran::semantics::SymbolRef &LHS,
+      const Fortran::semantics::SymbolRef &RHS) {
+    return LHS == RHS;
+  }
+};
+} // namespace llvm
 #endif // FORTRAN_SEMANTICS_SYMBOL_H_

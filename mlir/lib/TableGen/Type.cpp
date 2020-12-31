@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/TableGen/Type.h"
-#include "mlir/ADT/TypeSwitch.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/TableGen/Record.h"
 
 using namespace mlir;
@@ -46,11 +46,16 @@ Optional<StringRef> TypeConstraint::getBuilderCall() const {
   if (!builderCall || !builderCall->getValue())
     return llvm::None;
   return TypeSwitch<llvm::Init *, Optional<StringRef>>(builderCall->getValue())
-      .Case<llvm::StringInit, llvm::CodeInit>([&](auto *init) {
+      .Case<llvm::StringInit>([&](auto *init) {
         StringRef value = init->getValue();
         return value.empty() ? Optional<StringRef>() : value;
       })
       .Default([](auto *) { return llvm::None; });
+}
+
+// Return the C++ class name for this type (which may just be ::mlir::Type).
+StringRef TypeConstraint::getCPPClassName() const {
+  return def->getValueAsString("cppClassName");
 }
 
 Type::Type(const llvm::Record *record) : TypeConstraint(record) {}

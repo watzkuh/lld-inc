@@ -136,9 +136,10 @@ bool llvm::EliminateUnreachableBlocks(Function &F, DomTreeUpdater *DTU,
   return !DeadBlocks.empty();
 }
 
-void llvm::FoldSingleEntryPHINodes(BasicBlock *BB,
+bool llvm::FoldSingleEntryPHINodes(BasicBlock *BB,
                                    MemoryDependenceResults *MemDep) {
-  if (!isa<PHINode>(BB->begin())) return;
+  if (!isa<PHINode>(BB->begin()))
+    return false;
 
   while (PHINode *PN = dyn_cast<PHINode>(BB->begin())) {
     if (PN->getIncomingValue(0) != PN)
@@ -151,6 +152,7 @@ void llvm::FoldSingleEntryPHINodes(BasicBlock *BB,
 
     PN->eraseFromParent();
   }
+  return true;
 }
 
 bool llvm::DeleteDeadPHIs(BasicBlock *BB, const TargetLibraryInfo *TLI,
@@ -237,7 +239,7 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, DomTreeUpdater *DTU,
     // times. We add inserts before deletes here to reduce compile time.
     for (auto I = succ_begin(BB), E = succ_end(BB); I != E; ++I)
       // This successor of BB may already have PredBB as a predecessor.
-      if (llvm::find(successors(PredBB), *I) == succ_end(PredBB))
+      if (!llvm::is_contained(successors(PredBB), *I))
         Updates.push_back({DominatorTree::Insert, PredBB, *I});
     for (auto I = succ_begin(BB), E = succ_end(BB); I != E; ++I)
       Updates.push_back({DominatorTree::Delete, BB, *I});
@@ -285,11 +287,6 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, DomTreeUpdater *DTU,
   // Add unreachable to now empty BB.
   new UnreachableInst(BB->getContext(), BB);
 
-  // Eliminate duplicate/redundant dbg.values. This seems to be a good place to
-  // do that since we might end up with redundant dbg.values describing the
-  // entry PHI node post-splice.
-  RemoveRedundantDbgInstrs(PredBB);
-
   // Inherit predecessors name if it exists.
   if (!PredBB->hasName())
     PredBB->takeName(BB);
@@ -313,6 +310,31 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, DomTreeUpdater *DTU,
   }
 
   return true;
+}
+
+bool llvm::MergeBlockSuccessorsIntoGivenBlocks(
+    SmallPtrSetImpl<BasicBlock *> &MergeBlocks, Loop *L, DomTreeUpdater *DTU,
+    LoopInfo *LI) {
+  assert(!MergeBlocks.empty() && "MergeBlocks should not be empty");
+
+  bool BlocksHaveBeenMerged = false;
+  while (!MergeBlocks.empty()) {
+    BasicBlock *BB = *MergeBlocks.begin();
+    BasicBlock *Dest = BB->getSingleSuccessor();
+    if (Dest && (!L || L->contains(Dest))) {
+      BasicBlock *Fold = Dest->getUniquePredecessor();
+      (void)Fold;
+      if (MergeBlockIntoPredecessor(Dest, DTU, LI)) {
+        assert(Fold == BB &&
+               "Expecting BB to be unique predecessor of the Dest block");
+        MergeBlocks.erase(Dest);
+        BlocksHaveBeenMerged = true;
+      } else
+        MergeBlocks.erase(BB);
+    } else
+      MergeBlocks.erase(BB);
+  }
+  return BlocksHaveBeenMerged;
 }
 
 /// Remove redundant instructions within sequences of consecutive dbg.value
@@ -490,7 +512,7 @@ BasicBlock *llvm::SplitEdge(BasicBlock *BB, BasicBlock *Succ, DominatorTree *DT,
     // block.
     assert(SP == BB && "CFG broken");
     SP = nullptr;
-    return SplitBlock(Succ, &Succ->front(), DT, LI, MSSAU);
+    return SplitBlock(Succ, &Succ->front(), DT, LI, MSSAU, "", /*Before=*/true);
   }
 
   // Otherwise, if BB has a single successor, split it at the bottom of the
@@ -517,7 +539,10 @@ llvm::SplitAllCriticalEdges(Function &F,
 
 BasicBlock *llvm::SplitBlock(BasicBlock *Old, Instruction *SplitPt,
                              DominatorTree *DT, LoopInfo *LI,
-                             MemorySSAUpdater *MSSAU, const Twine &BBName) {
+                             MemorySSAUpdater *MSSAU, const Twine &BBName,
+                             bool Before) {
+  if (Before)
+    return splitBlockBefore(Old, SplitPt, DT, LI, MSSAU, BBName);
   BasicBlock::iterator SplitIt = SplitPt->getIterator();
   while (isa<PHINode>(SplitIt) || SplitIt->isEHPad())
     ++SplitIt;
@@ -546,6 +571,51 @@ BasicBlock *llvm::SplitBlock(BasicBlock *Old, Instruction *SplitPt,
   if (MSSAU)
     MSSAU->moveAllAfterSpliceBlocks(Old, New, &*(New->begin()));
 
+  return New;
+}
+
+BasicBlock *llvm::splitBlockBefore(BasicBlock *Old, Instruction *SplitPt,
+                                   DominatorTree *DT, LoopInfo *LI,
+                                   MemorySSAUpdater *MSSAU,
+                                   const Twine &BBName) {
+
+  BasicBlock::iterator SplitIt = SplitPt->getIterator();
+  while (isa<PHINode>(SplitIt) || SplitIt->isEHPad())
+    ++SplitIt;
+  std::string Name = BBName.str();
+  BasicBlock *New = Old->splitBasicBlock(
+      SplitIt, Name.empty() ? Old->getName() + ".split" : Name,
+      /* Before=*/true);
+
+  // The new block lives in whichever loop the old one did. This preserves
+  // LCSSA as well, because we force the split point to be after any PHI nodes.
+  if (LI)
+    if (Loop *L = LI->getLoopFor(Old))
+      L->addBasicBlockToLoop(New, *LI);
+
+  if (DT) {
+    DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
+    SmallVector<DominatorTree::UpdateType, 8> DTUpdates;
+    // New dominates Old. The predecessor nodes of the Old node dominate
+    // New node.
+    DTUpdates.push_back({DominatorTree::Insert, New, Old});
+    for (BasicBlock *Pred : predecessors(New))
+      if (DT->getNode(Pred)) {
+        DTUpdates.push_back({DominatorTree::Insert, Pred, New});
+        DTUpdates.push_back({DominatorTree::Delete, Pred, Old});
+      }
+
+    DTU.applyUpdates(DTUpdates);
+    DTU.flush();
+
+    // Move MemoryAccesses still tracked in Old, but part of New now.
+    // Update accesses in successor blocks accordingly.
+    if (MSSAU) {
+      MSSAU->applyUpdates(DTUpdates, *DT);
+      if (VerifyMemorySSA)
+        MSSAU->getMemorySSA()->verifyMemorySSA();
+    }
+  }
   return New;
 }
 
@@ -733,12 +803,22 @@ BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB,
 
   // The new block unconditionally branches to the old block.
   BranchInst *BI = BranchInst::Create(BB, NewBB);
+
+  Loop *L = nullptr;
+  BasicBlock *OldLatch = nullptr;
   // Splitting the predecessors of a loop header creates a preheader block.
-  if (LI && LI->isLoopHeader(BB))
+  if (LI && LI->isLoopHeader(BB)) {
+    L = LI->getLoopFor(BB);
     // Using the loop start line number prevents debuggers stepping into the
     // loop body for this instruction.
-    BI->setDebugLoc(LI->getLoopFor(BB)->getStartLoc());
-  else
+    BI->setDebugLoc(L->getStartLoc());
+
+    // If BB is the header of the Loop, it is possible that the loop is
+    // modified, such that the current latch does not remain the latch of the
+    // loop. If that is the case, the loop metadata from the current latch needs
+    // to be applied to the new latch.
+    OldLatch = L->getLoopLatch();
+  } else
     BI->setDebugLoc(BB->getFirstNonPHIOrDbg()->getDebugLoc());
 
   // Move the edges from Preds to point to NewBB instead of BB.
@@ -771,6 +851,15 @@ BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB,
   if (!Preds.empty()) {
     // Update the PHI nodes in BB with the values coming from NewBB.
     UpdatePHINodes(BB, NewBB, Preds, BI, HasLoopExit);
+  }
+
+  if (OldLatch) {
+    BasicBlock *NewLatch = L->getLoopLatch();
+    if (NewLatch != OldLatch) {
+      MDNode *MD = OldLatch->getTerminator()->getMetadata("llvm.loop");
+      NewLatch->getTerminator()->setMetadata("llvm.loop", MD);
+      OldLatch->getTerminator()->setMetadata("llvm.loop", nullptr);
+    }
   }
 
   return NewBB;
@@ -1144,18 +1233,62 @@ static void reconnectPhis(BasicBlock *Out, BasicBlock *GuardBlock,
 using BBPredicates = DenseMap<BasicBlock *, PHINode *>;
 using BBSetVector = SetVector<BasicBlock *>;
 
-// Collect predicates for each outgoing block. If control reaches the
-// Hub from an incoming block InBB, then the predicate for each
-// outgoing block OutBB decides whether control is forwarded to OutBB.
+// Redirects the terminator of the incoming block to the first guard
+// block in the hub. The condition of the original terminator (if it
+// was conditional) and its original successors are returned as a
+// tuple <condition, succ0, succ1>. The function additionally filters
+// out successors that are not in the set of outgoing blocks.
 //
-// These predicates are not orthogonal. The Hub evaluates them in the
-// same order as the Outgoing set-vector, and control branches to the
-// first outgoing block whose predicate evaluates to true.
-static void createGuardPredicates(BasicBlock *FirstGuardBlock,
-                                  BBPredicates &GuardPredicates,
-                                  SmallVectorImpl<WeakVH> &DeletionCandidates,
-                                  const BBSetVector &Incoming,
-                                  const BBSetVector &Outgoing) {
+// - condition is non-null iff the branch is conditional.
+// - Succ1 is non-null iff the sole/taken target is an outgoing block.
+// - Succ2 is non-null iff condition is non-null and the fallthrough
+//         target is an outgoing block.
+static std::tuple<Value *, BasicBlock *, BasicBlock *>
+redirectToHub(BasicBlock *BB, BasicBlock *FirstGuardBlock,
+              const BBSetVector &Outgoing) {
+  auto Branch = cast<BranchInst>(BB->getTerminator());
+  auto Condition = Branch->isConditional() ? Branch->getCondition() : nullptr;
+
+  BasicBlock *Succ0 = Branch->getSuccessor(0);
+  BasicBlock *Succ1 = nullptr;
+  Succ0 = Outgoing.count(Succ0) ? Succ0 : nullptr;
+
+  if (Branch->isUnconditional()) {
+    Branch->setSuccessor(0, FirstGuardBlock);
+    assert(Succ0);
+  } else {
+    Succ1 = Branch->getSuccessor(1);
+    Succ1 = Outgoing.count(Succ1) ? Succ1 : nullptr;
+    assert(Succ0 || Succ1);
+    if (Succ0 && !Succ1) {
+      Branch->setSuccessor(0, FirstGuardBlock);
+    } else if (Succ1 && !Succ0) {
+      Branch->setSuccessor(1, FirstGuardBlock);
+    } else {
+      Branch->eraseFromParent();
+      BranchInst::Create(FirstGuardBlock, BB);
+    }
+  }
+
+  assert(Succ0 || Succ1);
+  return std::make_tuple(Condition, Succ0, Succ1);
+}
+
+// Capture the existing control flow as guard predicates, and redirect
+// control flow from every incoming block to the first guard block in
+// the hub.
+//
+// There is one guard predicate for each outgoing block OutBB. The
+// predicate is a PHINode with one input for each InBB which
+// represents whether the hub should transfer control flow to OutBB if
+// it arrived from InBB. These predicates are NOT ORTHOGONAL. The Hub
+// evaluates them in the same order as the Outgoing set-vector, and
+// control branches to the first outgoing block whose predicate
+// evaluates to true.
+static void convertToGuardPredicates(
+    BasicBlock *FirstGuardBlock, BBPredicates &GuardPredicates,
+    SmallVectorImpl<WeakVH> &DeletionCandidates, const BBSetVector &Incoming,
+    const BBSetVector &Outgoing) {
   auto &Context = Incoming.front()->getContext();
   auto BoolTrue = ConstantInt::getTrue(Context);
   auto BoolFalse = ConstantInt::getFalse(Context);
@@ -1172,30 +1305,11 @@ static void createGuardPredicates(BasicBlock *FirstGuardBlock,
   }
 
   for (auto In : Incoming) {
-    auto Branch = cast<BranchInst>(In->getTerminator());
-    BasicBlock *Succ0 = Branch->getSuccessor(0);
-    BasicBlock *Succ1 = nullptr;
-
-    Succ0 = Outgoing.count(Succ0) ? Succ0 : nullptr;
-
-    if (Branch->isUnconditional()) {
-      Branch->setSuccessor(0, FirstGuardBlock);
-      assert(Succ0);
-    } else {
-      Succ1 = Branch->getSuccessor(1);
-      Succ1 = Outgoing.count(Succ1) ? Succ1 : nullptr;
-      assert(Succ0 || Succ1);
-      if (Succ0 && !Succ1) {
-        Branch->setSuccessor(0, FirstGuardBlock);
-      } else if (Succ1 && !Succ0) {
-        Branch->setSuccessor(1, FirstGuardBlock);
-      } else {
-        Branch->eraseFromParent();
-        BranchInst::Create(FirstGuardBlock, In);
-      }
-    }
-
-    assert(Succ0 || Succ1);
+    Value *Condition;
+    BasicBlock *Succ0;
+    BasicBlock *Succ1;
+    std::tie(Condition, Succ0, Succ1) =
+        redirectToHub(In, FirstGuardBlock, Outgoing);
 
     // Optimization: Consider an incoming block A with both successors
     // Succ0 and Succ1 in the set of outgoing blocks. The predicates
@@ -1205,7 +1319,6 @@ static void createGuardPredicates(BasicBlock *FirstGuardBlock,
     // control must reach Succ1, which means that the predicate for
     // Succ1 is always true.
     bool OneSuccessorDone = false;
-    auto Condition = Branch->getCondition();
     for (int i = 0, e = Outgoing.size() - 1; i != e; ++i) {
       auto Out = Outgoing[i];
       auto Phi = GuardPredicates[Out];
@@ -1287,8 +1400,8 @@ BasicBlock *llvm::CreateControlFlowHub(
 
   BBPredicates GuardPredicates;
   SmallVector<WeakVH, 8> DeletionCandidates;
-  createGuardPredicates(FirstGuardBlock, GuardPredicates, DeletionCandidates,
-                        Incoming, Outgoing);
+  convertToGuardPredicates(FirstGuardBlock, GuardPredicates, DeletionCandidates,
+                           Incoming, Outgoing);
 
   GuardBlocks.push_back(FirstGuardBlock);
   createGuardBlocks(GuardBlocks, F, Outgoing, GuardPredicates, Prefix);

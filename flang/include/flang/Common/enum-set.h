@@ -16,7 +16,6 @@
 
 #include "constexpr-bitset.h"
 #include "idioms.h"
-#include "llvm/Support/raw_ostream.h"
 #include <bitset>
 #include <cstddef>
 #include <initializer_list>
@@ -38,8 +37,8 @@ public:
 
   constexpr EnumSet() {}
   constexpr EnumSet(const std::initializer_list<enumerationType> &enums) {
-    for (auto x : enums) {
-      set(x);
+    for (auto it{enums.begin()}; it != enums.end(); ++it) {
+      set(*it);
     }
   }
   constexpr EnumSet(const EnumSet &) = default;
@@ -109,6 +108,13 @@ public:
     EnumSet result{*this};
     result.bitset_ ^= that.bitset_;
     return result;
+  }
+
+  constexpr EnumSet operator+(enumerationType v) const {
+    return {*this | EnumSet{v}};
+  }
+  constexpr EnumSet operator-(enumerationType v) const {
+    return {*this & ~EnumSet{v}};
   }
 
   constexpr bool operator==(const EnumSet &that) const {
@@ -183,7 +189,7 @@ public:
       // std::bitset: just iterate
       for (std::size_t j{0}; j < BITS; ++j) {
         auto enumerator{static_cast<enumerationType>(j)};
-        if (bitset_.test(enumerator)) {
+        if (bitset_.test(j)) {
           return {enumerator};
         }
       }
@@ -199,8 +205,8 @@ public:
     }
   }
 
-  llvm::raw_ostream &Dump(
-      llvm::raw_ostream &o, std::string EnumToString(enumerationType)) const {
+  template <typename STREAM>
+  STREAM &Dump(STREAM &o, std::string EnumToString(enumerationType)) const {
     char sep{'{'};
     IterateOverMembers([&](auto e) {
       o << sep << EnumToString(e);

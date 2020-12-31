@@ -29,8 +29,10 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ScopedPrinter.h"
+#include "llvm/Support/TimeProfiler.h"
 #include <cassert>
 #include <limits>
 #include <vector>
@@ -38,9 +40,9 @@
 using namespace llvm;
 using namespace llvm::ELF;
 using namespace llvm::support::endian;
+using namespace lld;
+using namespace lld::elf;
 
-namespace lld {
-namespace elf {
 namespace {
 class ScriptParser final : ScriptLexer {
 public:
@@ -100,6 +102,7 @@ private:
                                                  uint64_t withFlags,
                                                  uint64_t withoutFlags);
   unsigned readPhdrType();
+  SortSectionPolicy peekSortKind();
   SortSectionPolicy readSortKind();
   SymbolAssignment *readProvideHidden(bool provide, bool hidden);
   SymbolAssignment *readAssignment(StringRef tok);
@@ -175,7 +178,6 @@ static ExprValue bitOr(ExprValue a, ExprValue b) {
 }
 
 void ScriptParser::readDynamicList() {
-  config->hasDynamicList = true;
   expect("{");
   std::vector<SymbolVersion> locals;
   std::vector<SymbolVersion> globals;
@@ -290,22 +292,40 @@ void ScriptParser::addFile(StringRef s) {
   }
 
   if (s.startswith("/")) {
+    // Case 1: s is an absolute path. Just open it.
     driver->addFile(s, /*withLOption=*/false);
   } else if (s.startswith("=")) {
+    // Case 2: relative to the sysroot.
     if (config->sysroot.empty())
       driver->addFile(s.substr(1), /*withLOption=*/false);
     else
       driver->addFile(saver.save(config->sysroot + "/" + s.substr(1)),
                       /*withLOption=*/false);
   } else if (s.startswith("-l")) {
+    // Case 3: search in the list of library paths.
     driver->addLibrary(s.substr(2));
-  } else if (sys::fs::exists(s)) {
-    driver->addFile(s, /*withLOption=*/false);
   } else {
-    if (Optional<std::string> path = findFromSearchPaths(s))
-      driver->addFile(saver.save(*path), /*withLOption=*/true);
-    else
-      setError("unable to find " + s);
+    // Case 4: s is a relative path. Search in the directory of the script file.
+    std::string filename = std::string(getCurrentMB().getBufferIdentifier());
+    StringRef directory = sys::path::parent_path(filename);
+    if (!directory.empty()) {
+      SmallString<0> path(directory);
+      sys::path::append(path, s);
+      if (sys::fs::exists(path)) {
+        driver->addFile(path, /*withLOption=*/false);
+        return;
+      }
+    }
+    // Then search in the current working directory.
+    if (sys::fs::exists(s)) {
+      driver->addFile(s, /*withLOption=*/false);
+    } else {
+      // Finally, search in the list of library paths.
+      if (Optional<std::string> path = findFromSearchPaths(s))
+        driver->addFile(saver.save(*path), /*withLOption=*/true);
+      else
+        setError("unable to find " + s);
+    }
   }
 }
 
@@ -404,6 +424,8 @@ static std::pair<ELFKind, uint16_t> parseBfdName(StringRef s) {
       .Case("elf64-tradlittlemips", {ELF64LEKind, EM_MIPS})
       .Case("elf32-littleriscv", {ELF32LEKind, EM_RISCV})
       .Case("elf64-littleriscv", {ELF64LEKind, EM_RISCV})
+      .Case("elf64-sparc", {ELF64BEKind, EM_SPARCV9})
+      .Case("elf32-msp430", {ELF32LEKind, EM_MSP430})
       .Default({ELFNoneKind, EM_NONE});
 }
 
@@ -422,6 +444,8 @@ void ScriptParser::readOutputFormat() {
     setError("unknown output format name: " + config->bfdname);
   if (s == "elf32-ntradlittlemips" || s == "elf32-ntradbigmips")
     config->mipsN32Abi = true;
+  if (config->emachine == EM_MSP430)
+    config->osabi = ELFOSABI_STANDALONE;
 
   if (consume(")"))
     return;
@@ -598,16 +622,20 @@ StringMatcher ScriptParser::readFilePatterns() {
   return Matcher;
 }
 
+SortSectionPolicy ScriptParser::peekSortKind() {
+  return StringSwitch<SortSectionPolicy>(peek())
+      .Cases("SORT", "SORT_BY_NAME", SortSectionPolicy::Name)
+      .Case("SORT_BY_ALIGNMENT", SortSectionPolicy::Alignment)
+      .Case("SORT_BY_INIT_PRIORITY", SortSectionPolicy::Priority)
+      .Case("SORT_NONE", SortSectionPolicy::None)
+      .Default(SortSectionPolicy::Default);
+}
+
 SortSectionPolicy ScriptParser::readSortKind() {
-  if (consume("SORT") || consume("SORT_BY_NAME"))
-    return SortSectionPolicy::Name;
-  if (consume("SORT_BY_ALIGNMENT"))
-    return SortSectionPolicy::Alignment;
-  if (consume("SORT_BY_INIT_PRIORITY"))
-    return SortSectionPolicy::Priority;
-  if (consume("SORT_NONE"))
-    return SortSectionPolicy::None;
-  return SortSectionPolicy::Default;
+  SortSectionPolicy ret = peekSortKind();
+  if (ret != SortSectionPolicy::Default)
+    skip();
+  return ret;
 }
 
 // Reads SECTIONS command contents in the following form:
@@ -633,11 +661,15 @@ std::vector<SectionPattern> ScriptParser::readInputSectionsList() {
     }
 
     StringMatcher SectionMatcher;
-    while (!errorCount() && peek() != ")" && peek() != "EXCLUDE_FILE")
+    // Break if the next token is ), EXCLUDE_FILE, or SORT*.
+    while (!errorCount() && peek() != ")" && peek() != "EXCLUDE_FILE" &&
+           peekSortKind() == SortSectionPolicy::Default)
       SectionMatcher.addPattern(unquote(next()));
 
     if (!SectionMatcher.empty())
       ret.push_back({std::move(excludeFilePat), std::move(SectionMatcher)});
+    else if (excludeFilePat.empty())
+      break;
     else
       setError("section pattern is expected");
   }
@@ -1292,7 +1324,10 @@ Expr ScriptParser::readPrimary() {
   }
   if (tok == "DEFINED") {
     StringRef name = readParenLiteral();
-    return [=] { return symtab->find(name) ? 1 : 0; };
+    return [=] {
+      Symbol *b = symtab->find(name);
+      return (b && b->isDefined()) ? 1 : 0;
+    };
   }
   if (tok == "LENGTH") {
     StringRef name = readParenLiteral();
@@ -1309,6 +1344,15 @@ Expr ScriptParser::readPrimary() {
     return [=] {
       checkIfExists(cmd, location);
       return cmd->getLMA();
+    };
+  }
+  if (tok == "LOG2CEIL") {
+    expect("(");
+    Expr a = readExpr();
+    expect(")");
+    return [=] {
+      // LOG2CEIL(0) is defined to be 0.
+      return llvm::Log2_64_Ceil(std::max(a().getValue(), UINT64_C(1)));
     };
   }
   if (tok == "MAX" || tok == "MIN") {
@@ -1346,7 +1390,7 @@ Expr ScriptParser::readPrimary() {
     return [=] { return cmd->size; };
   }
   if (tok == "SIZEOF_HEADERS")
-    return [=] { return getHeaderSize(); };
+    return [=] { return elf::getHeaderSize(); };
 
   // Tok is the dot.
   if (tok == ".")
@@ -1456,7 +1500,7 @@ void ScriptParser::readVersionDeclaration(StringRef verStr) {
     expect(";");
 }
 
-static bool hasWildcard(StringRef s) {
+bool elf::hasWildcard(StringRef s) {
   return s.find_first_of("?*[") != StringRef::npos;
 }
 
@@ -1588,19 +1632,24 @@ std::pair<uint32_t, uint32_t> ScriptParser::readMemoryAttributes() {
   return {flags, negFlags};
 }
 
-void readLinkerScript(MemoryBufferRef mb) {
+void elf::readLinkerScript(MemoryBufferRef mb) {
+  llvm::TimeTraceScope timeScope("Read linker script",
+                                 mb.getBufferIdentifier());
   ScriptParser(mb).readLinkerScript();
 }
 
-void readVersionScript(MemoryBufferRef mb) {
+void elf::readVersionScript(MemoryBufferRef mb) {
+  llvm::TimeTraceScope timeScope("Read version script",
+                                 mb.getBufferIdentifier());
   ScriptParser(mb).readVersionScript();
 }
 
-void readDynamicList(MemoryBufferRef mb) { ScriptParser(mb).readDynamicList(); }
-
-void readDefsym(StringRef name, MemoryBufferRef mb) {
-  ScriptParser(mb).readDefsym(name);
+void elf::readDynamicList(MemoryBufferRef mb) {
+  llvm::TimeTraceScope timeScope("Read dynamic list", mb.getBufferIdentifier());
+  ScriptParser(mb).readDynamicList();
 }
 
-} // namespace elf
-} // namespace lld
+void elf::readDefsym(StringRef name, MemoryBufferRef mb) {
+  llvm::TimeTraceScope timeScope("Read defsym input", name);
+  ScriptParser(mb).readDefsym(name);
+}

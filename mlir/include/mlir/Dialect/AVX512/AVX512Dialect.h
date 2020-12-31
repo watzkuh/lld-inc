@@ -13,19 +13,14 @@
 #ifndef MLIR_DIALECT_AVX512_AVX512DIALECT_H_
 #define MLIR_DIALECT_AVX512_AVX512DIALECT_H_
 
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
-#include "mlir/Interfaces/SideEffects.h"
-
-namespace mlir {
-namespace avx512 {
-
-#define GET_OP_CLASSES
-#include "mlir/Dialect/AVX512/AVX512.h.inc"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #include "mlir/Dialect/AVX512/AVX512Dialect.h.inc"
 
-} // namespace avx512
-} // namespace mlir
+#define GET_OP_CLASSES
+#include "mlir/Dialect/AVX512/AVX512.h.inc"
 
 #endif // MLIR_DIALECT_AVX512_AVX512DIALECT_H_

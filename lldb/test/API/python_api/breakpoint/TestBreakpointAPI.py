@@ -25,7 +25,7 @@ class BreakpointAPITestCase(TestBase):
 
         # Now create a breakpoint on main.c by name 'AFunction'.
         breakpoint = target.BreakpointCreateByName('AFunction', 'a.out')
-        #print("breakpoint:", breakpoint)
+        self.trace("breakpoint:", breakpoint)
         self.assertTrue(breakpoint and
                         breakpoint.GetNumLocations() == 1,
                         VALID_BREAKPOINT)
@@ -59,13 +59,16 @@ class BreakpointAPITestCase(TestBase):
 
         # Now create a breakpoint on main.c by name 'AFunction'.
         breakpoint = target.BreakpointCreateByName('AFunction', 'a.out')
-        #print("breakpoint:", breakpoint)
+        self.trace("breakpoint:", breakpoint)
         self.assertTrue(breakpoint and
                         breakpoint.GetNumLocations() == 1,
                         VALID_BREAKPOINT)
         location = breakpoint.GetLocationAtIndex(0)
         self.assertTrue(location.IsValid())
 
+        # Make sure the breakpoint's target is right:
+        self.assertEqual(target, breakpoint.GetTarget(), "Breakpoint reports its target correctly")
+        
         self.assertTrue(self.dbg.DeleteTarget(target))
         self.assertFalse(breakpoint.IsValid())
         self.assertFalse(location.IsValid())

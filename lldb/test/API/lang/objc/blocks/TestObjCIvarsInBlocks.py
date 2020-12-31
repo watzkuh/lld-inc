@@ -18,7 +18,6 @@ class TestObjCIvarsInBlocks(TestBase):
         self.class_source = "ivars-in-blocks.m"
         self.class_source_file_spec = lldb.SBFileSpec(self.class_source)
 
-    @skipUnlessDarwin
     @add_test_categories(['pyapi'])
     @skipIf(dwarf_version=['<', '4'])
     @expectedFailureAll(
@@ -125,7 +124,7 @@ class TestObjCIvarsInBlocks(TestBase):
             expr, "Successfully got a local variable in a block in a class method.")
 
         ret_value_signed = expr.GetValueAsSigned(error)
-        # print('ret_value_signed = %i' % (ret_value_signed))
+        self.trace('ret_value_signed = %i' % (ret_value_signed))
         self.assertTrue(
             ret_value_signed == 5,
             "The local variable in the block was what we expected.")

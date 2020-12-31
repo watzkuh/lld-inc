@@ -17,8 +17,6 @@ class PlatformWindows : public RemoteAwarePlatform {
 public:
   PlatformWindows(bool is_host);
 
-  ~PlatformWindows() override;
-
   static void Initialize();
 
   static void Terminate();
@@ -36,11 +34,6 @@ public:
   uint32_t GetPluginVersion() override { return 1; }
 
   // lldb_private::Platform functions
-  Status
-  ResolveExecutable(const lldb_private::ModuleSpec &module_spec,
-                    lldb::ModuleSP &module_sp,
-                    const FileSpecList *module_search_paths_ptr) override;
-
   const char *GetDescription() override {
     return GetPluginDescriptionStatic(IsHost());
   }
@@ -70,9 +63,6 @@ public:
   void CalculateTrapHandlerSymbolNames() override {}
 
   ConstString GetFullNameForDylib(ConstString basename) override;
-
-private:
-  DISALLOW_COPY_AND_ASSIGN(PlatformWindows);
 };
 
 } // namespace lldb_private

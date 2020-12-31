@@ -33,6 +33,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/ScopedPrinter.h"
+#include "llvm/Support/SpecialCaseList.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -129,6 +130,9 @@ private:
   CoverageFiltersMatchAll Filters;
   CoverageFilters IgnoreFilenameFilters;
 
+  /// True if InputSourceFiles are provided.
+  bool HadSourceFiles = false;
+
   /// The path to the indexed profile.
   std::string PGOFilename;
 
@@ -193,6 +197,7 @@ void CodeCoverageTool::addCollectedPath(const std::string &Path) {
   sys::path::remove_dots(EffectivePath, /*remove_dot_dots=*/true);
   if (!IgnoreFilenameFilters.matchesFilename(EffectivePath))
     SourceFiles.emplace_back(EffectivePath.str());
+  HadSourceFiles = !SourceFiles.empty();
 }
 
 void CodeCoverageTool::collectPaths(const std::string &Path) {
@@ -394,6 +399,7 @@ void CodeCoverageTool::remapPathNames(const CoverageMapping &Coverage) {
       return "";
     SmallString<128> NativePath;
     sys::path::native(Path, NativePath);
+    sys::path::remove_dots(NativePath, true);
     if (!sys::path::is_separator(NativePath.back()))
       NativePath += sys::path::get_separator();
     return NativePath.c_str();
@@ -405,6 +411,7 @@ void CodeCoverageTool::remapPathNames(const CoverageMapping &Coverage) {
   for (StringRef Filename : Coverage.getUniqueSourceFiles()) {
     SmallString<128> NativeFilename;
     sys::path::native(Filename, NativeFilename);
+    sys::path::remove_dots(NativeFilename, true);
     if (NativeFilename.startswith(RemapFrom)) {
       RemappedFilenames[Filename] =
           RemapTo + NativeFilename.substr(RemapFrom.size()).str();
@@ -429,16 +436,11 @@ void CodeCoverageTool::remapPathNames(const CoverageMapping &Coverage) {
 void CodeCoverageTool::removeUnmappedInputs(const CoverageMapping &Coverage) {
   std::vector<StringRef> CoveredFiles = Coverage.getUniqueSourceFiles();
 
-  auto UncoveredFilesIt = SourceFiles.end();
   // The user may have specified source files which aren't in the coverage
   // mapping. Filter these files away.
-  UncoveredFilesIt = std::remove_if(
-      SourceFiles.begin(), SourceFiles.end(), [&](const std::string &SF) {
-        return !std::binary_search(CoveredFiles.begin(), CoveredFiles.end(),
-                                   SF);
-      });
-
-  SourceFiles.erase(UncoveredFilesIt, SourceFiles.end());
+  llvm::erase_if(SourceFiles, [&](const std::string &SF) {
+    return !std::binary_search(CoveredFiles.begin(), CoveredFiles.end(), SF);
+  });
 }
 
 void CodeCoverageTool::demangleSymbols(const CoverageMapping &Coverage) {
@@ -543,8 +545,11 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
       cl::Positional, cl::desc("Covered executable or object file."));
 
   cl::list<std::string> CovFilenames(
-      "object", cl::desc("Coverage executable or object file"), cl::ZeroOrMore,
-      cl::CommaSeparated);
+      "object", cl::desc("Coverage executable or object file"), cl::ZeroOrMore);
+
+  cl::opt<bool> DebugDumpCollectedObjects(
+      "dump-collected-objects", cl::Optional, cl::Hidden,
+      cl::desc("Show the collected coverage object files"));
 
   cl::list<std::string> InputSourceFiles(
       cl::Positional, cl::desc("<Source files>"), cl::ZeroOrMore);
@@ -665,6 +670,12 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
     if (ObjectFilenames.empty()) {
       errs() << "No filenames specified!\n";
       ::exit(1);
+    }
+
+    if (DebugDumpCollectedObjects) {
+      for (StringRef OF : ObjectFilenames)
+        outs() << OF << '\n';
+      ::exit(0);
     }
 
     ViewOpts.Format = Format;
@@ -885,7 +896,7 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
 
   auto Printer = CoveragePrinter::create(ViewOpts);
 
-  if (SourceFiles.empty())
+  if (SourceFiles.empty() && !HadSourceFiles)
     // Get the source files from the function coverage mapping.
     for (StringRef Filename : Coverage->getUniqueSourceFiles()) {
       if (!IgnoreFilenameFilters.matchesFilename(Filename))
@@ -943,19 +954,21 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
       (SourceFiles.size() != 1) || ViewOpts.hasOutputDirectory() ||
       (ViewOpts.Format == CoverageViewOptions::OutputFormat::HTML);
 
-  auto NumThreads = ViewOpts.NumThreads;
+  ThreadPoolStrategy S = hardware_concurrency(ViewOpts.NumThreads);
+  if (ViewOpts.NumThreads == 0) {
+    // If NumThreads is not specified, create one thread for each input, up to
+    // the number of hardware cores.
+    S = heavyweight_hardware_concurrency(SourceFiles.size());
+    S.Limit = true;
+  }
 
-  // If NumThreads is not specified, auto-detect a good default.
-  if (NumThreads == 0)
-    NumThreads = SourceFiles.size();
-
-  if (!ViewOpts.hasOutputDirectory() || NumThreads == 1) {
+  if (!ViewOpts.hasOutputDirectory() || S.ThreadsRequested == 1) {
     for (const std::string &SourceFile : SourceFiles)
       writeSourceFileView(SourceFile, Coverage.get(), Printer.get(),
                           ShowFilenames);
   } else {
     // In -output-dir mode, it's safe to use multiple threads to print files.
-    ThreadPool Pool(heavyweight_hardware_concurrency(NumThreads));
+    ThreadPool Pool(S);
     for (const std::string &SourceFile : SourceFiles)
       Pool.async(&CodeCoverageTool::writeSourceFileView, this, SourceFile,
                  Coverage.get(), Printer.get(), ShowFilenames);

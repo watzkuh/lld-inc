@@ -31,16 +31,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "wasm-explicit-locals"
 
-// A command-line option to disable this pass, and keep implicit locals
-// for the purpose of testing with lit/llc ONLY.
-// This produces output which is not valid WebAssembly, and is not supported
-// by assemblers/disassemblers and other MC based tools.
-static cl::opt<bool> WasmDisableExplicitLocals(
-    "wasm-disable-explicit-locals", cl::Hidden,
-    cl::desc("WebAssembly: output implicit locals in"
-             " instruction output for test purposes only."),
-    cl::init(false));
-
 namespace {
 class WebAssemblyExplicitLocals final : public MachineFunctionPass {
   StringRef getPassName() const override {
@@ -106,6 +96,10 @@ static unsigned getDropOpcode(const TargetRegisterClass *RC) {
     return WebAssembly::DROP_F64;
   if (RC == &WebAssembly::V128RegClass)
     return WebAssembly::DROP_V128;
+  if (RC == &WebAssembly::FUNCREFRegClass)
+    return WebAssembly::DROP_FUNCREF;
+  if (RC == &WebAssembly::EXTERNREFRegClass)
+    return WebAssembly::DROP_EXTERNREF;
   if (RC == &WebAssembly::EXNREFRegClass)
     return WebAssembly::DROP_EXNREF;
   llvm_unreachable("Unexpected register class");
@@ -125,6 +119,10 @@ static unsigned getLocalGetOpcode(const TargetRegisterClass *RC) {
     return WebAssembly::LOCAL_GET_V128;
   if (RC == &WebAssembly::EXNREFRegClass)
     return WebAssembly::LOCAL_GET_EXNREF;
+  if (RC == &WebAssembly::FUNCREFRegClass)
+    return WebAssembly::LOCAL_GET_FUNCREF;
+  if (RC == &WebAssembly::EXTERNREFRegClass)
+    return WebAssembly::LOCAL_GET_EXTERNREF;
   llvm_unreachable("Unexpected register class");
 }
 
@@ -142,6 +140,10 @@ static unsigned getLocalSetOpcode(const TargetRegisterClass *RC) {
     return WebAssembly::LOCAL_SET_V128;
   if (RC == &WebAssembly::EXNREFRegClass)
     return WebAssembly::LOCAL_SET_EXNREF;
+  if (RC == &WebAssembly::FUNCREFRegClass)
+    return WebAssembly::LOCAL_SET_FUNCREF;
+  if (RC == &WebAssembly::EXTERNREFRegClass)
+    return WebAssembly::LOCAL_SET_EXTERNREF;
   llvm_unreachable("Unexpected register class");
 }
 
@@ -159,6 +161,10 @@ static unsigned getLocalTeeOpcode(const TargetRegisterClass *RC) {
     return WebAssembly::LOCAL_TEE_V128;
   if (RC == &WebAssembly::EXNREFRegClass)
     return WebAssembly::LOCAL_TEE_EXNREF;
+  if (RC == &WebAssembly::FUNCREFRegClass)
+    return WebAssembly::LOCAL_TEE_FUNCREF;
+  if (RC == &WebAssembly::EXTERNREFRegClass)
+    return WebAssembly::LOCAL_TEE_EXTERNREF;
   llvm_unreachable("Unexpected register class");
 }
 
@@ -176,6 +182,10 @@ static MVT typeForRegClass(const TargetRegisterClass *RC) {
     return MVT::v16i8;
   if (RC == &WebAssembly::EXNREFRegClass)
     return MVT::exnref;
+  if (RC == &WebAssembly::FUNCREFRegClass)
+    return MVT::funcref;
+  if (RC == &WebAssembly::EXTERNREFRegClass)
+    return MVT::externref;
   llvm_unreachable("unrecognized register class");
 }
 
@@ -210,10 +220,6 @@ bool WebAssemblyExplicitLocals::runOnMachineFunction(MachineFunction &MF) {
   LLVM_DEBUG(dbgs() << "********** Make Locals Explicit **********\n"
                        "********** Function: "
                     << MF.getName() << '\n');
-
-  // Disable this pass if directed to do so.
-  if (WasmDisableExplicitLocals)
-    return false;
 
   bool Changed = false;
   MachineRegisterInfo &MRI = MF.getRegInfo();
@@ -280,7 +286,7 @@ bool WebAssemblyExplicitLocals::runOnMachineFunction(MachineFunction &MF) {
           BuildMI(MBB, &MI, MI.getDebugLoc(), TII->get(Opc), NewReg)
               .addImm(LocalId);
           MI.getOperand(2).setReg(NewReg);
-          MFI.stackifyVReg(NewReg);
+          MFI.stackifyVReg(MRI, NewReg);
         }
 
         // Replace the TEE with a LOCAL_TEE.
@@ -330,7 +336,7 @@ bool WebAssemblyExplicitLocals::runOnMachineFunction(MachineFunction &MF) {
           // yet.
           Def.setReg(NewReg);
           Def.setIsDead(false);
-          MFI.stackifyVReg(NewReg);
+          MFI.stackifyVReg(MRI, NewReg);
           Changed = true;
         }
       }
@@ -382,7 +388,7 @@ bool WebAssemblyExplicitLocals::runOnMachineFunction(MachineFunction &MF) {
             BuildMI(MBB, InsertPt, MI.getDebugLoc(), TII->get(Opc), NewReg)
                 .addImm(LocalId);
         MO.setReg(NewReg);
-        MFI.stackifyVReg(NewReg);
+        MFI.stackifyVReg(MRI, NewReg);
         Changed = true;
       }
 

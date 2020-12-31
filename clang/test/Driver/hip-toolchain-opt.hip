@@ -58,7 +58,7 @@
 // RUN:   %S/Inputs/hip_multiple_inputs/b.hip \
 // RUN: 2>&1 | FileCheck --check-prefixes=ALL,Og %s
 
-// ALL: "{{.*}}clang{{.*}}" "-cc1" "-triple" "amdgcn-amd-amdhsa"
+// ALL: "{{.*}}clang{{.*}}" "-cc1" "-mllvm" "--amdhsa-code-object-version={{[0-9]+}}" "-triple" "amdgcn-amd-amdhsa"
 // DEFAULT-NOT: "-O{{.}}"
 // O0-SAME: "-O0"
 // O1-SAME: "-O1"
@@ -68,27 +68,19 @@
 // Oz-SAME: "-Oz"
 // Og-SAME: "-Og"
 
-// ALL: "{{.*}}opt"
-// DEFAULT-NOT: "-O{{.}}"
-// O0-SAME: "-O0"
-// O1-SAME: "-O1"
-// O2-SAME: "-O2"
-// O3-SAME: "-O3"
-// Os-SAME: "-Os"
-// Oz-SAME: "-Oz"
-// Og-SAME: "-O1"
-// ALL-SAME: "-mtriple=amdgcn-amd-amdhsa"
+// ALL-NOT: "{{.*}}opt"
 
-// ALL: "{{.*}}llc"
-// DEFAULT-NOT: "-O{{.}}"
-// O0-SAME: "-O0"
-// O1-SAME: "-O1"
-// O2-SAME: "-O2"
-// O3-SAME: "-O3"
-// Os-SAME: "-O2"
-// Oz-SAME: "-O2"
-// Og-SAME: "-O1"
-// ALL-SAME: "-mtriple=amdgcn-amd-amdhsa"
+// ALL-NOT: "{{.*}}llc"
+
+// ALL: "{{.*}}lld{{.*}}" {{.*}} "-plugin-opt=mcpu=gfx900"
+// DEFAULT-NOT: "-plugin-opt=O{{.*}}"
+// O0-SAME: "-plugin-opt=O0"
+// O1-SAME: "-plugin-opt=O1"
+// O2-SAME: "-plugin-opt=O2"
+// O3-SAME: "-plugin-opt=O3"
+// Os-SAME: "-plugin-opt=O2"
+// Oz-SAME: "-plugin-opt=O2"
+// Og-SAME: "-plugin-opt=O1"
 
 // ALL: "{{.*}}clang{{.*}}" "-cc1" "-triple" "x86_64-unknown-linux-gnu"
 // DEFAULT-NOT: "-O{{.}}"

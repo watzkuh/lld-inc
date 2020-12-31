@@ -12,6 +12,7 @@
 #include "format-specification.h"
 #include "parse-tree-visitor.h"
 #include "parse-tree.h"
+#include "tools.h"
 #include "unparse.h"
 #include "flang/Common/idioms.h"
 #include "flang/Common/indirection.h"
@@ -20,14 +21,6 @@
 #include <type_traits>
 
 namespace Fortran::parser {
-
-// When SHOW_ALL_SOURCE_MEMBERS is defined, HasSource<T>::value is true if T has
-// a member named source
-template <typename T, typename = int> struct HasSource : std::false_type {};
-#ifdef SHOW_ALL_SOURCE_MEMBERS
-template <typename T>
-struct HasSource<T, decltype((void)T::source, 0)> : std::true_type {};
-#endif
 
 //
 // Dump the Parse Tree hierarchy of any node 'x' of the parse tree.
@@ -60,6 +53,54 @@ public:
   NODE(format, IntrinsicTypeDataEditDesc)
   NODE(format::IntrinsicTypeDataEditDesc, Kind)
   NODE(parser, Abstract)
+  NODE(parser, AccAtomicCapture)
+  NODE(AccAtomicCapture, Stmt1)
+  NODE(AccAtomicCapture, Stmt2)
+  NODE(parser, AccAtomicRead)
+  NODE(parser, AccAtomicUpdate)
+  NODE(parser, AccAtomicWrite)
+  NODE(parser, AccBeginBlockDirective)
+  NODE(parser, AccBeginCombinedDirective)
+  NODE(parser, AccBeginLoopDirective)
+  NODE(parser, AccBlockDirective)
+  NODE(parser, AccClause)
+#define GEN_FLANG_DUMP_PARSE_TREE_CLAUSES
+#include "llvm/Frontend/OpenACC/ACC.cpp.inc"
+  NODE(parser, AccBindClause)
+  NODE(parser, AccDefaultClause)
+  static std::string GetNodeName(const llvm::acc::DefaultValue &x) {
+    return llvm::Twine(
+        "llvm::acc::DefaultValue = ", llvm::acc::getOpenACCDefaultValueName(x))
+        .str();
+  }
+  NODE(parser, AccClauseList)
+  NODE(parser, AccCombinedDirective)
+  NODE(parser, AccDataModifier)
+  NODE_ENUM(parser::AccDataModifier, Modifier)
+  NODE(parser, AccDeclarativeDirective)
+  NODE(parser, AccEndAtomic)
+  NODE(parser, AccEndBlockDirective)
+  NODE(parser, AccEndCombinedDirective)
+  NODE(parser, AccGangArgument)
+  NODE(parser, AccObject)
+  NODE(parser, AccObjectList)
+  NODE(parser, AccObjectListWithModifier)
+  NODE(parser, AccObjectListWithReduction)
+  NODE(parser, AccReductionOperator)
+  NODE_ENUM(parser::AccReductionOperator, Operator)
+  NODE(parser, AccSizeExpr)
+  NODE(parser, AccSizeExprList)
+  NODE(parser, AccSelfClause)
+  NODE(parser, AccStandaloneDirective)
+  NODE(parser, AccTileExpr)
+  NODE(parser, AccTileExprList)
+  NODE(parser, AccLoopDirective)
+  NODE(parser, AccWaitArgument)
+  static std::string GetNodeName(const llvm::acc::Directive &x) {
+    return llvm::Twine(
+        "llvm::acc::Directive = ", llvm::acc::getOpenACCDirectiveName(x))
+        .str();
+  }
   NODE(parser, AcImpliedDo)
   NODE(parser, AcImpliedDoControl)
   NODE(parser, AcValue)
@@ -147,6 +188,7 @@ public:
   NODE(CommonStmt, Block)
   NODE(parser, CompilerDirective)
   NODE(CompilerDirective, IgnoreTKR)
+  NODE(CompilerDirective, NameValue)
   NODE(parser, ComplexLiteralConstant)
   NODE(parser, ComplexPart)
   NODE(parser, ComponentArraySpec)
@@ -163,7 +205,6 @@ public:
   NODE_ENUM(ConnectSpec::CharExpr, Kind)
   NODE(ConnectSpec, Newunit)
   NODE(ConnectSpec, Recl)
-  NODE(parser, ConstantValue)
   NODE(parser, ContainsStmt)
   NODE(parser, Contiguous)
   NODE(parser, ContiguousStmt)
@@ -416,45 +457,18 @@ public:
   NODE(parser, OmpBeginLoopDirective)
   NODE(parser, OmpBeginSectionsDirective)
   NODE(parser, OmpBlockDirective)
-  NODE_ENUM(OmpBlockDirective, Directive)
+  static std::string GetNodeName(const llvm::omp::Directive &x) {
+    return llvm::Twine(
+        "llvm::omp::Directive = ", llvm::omp::getOpenMPDirectiveName(x))
+        .str();
+  }
   NODE(parser, OmpCancelType)
   NODE_ENUM(OmpCancelType, Type)
   NODE(parser, OmpClause)
+#define GEN_FLANG_DUMP_PARSE_TREE_CLAUSES
+#include "llvm/Frontend/OpenMP/OMP.inc"
   NODE(parser, OmpClauseList)
-  NODE(OmpClause, Collapse)
-  NODE(OmpClause, Copyin)
-  NODE(OmpClause, Copyprivate)
-  NODE(OmpClause, Device)
-  NODE(OmpClause, DistSchedule)
-  NODE(OmpClause, Final)
-  NODE(OmpClause, Firstprivate)
-  NODE(OmpClause, From)
-  NODE(OmpClause, Grainsize)
-  NODE(OmpClause, Inbranch)
-  NODE(OmpClause, Lastprivate)
-  NODE(OmpClause, Mergeable)
-  NODE(OmpClause, Nogroup)
-  NODE(OmpClause, Notinbranch)
-  NODE(OmpClause, Threads)
-  NODE(OmpClause, Simd)
-  NODE(OmpClause, NumTasks)
-  NODE(OmpClause, NumTeams)
-  NODE(OmpClause, NumThreads)
-  NODE(OmpClause, Ordered)
-  NODE(OmpClause, Priority)
-  NODE(OmpClause, Private)
-  NODE(OmpClause, Safelen)
-  NODE(OmpClause, Shared)
-  NODE(OmpClause, Simdlen)
-  NODE(OmpClause, ThreadLimit)
-  NODE(OmpClause, To)
-  NODE(OmpClause, Link)
-  NODE(OmpClause, Uniform)
-  NODE(OmpClause, Untied)
-  NODE(OmpClause, UseDevicePtr)
-  NODE(OmpClause, IsDevicePtr)
   NODE(parser, OmpCriticalDirective)
-  NODE(OmpCriticalDirective, Hint)
   NODE(parser, OmpDeclareTargetSpecifier)
   NODE(parser, OmpDeclareTargetWithClause)
   NODE(parser, OmpDeclareTargetWithList)
@@ -484,16 +498,15 @@ public:
   NODE(parser, OmpLinearModifier)
   NODE_ENUM(OmpLinearModifier, Type)
   NODE(parser, OmpLoopDirective)
-  NODE_ENUM(OmpLoopDirective, Directive)
   NODE(parser, OmpMapClause)
   NODE(parser, OmpMapType)
   NODE(OmpMapType, Always)
   NODE_ENUM(OmpMapType, Type)
-  NODE(parser, OmpMemoryClause)
-  NODE_ENUM(OmpMemoryClause, MemoryOrder)
-  NODE(parser, OmpMemoryClauseList)
-  NODE(parser, OmpMemoryClausePostList)
-  NODE(parser, OmpNowait)
+  static std::string GetNodeName(const llvm::omp::Clause &x) {
+    return llvm::Twine(
+        "llvm::omp::Clause = ", llvm::omp::getOpenMPClauseName(x))
+        .str();
+  }
   NODE(parser, OmpObject)
   NODE(parser, OmpObjectList)
   NODE(parser, OmpProcBindClause)
@@ -503,6 +516,8 @@ public:
   NODE(OmpReductionCombiner, FunctionCombiner)
   NODE(parser, OmpReductionInitializerClause)
   NODE(parser, OmpReductionOperator)
+  NODE(parser, OmpAllocateClause)
+  NODE(OmpAllocateClause, Allocator)
   NODE(parser, OmpScheduleClause)
   NODE_ENUM(OmpScheduleClause, ScheduleType)
   NODE(parser, OmpScheduleModifier)
@@ -512,10 +527,19 @@ public:
   NODE_ENUM(OmpScheduleModifierType, ModType)
   NODE(parser, OmpSectionBlocks)
   NODE(parser, OmpSectionsDirective)
-  NODE_ENUM(OmpSectionsDirective, Directive)
   NODE(parser, OmpSimpleStandaloneDirective)
-  NODE_ENUM(OmpSimpleStandaloneDirective, Directive)
   NODE(parser, Only)
+  NODE(parser, OpenACCAtomicConstruct)
+  NODE(parser, OpenACCBlockConstruct)
+  NODE(parser, OpenACCCacheConstruct)
+  NODE(parser, OpenACCCombinedConstruct)
+  NODE(parser, OpenACCConstruct)
+  NODE(parser, OpenACCDeclarativeConstruct)
+  NODE(parser, OpenACCLoopConstruct)
+  NODE(parser, OpenACCRoutineConstruct)
+  NODE(parser, OpenACCStandaloneDeclarativeConstruct)
+  NODE(parser, OpenACCStandaloneConstruct)
+  NODE(parser, OpenACCWaitConstruct)
   NODE(parser, OpenMPAtomicConstruct)
   NODE(parser, OpenMPBlockConstruct)
   NODE(parser, OpenMPCancelConstruct)
@@ -523,12 +547,17 @@ public:
   NODE(parser, OpenMPCancellationPointConstruct)
   NODE(parser, OpenMPConstruct)
   NODE(parser, OpenMPCriticalConstruct)
+  NODE(parser, OpenMPDeclarativeAllocate)
   NODE(parser, OpenMPDeclarativeConstruct)
   NODE(parser, OpenMPDeclareReductionConstruct)
   NODE(parser, OpenMPDeclareSimdConstruct)
   NODE(parser, OpenMPDeclareTargetConstruct)
+  NODE(parser, OmpMemoryOrderClause)
+  NODE(parser, OmpAtomicClause)
+  NODE(parser, OmpAtomicClauseList)
   NODE(parser, OpenMPFlushConstruct)
   NODE(parser, OpenMPLoopConstruct)
+  NODE(parser, OpenMPExecutableAllocate)
   NODE(parser, OpenMPSimpleStandaloneConstruct)
   NODE(parser, OpenMPStandaloneConstruct)
   NODE(parser, OpenMPSectionsConstruct)
@@ -789,8 +818,12 @@ protected:
     if (ss.tell()) {
       return ss.str();
     }
-    if constexpr (std::is_same_v<T, Name> || HasSource<T>::value) {
+    if constexpr (std::is_same_v<T, Name>) {
       return x.source.ToString();
+#ifdef SHOW_ALL_SOURCE_MEMBERS
+    } else if constexpr (HasSource<T>::value) {
+      return x.source.ToString();
+#endif
     } else if constexpr (std::is_same_v<T, std::string>) {
       return x;
     } else {
@@ -838,10 +871,11 @@ private:
 };
 
 template <typename T>
-void DumpTree(llvm::raw_ostream &out, const T &x,
+llvm::raw_ostream &DumpTree(llvm::raw_ostream &out, const T &x,
     const AnalyzedObjectsAsFortran *asFortran = nullptr) {
   ParseTreeDumper dumper{out, asFortran};
   Walk(x, dumper);
+  return out;
 }
 
 } // namespace Fortran::parser

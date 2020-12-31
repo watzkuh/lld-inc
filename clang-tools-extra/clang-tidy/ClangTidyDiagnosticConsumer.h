@@ -12,21 +12,15 @@
 #include "ClangTidyOptions.h"
 #include "ClangTidyProfiling.h"
 #include "clang/Basic/Diagnostic.h"
-#include "clang/Basic/SourceManager.h"
 #include "clang/Tooling/Core/Diagnostic.h"
-#include "clang/Tooling/Refactoring.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/StringMap.h"
-#include "llvm/Support/Timer.h"
-
-namespace llvm {
-class Regex;
-}
+#include "llvm/Support/Regex.h"
 
 namespace clang {
 
 class ASTContext;
 class CompilerInstance;
+class SourceManager;
 namespace ast_matchers {
 class MatchFinder;
 }
@@ -48,6 +42,7 @@ struct ClangTidyError : tooling::Diagnostic {
                  bool IsWarningAsError);
 
   bool IsWarningAsError;
+  std::vector<std::string> EnabledDiagnosticAliases;
 };
 
 /// Contains displayed and ignored diagnostic counters for a ClangTidy
@@ -100,6 +95,14 @@ public:
   DiagnosticBuilder diag(StringRef CheckName, SourceLocation Loc,
                          StringRef Message,
                          DiagnosticIDs::Level Level = DiagnosticIDs::Warning);
+
+  DiagnosticBuilder diag(StringRef CheckName, StringRef Message,
+                         DiagnosticIDs::Level Level = DiagnosticIDs::Warning);
+
+  /// Report any errors to do with reading the configuration using this method.
+  DiagnosticBuilder
+  configurationDiag(StringRef Message,
+                    DiagnosticIDs::Level Level = DiagnosticIDs::Warning);
 
   /// Sets the \c SourceManager of the used \c DiagnosticsEngine.
   ///
@@ -246,6 +249,7 @@ public:
 private:
   void finalizeLastError();
   void removeIncompatibleErrors();
+  void removeDuplicatedDiagnosticsOfAliasCheckers();
 
   /// Returns the \c HeaderFilter constructed for the options set in the
   /// context.

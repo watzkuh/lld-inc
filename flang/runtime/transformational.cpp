@@ -9,7 +9,6 @@
 #include "transformational.h"
 #include "memory.h"
 #include "terminator.h"
-#include "flang/Evaluate/integer.h"
 #include <algorithm>
 #include <cinttypes>
 
@@ -91,7 +90,7 @@ OwningPtr<Descriptor> RESHAPE(const Descriptor &source, const Descriptor &shape,
 
   // Create and populate the result's descriptor.
   const DescriptorAddendum *sourceAddendum{source.Addendum()};
-  const DerivedType *sourceDerivedType{
+  const typeInfo::DerivedType *sourceDerivedType{
       sourceAddendum ? sourceAddendum->derivedType() : nullptr};
   OwningPtr<Descriptor> result;
   if (sourceDerivedType) {
@@ -106,14 +105,14 @@ OwningPtr<Descriptor> RESHAPE(const Descriptor &source, const Descriptor &shape,
   RUNTIME_CHECK(terminator, resultAddendum);
   resultAddendum->flags() |= DescriptorAddendum::DoNotFinalize;
   if (sourceDerivedType) {
-    std::size_t lenParameters{sourceDerivedType->lenParameters()};
+    std::size_t lenParameters{sourceAddendum->LenParameters()};
     for (std::size_t j{0}; j < lenParameters; ++j) {
       resultAddendum->SetLenParameterValue(
           j, sourceAddendum->LenParameterValue(j));
     }
   }
   // Allocate storage for the result's data.
-  int status{result->Allocate(lowerBound, resultExtent, elementBytes)};
+  int status{result->Allocate(lowerBound, resultExtent)};
   if (status != CFI_SUCCESS) {
     terminator.Crash("RESHAPE: Allocate failed (error %d)", status);
   }

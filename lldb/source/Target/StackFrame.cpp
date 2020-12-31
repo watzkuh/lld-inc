@@ -229,21 +229,16 @@ bool StackFrame::ChangePC(addr_t pc) {
 
 const char *StackFrame::Disassemble() {
   std::lock_guard<std::recursive_mutex> guard(m_mutex);
-  if (m_disassembly.Empty()) {
-    ExecutionContext exe_ctx(shared_from_this());
-    Target *target = exe_ctx.GetTargetPtr();
-    if (target) {
-      const char *plugin_name = nullptr;
-      const char *flavor = nullptr;
-      Disassembler::Disassemble(target->GetDebugger(),
-                                target->GetArchitecture(), plugin_name, flavor,
-                                exe_ctx, 0, false, 0, 0, m_disassembly);
-    }
-    if (m_disassembly.Empty())
-      return nullptr;
+  if (!m_disassembly.Empty())
+    return m_disassembly.GetData();
+
+  ExecutionContext exe_ctx(shared_from_this());
+  if (Target *target = exe_ctx.GetTargetPtr()) {
+    Disassembler::Disassemble(target->GetDebugger(), target->GetArchitecture(),
+                              *this, m_disassembly);
   }
 
-  return m_disassembly.GetData();
+  return m_disassembly.Empty() ? nullptr : m_disassembly.GetData();
 }
 
 Block *StackFrame::GetFrameBlock() {
@@ -606,7 +601,7 @@ ValueObjectSP StackFrame::GetValueForVariableExpressionPath(
   }
 
   // We are dumping at least one child
-  while (separator_idx != std::string::npos) {
+  while (!var_expr.empty()) {
     // Calculate the next separator index ahead of time
     ValueObjectSP child_valobj_sp;
     const char separator_type = var_expr[0];
@@ -940,7 +935,6 @@ ValueObjectSP StackFrame::GetValueForVariableExpressionPath(
           return ValueObjectSP();
         }
 
-        separator_idx = var_expr.find_first_of(".-[");
         if (use_dynamic != eNoDynamicValues) {
           ValueObjectSP dynamic_value_sp(
               child_valobj_sp->GetDynamicValue(use_dynamic));
@@ -1025,7 +1019,6 @@ ValueObjectSP StackFrame::GetValueForVariableExpressionPath(
         return ValueObjectSP();
       }
 
-      separator_idx = var_expr.find_first_of(".-[");
       if (use_dynamic != eNoDynamicValues) {
         ValueObjectSP dynamic_value_sp(
             child_valobj_sp->GetDynamicValue(use_dynamic));
@@ -1051,9 +1044,6 @@ ValueObjectSP StackFrame::GetValueForVariableExpressionPath(
 
     if (child_valobj_sp)
       valobj_sp = child_valobj_sp;
-
-    if (var_expr.empty())
-      break;
   }
   if (valobj_sp) {
     if (deref) {
@@ -1413,7 +1403,7 @@ ValueObjectSP GetValueForOffset(StackFrame &frame, ValueObjectSP &parent,
     }
 
     int64_t child_offset = child_sp->GetByteOffset();
-    int64_t child_size = child_sp->GetByteSize();
+    int64_t child_size = child_sp->GetByteSize().getValueOr(0);
 
     if (offset >= child_offset && offset < (child_offset + child_size)) {
       return GetValueForOffset(frame, child_sp, offset - child_offset);
@@ -1446,8 +1436,8 @@ ValueObjectSP GetValueForDereferincingOffset(StackFrame &frame,
   }
 
   if (offset >= 0 && uint64_t(offset) >= pointee->GetByteSize()) {
-    int64_t index = offset / pointee->GetByteSize();
-    offset = offset % pointee->GetByteSize();
+    int64_t index = offset / pointee->GetByteSize().getValueOr(1);
+    offset = offset % pointee->GetByteSize().getValueOr(1);
     const bool can_create = true;
     pointee = base->GetSyntheticArrayMember(index, can_create);
   }
@@ -1961,8 +1951,11 @@ bool StackFrame::GetStatus(Stream &strm, bool show_frame_info, bool show_source,
 
 RecognizedStackFrameSP StackFrame::GetRecognizedFrame() {
   if (!m_recognized_frame_sp) {
-    m_recognized_frame_sp =
-        StackFrameRecognizerManager::RecognizeFrame(CalculateStackFrame());
+    m_recognized_frame_sp = GetThread()
+                                ->GetProcess()
+                                ->GetTarget()
+                                .GetFrameRecognizerManager()
+                                .RecognizeFrame(CalculateStackFrame());
   }
   return m_recognized_frame_sp;
 }

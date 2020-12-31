@@ -254,7 +254,7 @@ namespace ARMII {
     MO_OPTION_MASK = 0x3,
 
     /// MO_COFFSTUB - On a symbol operand "FOO", this indicates that the
-    /// reference is actually to the ".refptrp.FOO" symbol.  This is used for
+    /// reference is actually to the ".refptr.FOO" symbol.  This is used for
     /// stub symbols on windows.
     MO_COFFSTUB = 0x4,
 
@@ -393,7 +393,8 @@ namespace ARMII {
     // in an IT block).
     ThumbArithFlagSetting = 1 << 19,
 
-    // Whether an instruction can be included in an MVE tail-predicated loop.
+    // Whether an instruction can be included in an MVE tail-predicated loop,
+    // though extra validity checks may need to be performed too.
     ValidForTailPredication = 1 << 20,
 
     // Whether an instruction writes to the top/bottom half of a vector element

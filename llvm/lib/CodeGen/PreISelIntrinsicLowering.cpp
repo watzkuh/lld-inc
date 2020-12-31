@@ -39,7 +39,7 @@ static bool lowerLoadRelative(Function &F) {
   for (auto I = F.use_begin(), E = F.use_end(); I != E;) {
     auto CI = dyn_cast<CallInst>(I->getUser());
     ++I;
-    if (!CI || CI->getCalledValue() != &F)
+    if (!CI || CI->getCalledOperand() != &F)
       continue;
 
     IRBuilder<> B(CI);
@@ -96,7 +96,7 @@ static bool lowerObjCCall(Function &F, const char *NewFn,
     ++I;
 
     IRBuilder<> Builder(CI->getParent(), CI->getIterator());
-    SmallVector<Value *, 8> Args(CI->arg_begin(), CI->arg_end());
+    SmallVector<Value *, 8> Args(CI->args());
     CallInst *NewCI = Builder.CreateCall(FCache, Args);
     NewCI->setName(CI->getName());
 

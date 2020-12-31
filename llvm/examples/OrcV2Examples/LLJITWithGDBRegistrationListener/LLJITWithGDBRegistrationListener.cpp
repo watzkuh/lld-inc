@@ -17,6 +17,7 @@
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
+#include "llvm/ExecutionEngine/Orc/TargetProcess/TargetExecutionUtils.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/TargetSelect.h"
@@ -69,8 +70,14 @@ int main(int argc, char *argv[]) {
                       auto ObjLinkingLayer =
                           std::make_unique<RTDyldObjectLinkingLayer>(
                               ES, std::move(GetMemMgr));
+
+                      // Register the event listener.
                       ObjLinkingLayer->registerJITEventListener(
                           *JITEventListener::createGDBRegistrationListener());
+
+                      // Make sure the debug info sections aren't stripped.
+                      ObjLinkingLayer->setProcessAllSections(true);
+
                       return ObjLinkingLayer;
                     })
                     .create());

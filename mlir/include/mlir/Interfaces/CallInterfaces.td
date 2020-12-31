@@ -29,12 +29,14 @@ def CallOpInterface : OpInterface<"CallOpInterface"> {
     indirect calls to other operations `call_indirect %foo`. An operation that
     uses this interface, must *not* also provide the `CallableOpInterface`.
   }];
+  let cppNamespace = "::mlir";
 
   let methods = [
     InterfaceMethod<[{
         Returns the callee of this call-like operation. A `callee` is either a
         reference to a symbol, via SymbolRefAttr, or a reference to a defined
-        SSA value.
+        SSA value. If the reference is an SSA value, the SSA value corresponds
+        to a region of a lambda-like operation.
       }],
       "CallInterfaceCallable", "getCallableForCallee"
     >,
@@ -44,19 +46,16 @@ def CallOpInterface : OpInterface<"CallOpInterface"> {
       }],
       "Operation::operand_range", "getArgOperands"
     >,
-    InterfaceMethod<[{
-        Resolve the callable operation for given callee to a
-        CallableOpInterface, or nullptr if a valid callable was not resolved.
-      }],
-      "Operation *", "resolveCallable", (ins), [{
-        // If the callable isn't a value, lookup the symbol reference.
-        CallInterfaceCallable callable = op.getCallableForCallee();
-        if (auto symbolRef = callable.dyn_cast<SymbolRefAttr>())
-          return SymbolTable::lookupNearestSymbolFrom(op, symbolRef);
-        return callable.get<Value>().getDefiningOp();
-      }]
-    >,
   ];
+
+  let extraClassDeclaration = [{
+    /// Resolve the callable operation for given callee to a
+    /// CallableOpInterface, or nullptr if a valid callable was not resolved.
+    /// `symbolTable` is an optional parameter that will allow for using a
+    /// cached symbol table for symbol lookups instead of performing an O(N)
+    /// scan.
+    Operation *resolveCallable(SymbolTableCollection *symbolTable = nullptr);
+  }];
 }
 
 /// Interface for callable operations.
@@ -69,6 +68,7 @@ def CallableOpInterface : OpInterface<"CallableOpInterface"> {
     `%foo = dialect.create_function(...)`. These operations may only contain a
     single region, or subroutine.
   }];
+  let cppNamespace = "::mlir";
 
   let methods = [
     InterfaceMethod<[{

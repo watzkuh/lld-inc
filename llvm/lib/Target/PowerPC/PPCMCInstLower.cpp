@@ -74,7 +74,9 @@ static MCOperand GetSymbolRef(const MachineOperand &MO, const MCSymbol *Symbol,
       RefKind = MCSymbolRefExpr::VK_PPC_TOC_LO;
       break;
     case PPCII::MO_TLS:
-      RefKind = MCSymbolRefExpr::VK_PPC_TLS;
+      bool IsPCRel = (MO.getTargetFlags() & ~access) == PPCII::MO_PCREL_FLAG;
+      RefKind = IsPCRel ? MCSymbolRefExpr::VK_PPC_TLS_PCREL
+                        : MCSymbolRefExpr::VK_PPC_TLS;
       break;
   }
 
@@ -82,16 +84,36 @@ static MCOperand GetSymbolRef(const MachineOperand &MO, const MCSymbol *Symbol,
     RefKind = MCSymbolRefExpr::VK_PLT;
   else if (MO.getTargetFlags() == PPCII::MO_PCREL_FLAG)
     RefKind = MCSymbolRefExpr::VK_PCREL;
+  else if (MO.getTargetFlags() == (PPCII::MO_PCREL_FLAG | PPCII::MO_GOT_FLAG))
+    RefKind = MCSymbolRefExpr::VK_PPC_GOT_PCREL;
+  else if (MO.getTargetFlags() == (PPCII::MO_PCREL_FLAG | PPCII::MO_TPREL_FLAG))
+    RefKind = MCSymbolRefExpr::VK_TPREL;
+  else if (MO.getTargetFlags() == PPCII::MO_GOT_TLSGD_PCREL_FLAG)
+    RefKind = MCSymbolRefExpr::VK_PPC_GOT_TLSGD_PCREL;
+  else if (MO.getTargetFlags() == PPCII::MO_GOT_TLSLD_PCREL_FLAG)
+    RefKind = MCSymbolRefExpr::VK_PPC_GOT_TLSLD_PCREL;
+  else if (MO.getTargetFlags() == PPCII::MO_GOT_TPREL_PCREL_FLAG)
+    RefKind = MCSymbolRefExpr::VK_PPC_GOT_TPREL_PCREL;
 
   const MachineInstr *MI = MO.getParent();
-
-  if (MI->getOpcode() == PPC::BL8_NOTOC)
-    RefKind = MCSymbolRefExpr::VK_PPC_NOTOC;
-
   const MachineFunction *MF = MI->getMF();
   const Module *M = MF->getFunction().getParent();
   const PPCSubtarget *Subtarget = &(MF->getSubtarget<PPCSubtarget>());
   const TargetMachine &TM = Printer.TM;
+
+  unsigned MIOpcode = MI->getOpcode();
+  assert((Subtarget->isUsingPCRelativeCalls() || MIOpcode != PPC::BL8_NOTOC) &&
+         "BL8_NOTOC is only valid when using PC Relative Calls.");
+  if (Subtarget->isUsingPCRelativeCalls()) {
+    if (MIOpcode == PPC::TAILB || MIOpcode == PPC::TAILB8 ||
+        MIOpcode == PPC::TCRETURNdi || MIOpcode == PPC::TCRETURNdi8 ||
+        MIOpcode == PPC::BL8_NOTOC) {
+      RefKind = MCSymbolRefExpr::VK_PPC_NOTOC;
+    }
+    if (MO.getTargetFlags() == PPCII::MO_PCREL_OPT_FLAG)
+      RefKind = MCSymbolRefExpr::VK_PPC_PCREL_OPT;
+  }
+
   const MCExpr *Expr = MCSymbolRefExpr::create(Symbol, RefKind, Ctx);
   // If -msecure-plt -fPIC, add 32768 to symbol.
   if (Subtarget->isSecurePlt() && TM.isPositionIndependent() &&
@@ -147,6 +169,9 @@ bool llvm::LowerPPCMachineOperandToMCOperand(const MachineOperand &MO,
     assert(MO.getReg() > PPC::NoRegister &&
            MO.getReg() < PPC::NUM_TARGET_REGS &&
            "Invalid register for this target!");
+    // Ignore all implicit register operands.
+    if (MO.isImplicit())
+      return false;
     OutMO = MCOperand::createReg(MO.getReg());
     return true;
   case MachineOperand::MO_Immediate:

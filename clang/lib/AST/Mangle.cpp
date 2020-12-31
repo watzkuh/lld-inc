@@ -25,6 +25,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
@@ -57,7 +58,9 @@ enum CCMangling {
 static bool isExternC(const NamedDecl *ND) {
   if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(ND))
     return FD->isExternC();
-  return cast<VarDecl>(ND)->isExternC();
+  if (const VarDecl *VD = dyn_cast<VarDecl>(ND))
+    return VD->isExternC();
+  return false;
 }
 
 static CCMangling getCallingConvMangling(const ASTContext &Context,
@@ -122,6 +125,10 @@ bool MangleContext::shouldMangleDeclName(const NamedDecl *D) {
   if (D->hasAttr<AsmLabelAttr>())
     return true;
 
+  // Declarations that don't have identifier names always need to be mangled.
+  if (isa<MSGuidDecl>(D))
+    return true;
+
   return shouldMangleCXXName(D);
 }
 
@@ -153,6 +160,9 @@ void MangleContext::mangleName(GlobalDecl GD, raw_ostream &Out) {
     return;
   }
 
+  if (auto *GD = dyn_cast<MSGuidDecl>(D))
+    return mangleMSGuidDecl(GD, Out);
+
   const ASTContext &ASTContext = getASTContext();
   CCMangling CC = getCallingConvMangling(ASTContext, D);
 
@@ -165,7 +175,7 @@ void MangleContext::mangleName(GlobalDecl GD, raw_ostream &Out) {
   const TargetInfo &TI = Context.getTargetInfo();
   if (CC == CCM_Other || (MCXX && TI.getCXXABI() == TargetCXXABI::Microsoft)) {
     if (const ObjCMethodDecl *OMD = dyn_cast<ObjCMethodDecl>(D))
-      mangleObjCMethodName(OMD, Out);
+      mangleObjCMethodNameAsSourceName(OMD, Out);
     else
       mangleCXXName(GD, Out);
     return;
@@ -182,7 +192,7 @@ void MangleContext::mangleName(GlobalDecl GD, raw_ostream &Out) {
   if (!MCXX)
     Out << D->getIdentifier()->getName();
   else if (const ObjCMethodDecl *OMD = dyn_cast<ObjCMethodDecl>(D))
-    mangleObjCMethodName(OMD, Out);
+    mangleObjCMethodNameAsSourceName(OMD, Out);
   else
     mangleCXXName(GD, Out);
 
@@ -207,6 +217,20 @@ void MangleContext::mangleName(GlobalDecl GD, raw_ostream &Out) {
         llvm::alignTo(ASTContext.getTypeSize(AT), TI.getPointerWidth(0)) /
         TI.getPointerWidth(0);
   Out << ((TI.getPointerWidth(0) / 8) * ArgWords);
+}
+
+void MangleContext::mangleMSGuidDecl(const MSGuidDecl *GD, raw_ostream &Out) {
+  // For now, follow the MSVC naming convention for GUID objects on all
+  // targets.
+  MSGuidDecl::Parts P = GD->getParts();
+  Out << llvm::format("_GUID_%08" PRIx32 "_%04" PRIx32 "_%04" PRIx32 "_",
+                      P.Part1, P.Part2, P.Part3);
+  unsigned I = 0;
+  for (uint8_t C : P.Part4And5) {
+    Out << llvm::format("%02" PRIx8, C);
+    if (++I == 2)
+      Out << "_";
+  }
 }
 
 void MangleContext::mangleGlobalBlock(const BlockDecl *BD,
@@ -251,7 +275,7 @@ void MangleContext::mangleBlock(const DeclContext *DC, const BlockDecl *BD,
   SmallString<64> Buffer;
   llvm::raw_svector_ostream Stream(Buffer);
   if (const ObjCMethodDecl *Method = dyn_cast<ObjCMethodDecl>(DC)) {
-    mangleObjCMethodName(Method, Stream);
+    mangleObjCMethodNameAsSourceName(Method, Stream);
   } else {
     assert((isa<NamedDecl>(DC) || isa<BlockDecl>(DC)) &&
            "expected a NamedDecl or BlockDecl");
@@ -280,29 +304,70 @@ void MangleContext::mangleBlock(const DeclContext *DC, const BlockDecl *BD,
   mangleFunctionBlock(*this, Buffer, BD, Out);
 }
 
-void MangleContext::mangleObjCMethodNameWithoutSize(const ObjCMethodDecl *MD,
-                                                    raw_ostream &OS) {
-  const ObjCContainerDecl *CD =
-  dyn_cast<ObjCContainerDecl>(MD->getDeclContext());
-  assert (CD && "Missing container decl in GetNameForMethod");
+void MangleContext::mangleObjCMethodName(const ObjCMethodDecl *MD,
+                                         raw_ostream &OS,
+                                         bool includePrefixByte,
+                                         bool includeCategoryNamespace) {
+  if (getASTContext().getLangOpts().ObjCRuntime.isGNUFamily()) {
+    // This is the mangling we've always used on the GNU runtimes, but it
+    // has obvious collisions in the face of underscores within class
+    // names, category names, and selectors; maybe we should improve it.
+
+    OS << (MD->isClassMethod() ? "_c_" : "_i_")
+       << MD->getClassInterface()->getName() << '_';
+
+    if (includeCategoryNamespace) {
+      if (auto category = MD->getCategory())
+        OS << category->getName();
+    }
+    OS << '_';
+
+    auto selector = MD->getSelector();
+    for (unsigned slotIndex = 0,
+                  numArgs = selector.getNumArgs(),
+                  slotEnd = std::max(numArgs, 1U);
+           slotIndex != slotEnd; ++slotIndex) {
+      if (auto name = selector.getIdentifierInfoForSlot(slotIndex))
+        OS << name->getName();
+
+      // Replace all the positions that would've been ':' with '_'.
+      // That's after each slot except that a unary selector doesn't
+      // end in ':'.
+      if (numArgs)
+        OS << '_';
+    }
+
+    return;
+  }
+
+  // \01+[ContainerName(CategoryName) SelectorName]
+  if (includePrefixByte) {
+    OS << '\01';
+  }
   OS << (MD->isInstanceMethod() ? '-' : '+') << '[';
-  if (const ObjCCategoryImplDecl *CID = dyn_cast<ObjCCategoryImplDecl>(CD)) {
+  if (const auto *CID = MD->getCategory()) {
     OS << CID->getClassInterface()->getName();
-    OS << '(' << *CID << ')';
-  } else {
+    if (includeCategoryNamespace) {
+      OS << '(' << *CID << ')';
+    }
+  } else if (const auto *CD =
+                 dyn_cast<ObjCContainerDecl>(MD->getDeclContext())) {
     OS << CD->getName();
+  } else {
+    llvm_unreachable("Unexpected ObjC method decl context");
   }
   OS << ' ';
   MD->getSelector().print(OS);
   OS << ']';
 }
 
-void MangleContext::mangleObjCMethodName(const ObjCMethodDecl *MD,
-                                         raw_ostream &Out) {
+void MangleContext::mangleObjCMethodNameAsSourceName(const ObjCMethodDecl *MD,
+                                                     raw_ostream &Out) {
   SmallString<64> Name;
   llvm::raw_svector_ostream OS(Name);
 
-  mangleObjCMethodNameWithoutSize(MD, OS);
+  mangleObjCMethodName(MD, OS, /*includePrefixByte=*/false,
+                       /*includeCategoryNamespace=*/true);
   Out << OS.str().size() << OS.str();
 }
 
@@ -328,7 +393,8 @@ public:
       if (writeFuncOrVarName(VD, FrontendBufOS))
         return true;
     } else if (auto *MD = dyn_cast<ObjCMethodDecl>(D)) {
-      MC->mangleObjCMethodNameWithoutSize(MD, OS);
+      MC->mangleObjCMethodName(MD, OS, /*includePrefixByte=*/false,
+                               /*includeCategoryNamespace=*/true);
       return false;
     } else if (auto *ID = dyn_cast<ObjCInterfaceDecl>(D)) {
       writeObjCClassName(ID, FrontendBufOS);

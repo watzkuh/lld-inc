@@ -61,6 +61,8 @@ static void sectionMapping(IO &IO, WasmYAML::NameSection &Section) {
   commonSectionMapping(IO, Section);
   IO.mapRequired("Name", Section.Name);
   IO.mapOptional("FunctionNames", Section.FunctionNames);
+  IO.mapOptional("GlobalNames", Section.GlobalNames);
+  IO.mapOptional("DataSegmentNames", Section.DataSegmentNames);
 }
 
 static void sectionMapping(IO &IO, WasmYAML::LinkingSection &Section) {
@@ -300,6 +302,7 @@ void MappingTraits<WasmYAML::Signature>::mapping(
 }
 
 void MappingTraits<WasmYAML::Table>::mapping(IO &IO, WasmYAML::Table &Table) {
+  IO.mapRequired("Index", Table.Index);
   IO.mapRequired("ElemType", Table.ElemType);
   IO.mapRequired("Limits", Table.TableLimits);
 }
@@ -433,6 +436,11 @@ void MappingTraits<wasm::WasmInitExpr>::mapping(IO &IO,
   case wasm::WASM_OPCODE_GLOBAL_GET:
     IO.mapRequired("Index", Expr.Value.Global);
     break;
+  case wasm::WASM_OPCODE_REF_NULL: {
+    WasmYAML::ValueType Ty = wasm::WASM_TYPE_EXTERNREF;
+    IO.mapRequired("Type", Ty);
+    break;
+  }
   }
 }
 
@@ -465,6 +473,7 @@ void ScalarEnumerationTraits<WasmYAML::ComdatKind>::enumeration(
 #define ECase(X) IO.enumCase(Kind, #X, wasm::WASM_COMDAT_##X);
   ECase(FUNCTION);
   ECase(DATA);
+  ECase(SECTION);
 #undef ECase
 }
 
@@ -491,6 +500,8 @@ void MappingTraits<WasmYAML::SymbolInfo>::mapping(IO &IO,
     IO.mapRequired("Function", Info.ElementIndex);
   } else if (Info.Kind == wasm::WASM_SYMBOL_TYPE_GLOBAL) {
     IO.mapRequired("Global", Info.ElementIndex);
+  } else if (Info.Kind == wasm::WASM_SYMBOL_TYPE_TABLE) {
+    IO.mapRequired("Table", Info.ElementIndex);
   } else if (Info.Kind == wasm::WASM_SYMBOL_TYPE_EVENT) {
     IO.mapRequired("Event", Info.ElementIndex);
   } else if (Info.Kind == wasm::WASM_SYMBOL_TYPE_DATA) {
@@ -517,6 +528,7 @@ void ScalarBitSetTraits<WasmYAML::LimitFlags>::bitset(
 #define BCase(X) IO.bitSetCase(Value, #X, wasm::WASM_LIMITS_FLAG_##X)
   BCase(HAS_MAX);
   BCase(IS_SHARED);
+  BCase(IS_64);
 #undef BCase
 }
 
@@ -545,6 +557,7 @@ void ScalarEnumerationTraits<WasmYAML::SymbolKind>::enumeration(
   ECase(FUNCTION);
   ECase(DATA);
   ECase(GLOBAL);
+  ECase(TABLE);
   ECase(SECTION);
   ECase(EVENT);
 #undef ECase
@@ -559,6 +572,8 @@ void ScalarEnumerationTraits<WasmYAML::ValueType>::enumeration(
   ECase(F64);
   ECase(V128);
   ECase(FUNCREF);
+  ECase(EXNREF);
+  ECase(EXTERNREF);
   ECase(FUNC);
 #undef ECase
 }
@@ -583,6 +598,7 @@ void ScalarEnumerationTraits<WasmYAML::Opcode>::enumeration(
   ECase(F64_CONST);
   ECase(F32_CONST);
   ECase(GLOBAL_GET);
+  ECase(REF_NULL);
 #undef ECase
 }
 
@@ -590,6 +606,7 @@ void ScalarEnumerationTraits<WasmYAML::TableType>::enumeration(
     IO &IO, WasmYAML::TableType &Type) {
 #define ECase(X) IO.enumCase(Type, #X, wasm::WASM_TYPE_##X);
   ECase(FUNCREF);
+  ECase(EXTERNREF);
 #undef ECase
 }
 

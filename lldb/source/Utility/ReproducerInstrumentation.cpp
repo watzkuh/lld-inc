@@ -8,9 +8,10 @@
 
 #include "lldb/Utility/ReproducerInstrumentation.h"
 #include "lldb/Utility/Reproducer.h"
-#include <thread>
+#include <limits>
 #include <stdio.h>
 #include <stdlib.h>
+#include <thread>
 
 using namespace lldb_private;
 using namespace lldb_private::repro;
@@ -84,6 +85,16 @@ template <> const char **Deserializer::Deserialize<const char **>() {
   return r;
 }
 
+void Deserializer::CheckSequence(unsigned sequence) {
+  if (m_expected_sequence && *m_expected_sequence != sequence)
+    llvm::report_fatal_error(
+        "The result does not match the preceding "
+        "function. This is probably the result of concurrent "
+        "use of the SB API during capture, which is currently not "
+        "supported.");
+  m_expected_sequence.reset();
+}
+
 bool Registry::Replay(const FileSpec &file) {
   auto error_or_file = llvm::MemoryBuffer::getFile(file.GetPath());
   if (auto err = error_or_file.getError())
@@ -107,6 +118,7 @@ bool Registry::Replay(Deserializer &deserializer) {
   setvbuf(stdout, nullptr, _IONBF, 0);
 
   while (deserializer.HasData(1)) {
+    unsigned sequence = deserializer.Deserialize<unsigned>();
     unsigned id = deserializer.Deserialize<unsigned>();
 
 #ifndef LLDB_REPRO_INSTR_TRACE
@@ -115,12 +127,13 @@ bool Registry::Replay(Deserializer &deserializer) {
     llvm::errs() << "Replaying " << id << ": " << GetSignature(id) << "\n";
 #endif
 
+    deserializer.SetExpectedSequence(sequence);
     GetReplayer(id)->operator()(deserializer);
   }
 
   // Add a small artificial delay to ensure that all asynchronous events have
   // completed before we exit.
-  std::this_thread::sleep_for (std::chrono::milliseconds(100));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   return true;
 }
@@ -145,6 +158,22 @@ std::string Registry::GetSignature(unsigned id) {
   return m_ids[id].second.ToString();
 }
 
+void Registry::CheckID(unsigned expected, unsigned actual) {
+  if (expected != actual) {
+    llvm::errs() << "Reproducer expected signature " << expected << ": '"
+                 << GetSignature(expected) << "'\n";
+    llvm::errs() << "Reproducer actual signature " << actual << ": '"
+                 << GetSignature(actual) << "'\n";
+    llvm::report_fatal_error(
+        "Detected reproducer replay divergence. Refusing to continue.");
+  }
+
+#ifdef LLDB_REPRO_INSTR_TRACE
+  llvm::errs() << "Replaying " << actual << ": " << GetSignature(actual)
+               << "\n";
+#endif
+}
+
 Replayer *Registry::GetReplayer(unsigned id) {
   assert(m_ids.count(id) != 0 && "ID not in registry");
   return m_ids[id].first;
@@ -163,14 +192,26 @@ unsigned ObjectToIndex::GetIndexForObjectImpl(const void *object) {
   return m_mapping[object];
 }
 
-Recorder::Recorder(llvm::StringRef pretty_func, std::string &&pretty_args)
-    : m_serializer(nullptr), m_pretty_func(pretty_func),
-      m_pretty_args(pretty_args), m_local_boundary(false),
-      m_result_recorded(true) {
+Recorder::Recorder()
+    : m_serializer(nullptr), m_pretty_func(), m_pretty_args(),
+      m_local_boundary(false), m_result_recorded(true),
+      m_sequence(std::numeric_limits<unsigned>::max()) {
   if (!g_global_boundary) {
     g_global_boundary = true;
     m_local_boundary = true;
+    m_sequence = GetNextSequenceNumber();
+  }
+}
 
+Recorder::Recorder(llvm::StringRef pretty_func, std::string &&pretty_args)
+    : m_serializer(nullptr), m_pretty_func(pretty_func),
+      m_pretty_args(pretty_args), m_local_boundary(false),
+      m_result_recorded(true),
+      m_sequence(std::numeric_limits<unsigned>::max()) {
+  if (!g_global_boundary) {
+    g_global_boundary = true;
+    m_local_boundary = true;
+    m_sequence = GetNextSequenceNumber();
     LLDB_LOG(GetLogIfAllCategoriesSet(LIBLLDB_LOG_API), "{0} ({1})",
              m_pretty_func, m_pretty_args);
   }
@@ -181,4 +222,32 @@ Recorder::~Recorder() {
   UpdateBoundary();
 }
 
-bool lldb_private::repro::Recorder::g_global_boundary;
+unsigned Recorder::GetSequenceNumber() const {
+  assert(m_sequence != std::numeric_limits<unsigned>::max());
+  return m_sequence;
+}
+
+void InstrumentationData::Initialize(Serializer &serializer,
+                                     Registry &registry) {
+  InstanceImpl().emplace(serializer, registry);
+}
+
+void InstrumentationData::Initialize(Deserializer &deserializer,
+                                     Registry &registry) {
+  InstanceImpl().emplace(deserializer, registry);
+}
+
+InstrumentationData &InstrumentationData::Instance() {
+  if (!InstanceImpl())
+    InstanceImpl().emplace();
+  return *InstanceImpl();
+}
+
+llvm::Optional<InstrumentationData> &InstrumentationData::InstanceImpl() {
+  static llvm::Optional<InstrumentationData> g_instrumentation_data;
+  return g_instrumentation_data;
+}
+
+thread_local bool lldb_private::repro::Recorder::g_global_boundary = false;
+std::atomic<unsigned> lldb_private::repro::Recorder::g_sequence;
+std::mutex lldb_private::repro::Recorder::g_mutex;

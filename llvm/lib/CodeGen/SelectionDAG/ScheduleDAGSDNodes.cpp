@@ -31,6 +31,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "pre-RA-sched"
@@ -124,8 +125,7 @@ static void CheckForPhysRegDependency(SDNode *Def, SDNode *User, unsigned Op,
     PhysReg = Reg;
   } else if (Def->isMachineOpcode()) {
     const MCInstrDesc &II = TII->get(Def->getMachineOpcode());
-    if (ResNo >= II.getNumDefs() &&
-        II.ImplicitDefs[ResNo - II.getNumDefs()] == Reg)
+    if (ResNo >= II.getNumDefs() && II.hasImplicitDefOfPhysReg(Reg))
       PhysReg = Reg;
   }
 
@@ -172,7 +172,7 @@ static bool AddGlue(SDNode *N, SDValue Glue, bool AddGlue, SelectionDAG *DAG) {
   // Don't add glue to something that already has a glue value.
   if (N->getValueType(N->getNumValues() - 1) == MVT::Glue) return false;
 
-  SmallVector<EVT, 4> VTs(N->value_begin(), N->value_end());
+  SmallVector<EVT, 4> VTs(N->values());
   if (AddGlue)
     VTs.push_back(MVT::Glue);
 
@@ -474,6 +474,7 @@ void ScheduleDAGSDNodes::AddSchedEdges() {
 
       for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
         SDNode *OpN = N->getOperand(i).getNode();
+        unsigned DefIdx = N->getOperand(i).getResNo();
         if (isPassiveNode(OpN)) continue;   // Not scheduled.
         SUnit *OpSU = &SUnits[OpN->getNodeId()];
         assert(OpSU && "Node has no SUnit!");
@@ -508,7 +509,7 @@ void ScheduleDAGSDNodes::AddSchedEdges() {
         Dep.setLatency(OpLatency);
         if (!isChain && !UnitLatencies) {
           computeOperandLatency(OpN, N, i, Dep);
-          ST.adjustSchedDependency(OpSU, SU, Dep);
+          ST.adjustSchedDependency(OpSU, DefIdx, SU, i, Dep);
         }
 
         if (!SU->addPred(Dep) && !Dep.isCtrl() && OpSU->NumRegDefsLeft > 1) {
@@ -828,7 +829,7 @@ EmitPhysRegCopy(SUnit *SU, DenseMap<SUnit*, Register> &VRBaseMap,
 /// not necessarily refer to returned BB. The emitter may split blocks.
 MachineBasicBlock *ScheduleDAGSDNodes::
 EmitSchedule(MachineBasicBlock::iterator &InsertPos) {
-  InstrEmitter Emitter(BB, InsertPos);
+  InstrEmitter Emitter(DAG->getTarget(), BB, InsertPos);
   DenseMap<SDValue, Register> VRBaseMap;
   DenseMap<SUnit*, Register> CopyVRBaseMap;
   SmallVector<std::pair<unsigned, MachineInstr*>, 32> Orders;
@@ -869,6 +870,10 @@ EmitSchedule(MachineBasicBlock::iterator &InsertPos) {
     if (MI->isCandidateForCallSiteEntry() &&
         DAG->getTarget().Options.EmitCallSiteInfo)
       MF.addCallArgsForwardingRegs(MI, DAG->getSDCallSiteInfo(Node));
+
+    if (DAG->getNoMergeSiteInfo(Node)) {
+      MI->setFlag(MachineInstr::MIFlag::NoMerge);
+    }
 
     return MI;
   };
@@ -1027,59 +1032,30 @@ EmitSchedule(MachineBasicBlock::iterator &InsertPos) {
     }
   }
 
-  // Split after an INLINEASM_BR block with outputs. This allows us to keep the
-  // copy to/from register instructions from being between two terminator
-  // instructions, which causes the machine instruction verifier agita.
-  auto TI = llvm::find_if(*BB, [](const MachineInstr &MI){
-    return MI.getOpcode() == TargetOpcode::INLINEASM_BR;
-  });
-  auto SplicePt = TI != BB->end() ? std::next(TI) : BB->end();
-  if (TI != BB->end() && SplicePt != BB->end() &&
-      TI->getOpcode() == TargetOpcode::INLINEASM_BR &&
-      SplicePt->getOpcode() == TargetOpcode::COPY) {
-    MachineBasicBlock *FallThrough = BB->getFallThrough();
-    if (!FallThrough)
-      for (const MachineOperand &MO : BB->back().operands())
-        if (MO.isMBB()) {
-          FallThrough = MO.getMBB();
-          break;
-        }
-    assert(FallThrough && "Cannot find default dest block for callbr!");
-
-    MachineBasicBlock *CopyBB = MF.CreateMachineBasicBlock(BB->getBasicBlock());
-    MachineFunction::iterator BBI(*BB);
-    MF.insert(++BBI, CopyBB);
-
-    CopyBB->splice(CopyBB->begin(), BB, SplicePt, BB->end());
-    CopyBB->setInlineAsmBrDefaultTarget();
-
-    CopyBB->addSuccessor(FallThrough, BranchProbability::getOne());
-    BB->removeSuccessor(FallThrough);
-    BB->addSuccessor(CopyBB, BranchProbability::getOne());
-
-    // Mark all physical registers defined in the original block as being live
-    // on entry to the copy block.
-    for (const auto &MI : *CopyBB)
-      for (const MachineOperand &MO : MI.operands())
-        if (MO.isReg()) {
-          Register reg = MO.getReg();
-          if (Register::isPhysicalRegister(reg)) {
-            CopyBB->addLiveIn(reg);
-            break;
-          }
-        }
-
-    CopyBB->normalizeSuccProbs();
-    BB->normalizeSuccProbs();
-
-    BB->transferInlineAsmBrIndirectTargets(CopyBB);
-
-    InsertPos = CopyBB->end();
-    return CopyBB;
-  }
-
   InsertPos = Emitter.getInsertPos();
-  return Emitter.getBlock();
+  // In some cases, DBG_VALUEs might be inserted after the first terminator,
+  // which results in an invalid MBB. If that happens, move the DBG_VALUEs
+  // before the first terminator.
+  MachineBasicBlock *InsertBB = Emitter.getBlock();
+  auto FirstTerm = InsertBB->getFirstTerminator();
+  if (FirstTerm != InsertBB->end()) {
+    assert(!FirstTerm->isDebugValue() &&
+           "first terminator cannot be a debug value");
+    for (MachineInstr &MI : make_early_inc_range(
+             make_range(std::next(FirstTerm), InsertBB->end()))) {
+      if (!MI.isDebugValue())
+        continue;
+
+      if (&MI == InsertPos)
+        InsertPos = std::prev(InsertPos->getIterator());
+
+      // The DBG_VALUE was referencing a value produced by a terminator. By
+      // moving the DBG_VALUE, the referenced value also needs invalidating.
+      MI.getOperand(0).ChangeToRegister(0, false);
+      MI.moveBefore(&*FirstTerm);
+    }
+  }
+  return InsertBB;
 }
 
 /// Return the basic block label.

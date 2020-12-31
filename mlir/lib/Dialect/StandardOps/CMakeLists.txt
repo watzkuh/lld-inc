@@ -1,4 +1,4 @@
-add_mlir_dialect_library(MLIRStandardOps
+add_mlir_dialect_library(MLIRStandard
   IR/Ops.cpp
   EDSC/Builders.cpp
   EDSC/Intrinsics.cpp
@@ -8,13 +8,16 @@ add_mlir_dialect_library(MLIRStandardOps
 
   DEPENDS
   MLIRStandardOpsIncGen
-  )
-target_link_libraries(MLIRStandardOps
-  PUBLIC
+
+  LINK_LIBS PUBLIC
   MLIRCallInterfaces
   MLIRControlFlowInterfaces
   MLIREDSC
   MLIRIR
-  MLIRSideEffects
-  LLVMSupport
+  MLIRSideEffectInterfaces
+  MLIRTensor
+  MLIRVectorInterfaces
+  MLIRViewLikeInterface
   )
+
+add_subdirectory(Transforms)

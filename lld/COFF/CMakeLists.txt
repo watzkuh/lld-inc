@@ -9,6 +9,7 @@ if(NOT LLD_BUILT_STANDALONE)
 endif()
 
 add_lld_library(lldCOFF
+  CallGraphSort.cpp
   Chunks.cpp
   DebugTypes.cpp
   DLL.cpp
@@ -54,5 +55,5 @@ add_lld_library(lldCOFF
 
   DEPENDS
   COFFOptionsTableGen
-  ${tablegen_deps}
+  intrinsics_gen
   )

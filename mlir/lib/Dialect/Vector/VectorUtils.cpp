@@ -18,10 +18,9 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/Support/Functional.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/MathExtras.h"
-#include "mlir/Support/STLExtras.h"
+#include <numeric>
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
@@ -29,6 +28,32 @@
 using llvm::SetVector;
 
 using namespace mlir;
+
+/// Return the number of elements of basis, `0` if empty.
+int64_t mlir::computeMaxLinearIndex(ArrayRef<int64_t> basis) {
+  if (basis.empty())
+    return 0;
+  return std::accumulate(basis.begin(), basis.end(), 1,
+                         std::multiplies<int64_t>());
+}
+
+/// Given a shape with sizes greater than 0 along all dimensions,
+/// return the distance, in number of elements, between a slice in a dimension
+/// and the next slice in the same dimension.
+///   e.g. shape[3, 4, 5] -> linearization_basis[20, 5, 1]
+SmallVector<int64_t, 8> mlir::computeStrides(ArrayRef<int64_t> shape) {
+  if (shape.empty())
+    return {};
+  SmallVector<int64_t, 8> tmp;
+  tmp.reserve(shape.size());
+  int64_t running = 1;
+  for (auto size : llvm::reverse(shape)) {
+    assert(size > 0 && "size must be nonnegative");
+    tmp.push_back(running);
+    running *= size;
+  }
+  return SmallVector<int64_t, 8>(tmp.rbegin(), tmp.rend());
+}
 
 SmallVector<int64_t, 4> mlir::computeStrides(ArrayRef<int64_t> shape,
                                              ArrayRef<int64_t> sizes) {
@@ -67,8 +92,10 @@ SmallVector<int64_t, 4> mlir::delinearize(ArrayRef<int64_t> sliceStrides,
 
 SmallVector<int64_t, 4> mlir::computeElementOffsetsFromVectorSliceOffsets(
     ArrayRef<int64_t> sizes, ArrayRef<int64_t> vectorOffsets) {
-  return functional::zipMap([](int64_t v1, int64_t v2) { return v1 * v2; },
-                            vectorOffsets, sizes);
+  SmallVector<int64_t, 4> result;
+  for (auto it : llvm::zip(vectorOffsets, sizes))
+    result.push_back(std::get<0>(it) * std::get<1>(it));
+  return result;
 }
 
 SmallVector<int64_t, 4>
@@ -88,23 +115,19 @@ Optional<SmallVector<int64_t, 4>> mlir::shapeRatio(ArrayRef<int64_t> superShape,
   }
 
   // Starting from the end, compute the integer divisors.
-  // Set the boolean `divides` if integral division is not possible.
   std::vector<int64_t> result;
   result.reserve(superShape.size());
-  bool divides = true;
-  auto divide = [&divides, &result](int superSize, int subSize) {
+  int64_t superSize = 0, subSize = 0;
+  for (auto it :
+       llvm::zip(llvm::reverse(superShape), llvm::reverse(subShape))) {
+    std::tie(superSize, subSize) = it;
     assert(superSize > 0 && "superSize must be > 0");
     assert(subSize > 0 && "subSize must be > 0");
-    divides &= (superSize % subSize == 0);
-    result.push_back(superSize / subSize);
-  };
-  functional::zipApply(
-      divide, SmallVector<int64_t, 8>{superShape.rbegin(), superShape.rend()},
-      SmallVector<int64_t, 8>{subShape.rbegin(), subShape.rend()});
 
-  // If integral division does not occur, return and let the caller decide.
-  if (!divides) {
-    return None;
+    // If integral division does not occur, return and let the caller decide.
+    if (superSize % subSize != 0)
+      return None;
+    result.push_back(superSize / subSize);
   }
 
   // At this point we computed the ratio (in reverse) for the common
@@ -157,8 +180,6 @@ static AffineMap makePermutationMap(
     return AffineMap();
   MLIRContext *context =
       enclosingLoopToVectorDim.begin()->getFirst()->getContext();
-  using functional::makePtrDynCaster;
-  using functional::map;
   SmallVector<AffineExpr, 4> perm(enclosingLoopToVectorDim.size(),
                                   getAffineConstantExpr(0, context));
 
@@ -182,12 +203,12 @@ static AffineMap makePermutationMap(
            "Vectorization prerequisite violated: at most 1 index may be "
            "invariant wrt a vectorized loop");
   }
-  return AffineMap::get(indices.size(), 0, perm);
+  return AffineMap::get(indices.size(), 0, perm, context);
 }
 
 /// Implementation detail that walks up the parents and records the ones with
 /// the specified type.
-/// TODO(ntv): could also be implemented as a collect parents followed by a
+/// TODO: could also be implemented as a collect parents followed by a
 /// filter and made available outside this file.
 template <typename T>
 static SetVector<Operation *> getParentsOfType(Operation *op) {
@@ -222,6 +243,18 @@ AffineMap mlir::makePermutationMap(
   return ::makePermutationMap(indices, enclosingLoopToVectorDim);
 }
 
+AffineMap mlir::getTransferMinorIdentityMap(ShapedType shapedType,
+                                            VectorType vectorType) {
+  int64_t elementVectorRank = 0;
+  VectorType elementVectorType =
+      shapedType.getElementType().dyn_cast<VectorType>();
+  if (elementVectorType)
+    elementVectorRank += elementVectorType.getRank();
+  return AffineMap::getMinorIdentityMap(
+      shapedType.getRank(), vectorType.getRank() - elementVectorRank,
+      shapedType.getContext());
+}
+
 bool matcher::operatesOnSuperVectorsOf(Operation &op,
                                        VectorType subVectorType) {
   // First, extract the vector type and distinguish between:
@@ -231,16 +264,13 @@ bool matcher::operatesOnSuperVectorsOf(Operation &op,
   // The ops that *may* lower a super-vector only do so if the super-vector to
   // sub-vector ratio exists. The ops that *must* lower a super-vector are
   // explicitly checked for this property.
-  /// TODO(ntv): there should be a single function for all ops to do this so we
+  /// TODO: there should be a single function for all ops to do this so we
   /// do not have to special case. Maybe a trait, or just a method, unclear atm.
   bool mustDivide = false;
   (void)mustDivide;
   VectorType superVectorType;
-  if (auto read = dyn_cast<vector::TransferReadOp>(op)) {
-    superVectorType = read.getVectorType();
-    mustDivide = true;
-  } else if (auto write = dyn_cast<vector::TransferWriteOp>(op)) {
-    superVectorType = write.getVectorType();
+  if (auto transfer = dyn_cast<VectorTransferOpInterface>(op)) {
+    superVectorType = transfer.getVectorType();
     mustDivide = true;
   } else if (op.getNumResults() == 0) {
     if (!isa<ReturnOp>(op)) {
@@ -282,3 +312,36 @@ bool matcher::operatesOnSuperVectorsOf(Operation &op,
   return true;
 }
 
+bool mlir::isDisjointTransferSet(VectorTransferOpInterface transferA,
+                                 VectorTransferOpInterface transferB) {
+  if (transferA.source() != transferB.source())
+    return false;
+  // For simplicity only look at transfer of same type.
+  if (transferA.getVectorType() != transferB.getVectorType())
+    return false;
+  unsigned rankOffset = transferA.getLeadingShapedRank();
+  for (unsigned i = 0, e = transferA.indices().size(); i < e; i++) {
+    auto indexA = transferA.indices()[i].getDefiningOp<ConstantOp>();
+    auto indexB = transferB.indices()[i].getDefiningOp<ConstantOp>();
+    // If any of the indices are dynamic we cannot prove anything.
+    if (!indexA || !indexB)
+      continue;
+
+    if (i < rankOffset) {
+      // For leading dimensions, if we can prove that index are different we
+      // know we are accessing disjoint slices.
+      if (indexA.getValue().cast<IntegerAttr>().getInt() !=
+          indexB.getValue().cast<IntegerAttr>().getInt())
+        return true;
+    } else {
+      // For this dimension, we slice a part of the memref we need to make sure
+      // the intervals accessed don't overlap.
+      int64_t distance =
+          std::abs(indexA.getValue().cast<IntegerAttr>().getInt() -
+                   indexB.getValue().cast<IntegerAttr>().getInt());
+      if (distance >= transferA.getVectorType().getDimSize(i - rankOffset))
+        return true;
+    }
+  }
+  return false;
+}

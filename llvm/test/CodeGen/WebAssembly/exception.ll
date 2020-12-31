@@ -1,4 +1,3 @@
-; RUN: not --crash llc < %s -asm-verbose=false -disable-wasm-fallthrough-return-opt -wasm-keep-registers -exception-model=wasm
 ; RUN: llc < %s -asm-verbose=false -disable-wasm-fallthrough-return-opt -wasm-disable-explicit-locals -wasm-keep-registers -exception-model=wasm -mattr=+exception-handling -verify-machineinstrs | FileCheck -allow-deprecated-dag-overlap %s
 ; RUN: llc < %s -disable-wasm-fallthrough-return-opt -wasm-keep-registers -exception-model=wasm -mattr=+exception-handling
 
@@ -7,7 +6,7 @@ target triple = "wasm32-unknown-unknown"
 
 %struct.Temp = type { i8 }
 
-@_ZTIi = external constant i8*
+@_ZTIi = external dso_local constant i8*
 
 ; CHECK-LABEL: test_throw:
 ; CHECK:     throw __cpp_exception, $0
@@ -39,7 +38,7 @@ define void @test_throw(i8* %p) {
 ; CHECK:       end_block
 ; CHECK:       extract_exception $[[EXN:[0-9]+]]=
 ; CHECK-DAG:   i32.store  __wasm_lpad_context
-; CHECK-DAG:   i32.store  __wasm_lpad_context+4
+; CHECK-DAG:   i32.store  __wasm_lpad_context{{.+}}
 ; CHECK:       call       $drop=, _Unwind_CallPersonality, $[[EXN]]
 ; CHECK:       block
 ; CHECK:         br_if     0
@@ -74,7 +73,7 @@ rethrow:                                          ; preds = %catch.start
   call void @llvm.wasm.rethrow.in.catch() [ "funclet"(token %1) ]
   unreachable
 
-try.cont:                                         ; preds = %entry, %catch
+try.cont:                                         ; preds = %catch, %entry
   ret void
 }
 
@@ -169,7 +168,7 @@ invoke.cont1:                                     ; preds = %catch.start
   call void @__cxa_end_catch() [ "funclet"(token %1) ]
   catchret from %1 to label %try.cont
 
-try.cont:                                         ; preds = %entry, %invoke.cont1
+try.cont:                                         ; preds = %invoke.cont1, %entry
   ret void
 
 ehcleanup:                                        ; preds = %catch.start
@@ -262,7 +261,7 @@ rethrow:                                          ; preds = %catch.start
   call void @llvm.wasm.rethrow.in.catch() [ "funclet"(token %1) ]
   unreachable
 
-try.cont:                                         ; preds = %entry, %invoke.cont1
+try.cont:                                         ; preds = %invoke.cont1, %entry
   ret void
 
 ehcleanup:                                        ; preds = %catch
@@ -303,11 +302,11 @@ catch.start:                                      ; preds = %catch.dispatch
   %1 = catchpad within %0 [i8* null]
   %2 = call i8* @llvm.wasm.get.exception(token %1)
   %3 = call i32 @llvm.wasm.get.ehselector(token %1)
-  %4 = call i8* @__cxa_begin_catch(i8* %2) #2 [ "funclet"(token %1) ]
+  %4 = call i8* @__cxa_begin_catch(i8* %2) [ "funclet"(token %1) ]
   call void @__cxa_end_catch() [ "funclet"(token %1) ]
   catchret from %1 to label %try.cont
 
-try.cont:                                         ; preds = %entry, %catch.start
+try.cont:                                         ; preds = %catch.start, %entry
   ret void
 }
 
@@ -327,8 +326,40 @@ catch.start:                                      ; preds = %catch.dispatch
   %3 = call i32 @llvm.wasm.get.ehselector(token %1)
   catchret from %1 to label %try.cont
 
-try.cont:                                         ; preds = %entry, %catch.start
+try.cont:                                         ; preds = %catch.start, %entry
   ret void
+}
+
+; Tests a case when a cleanup region (cleanuppad ~ clanupret) contains another
+; catchpad
+define void @test_complex_cleanup_region() personality i8* bitcast (i32 (...)* @__gxx_wasm_personality_v0 to i8*) {
+entry:
+  invoke void @foo()
+          to label %invoke.cont unwind label %ehcleanup
+
+invoke.cont:                                      ; preds = %entry
+  ret void
+
+ehcleanup:                                        ; preds = %entry
+  %0 = cleanuppad within none []
+  invoke void @foo() [ "funclet"(token %0) ]
+          to label %ehcleanupret unwind label %catch.dispatch
+
+catch.dispatch:                                   ; preds = %ehcleanup
+  %1 = catchswitch within %0 [label %catch.start] unwind label %ehcleanup.1
+
+catch.start:                                      ; preds = %catch.dispatch
+  %2 = catchpad within %1 [i8* null]
+  %3 = call i8* @llvm.wasm.get.exception(token %2)
+  %4 = call i32 @llvm.wasm.get.ehselector(token %2)
+  catchret from %2 to label %ehcleanupret
+
+ehcleanup.1:                                      ; preds = %catch.dispatch
+  %5 = cleanuppad within %0 []
+  unreachable
+
+ehcleanupret:                                     ; preds = %catch.start, %ehcleanup
+  cleanupret from %0 unwind to caller
 }
 
 declare void @foo()

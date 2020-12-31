@@ -16,7 +16,6 @@ from lldbsuite.test import lldbutil
 file_index = 0
 
 
-@skipUnlessDarwin
 class FoundationTestCase(TestBase):
 
     mydir = TestBase.compute_mydir(__file__)
@@ -184,7 +183,7 @@ class FoundationTestCase(TestBase):
 
         # isa should be accessible.
         self.expect("expression self->isa", VARIABLES_DISPLAYED_CORRECTLY,
-                    substrs=["(Class)"])
+                    substrs=["Class)"])
 
         # This should fail expectedly.
         self.expect(

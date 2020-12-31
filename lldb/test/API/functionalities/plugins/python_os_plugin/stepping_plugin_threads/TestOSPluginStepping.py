@@ -19,6 +19,7 @@ class TestOSPluginStepping(TestBase):
     NO_DEBUG_INFO_TESTCASE = True
 
     @skipIfWindows
+    @skipIf(oslist=["freebsd"], bugnumber="llvm.org/pr48352")
     def test_python_os_plugin(self):
         """Test that stepping works when the OS Plugin doesn't report all
            threads at every stop"""
@@ -27,6 +28,7 @@ class TestOSPluginStepping(TestBase):
         self.run_python_os_step_missing_thread(False)
 
     @skipIfWindows
+    @skipIf(oslist=["freebsd"], bugnumber="llvm.org/pr48352")
     def test_python_os_plugin_prune(self):
         """Test that pruning the unreported PlanStacks works"""
         self.build()
@@ -44,7 +46,7 @@ class TestOSPluginStepping(TestBase):
         """Test that the Python operating system plugin works correctly"""
 
         # Our OS plugin does NOT report all threads:
-        result = self.dbg.HandleCommand("settings set target.experimental.os-plugin-reports-all-threads false")
+        result = self.dbg.HandleCommand("settings set process.experimental.os-plugin-reports-all-threads false")
 
         python_os_plugin_path = os.path.join(self.getSourceDir(),
                                              "operating_system.py")

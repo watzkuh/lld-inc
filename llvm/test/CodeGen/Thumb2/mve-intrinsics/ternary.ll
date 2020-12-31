@@ -24,7 +24,7 @@ entry:
 define arm_aapcs_vfpcc <8 x half> @test_vfmaq_n_f16(<8 x half> %a, <8 x half> %b, float %c.coerce) {
 ; CHECK-LABEL: test_vfmaq_n_f16:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.f16 r0, s8
+; CHECK-NEXT:    vmov r0, s8
 ; CHECK-NEXT:    vfma.f16 q0, q1, r0
 ; CHECK-NEXT:    bx lr
 entry:
@@ -53,7 +53,7 @@ entry:
 define arm_aapcs_vfpcc <8 x half> @test_vfmasq_n_f16(<8 x half> %a, <8 x half> %b, float %c.coerce) {
 ; CHECK-LABEL: test_vfmasq_n_f16:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.f16 r0, s8
+; CHECK-NEXT:    vmov r0, s8
 ; CHECK-NEXT:    vfmas.f16 q0, q1, r0
 ; CHECK-NEXT:    bx lr
 entry:
@@ -82,7 +82,7 @@ entry:
 define arm_aapcs_vfpcc <8 x half> @test_vfmsq_f16(<8 x half> %a, <8 x half> %b, <8 x half> %c) {
 ; CHECK-LABEL: test_vfmsq_f16:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vfms.f16 q0, q1, q2
+; CHECK-NEXT:    vfms.f16 q0, q2, q1
 ; CHECK-NEXT:    bx lr
 entry:
   %0 = fneg <8 x half> %c
@@ -93,7 +93,7 @@ entry:
 define arm_aapcs_vfpcc <4 x float> @test_vfmsq_f32(<4 x float> %a, <4 x float> %b, <4 x float> %c) {
 ; CHECK-LABEL: test_vfmsq_f32:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vfms.f32 q0, q1, q2
+; CHECK-NEXT:    vfms.f32 q0, q2, q1
 ; CHECK-NEXT:    bx lr
 entry:
   %0 = fneg <4 x float> %c
@@ -422,7 +422,7 @@ entry:
 define arm_aapcs_vfpcc <8 x half> @test_vfmaq_m_n_f16(<8 x half> %a, <8 x half> %b, float %c.coerce, i16 zeroext %p) {
 ; CHECK-LABEL: test_vfmaq_m_n_f16:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.f16 r1, s8
+; CHECK-NEXT:    vmov r1, s8
 ; CHECK-NEXT:    vmsr p0, r0
 ; CHECK-NEXT:    vpst
 ; CHECK-NEXT:    vfmat.f16 q0, q1, r1
@@ -459,7 +459,7 @@ entry:
 define arm_aapcs_vfpcc <8 x half> @test_vfmasq_m_n_f16(<8 x half> %a, <8 x half> %b, float %c.coerce, i16 zeroext %p) {
 ; CHECK-LABEL: test_vfmasq_m_n_f16:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.f16 r1, s8
+; CHECK-NEXT:    vmov r1, s8
 ; CHECK-NEXT:    vmsr p0, r0
 ; CHECK-NEXT:    vpst
 ; CHECK-NEXT:    vfmast.f16 q0, q1, r1
