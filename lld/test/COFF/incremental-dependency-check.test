@@ -5,10 +5,10 @@
 # RUN:  /nodefaultlib /incremental"
 # RUN: yaml2obj < %p/Inputs/do-not-use-lorem.yaml > main.obj
 # RUN: yaml2obj < %p/Inputs/lorem-ipsum-reorder.yaml > symbol-provider.obj
-# RUN: lld-link $LDFLAGS main.obj symbol-provider.obj
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj symbol-provider.obj
 
 # RUN: yaml2obj < %p/Inputs/use-lorem.yaml > main.obj
-# RUN: lld-link $LDFLAGS main.obj symbol-provider.obj | FileCheck %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj symbol-provider.obj | FileCheck %s
 
 CHECK: main.obj has changed
 CHECK: Rewriting .text section for file main.obj
@@ -20,7 +20,7 @@ ILK:     dependent-files:
 ILK:        - main.obj
 
 # RUN: yaml2obj < %p/Inputs/do-not-use-lorem.yaml > main.obj
-# RUN: lld-link $LDFLAGS main.obj symbol-provider.obj
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj symbol-provider.obj
 # RUN: cat out.exe.ilk.yaml | FileCheck --check-prefix=ILK2 %s
 
 ILK2-NOT:     dependent-files:

@@ -6,17 +6,17 @@
 # RUN: lld-link  $LDFLAGS crt-init.obj
 
 # RUN: yaml2obj < %p/Inputs/crt-init-mod.yaml > crt-init.obj
-# RUN: lld-link $LDFLAGS crt-init.obj | FileCheck --check-prefix=INC %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS crt-init.obj | FileCheck --check-prefix=INC %s
 
 INC: Attempting incremental link
 INC-NEXT: crt-init.obj has changed
 INC-NOT: Incremental link aborted
 
-# RUN: llvm-readobj --sections --section-data < out.exe > incremental-link
+# RUN: llvm-readobj --sections --section-data out.exe > incremental-link
 # RUN: rm out.exe
-# RUN: lld-link $LDFLAGS crt-init.obj | FileCheck --check-prefix=CLEAN %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS crt-init.obj | FileCheck --check-prefix=CLEAN %s
 
 CLEAN: No incremental link
 
-# RUN: llvm-readobj --sections --section-data < out.exe > clean-link
+# RUN: llvm-readobj --sections --section-data out.exe > clean-link
 # RUN: diff clean-link incremental-link

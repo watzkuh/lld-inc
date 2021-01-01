@@ -3,10 +3,10 @@
 # RUN: LDFLAGS="/out:inc.exe /opt:noref /entry:main /incremental /nodefaultlib"
 # RUN: yaml2obj %p/Inputs/extern-reorder.yaml > main.obj
 # RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > missing.obj
-# RUN: lld-link $LDFLAGS main.obj missing.obj
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj missing.obj
 #
 # RUN: yaml2obj %p/Inputs/deleted-lorem.yaml > missing.obj
-# RUN: lld-link $LDFLAGS main.obj missing.obj | FileCheck --check-prefix=ERR %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj missing.obj | FileCheck --check-prefix=ERR %s
 
 ERR: Attempting incremental link
 ERR: MISSING: ?lorem@@YAHXZ

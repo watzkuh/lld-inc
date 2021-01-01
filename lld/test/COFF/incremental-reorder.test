@@ -3,13 +3,13 @@
 # RUN: LDFLAGS="/out:inc.exe /nodefaultlib /opt:noref /entry:main /incremental"
 # RUN: yaml2obj %p/Inputs/extern-reorder.yaml > main.obj
 # RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > reorder.obj
-# RUN: lld-link $LDFLAGS main.obj reorder.obj
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj reorder.obj
 # RUN: llvm-readobj --sections --section-data inc.exe > clean-link
 # RUN: wc -w inc.exe.ilk.yaml > incremental-ilf-wc
 # RUN: cp inc.exe.ilk.yaml incremental-ilf
 # RUN: yaml2obj %p/Inputs/ipsum-lorem-reorder.yaml > reorder.obj
 # RUN: touch -a -m -t 200001010000 main.obj
-# RUN: lld-link $LDFLAGS main.obj reorder.obj | FileCheck --check-prefix=INC %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj reorder.obj | FileCheck --check-prefix=INC %s
 
 INC-NOT: Incremental link aborted
 

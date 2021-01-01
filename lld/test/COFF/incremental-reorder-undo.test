@@ -5,11 +5,11 @@
 # RUN: LDFLAGS="/out:inc.exe /nodefaultlib /opt:noref /entry:main /incremental"
 # RUN: yaml2obj %p/Inputs/extern-reorder.yaml > main.obj
 # RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > reorder.obj
-# RUN: lld-link $LDFLAGS main.obj reorder.obj
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj reorder.obj
 # RUN: llvm-readobj --sections --section-data inc.exe > clean-link
 #
 # RUN: yaml2obj %p/Inputs/ipsum-lorem-reorder.yaml > reorder.obj
-# RUN: lld-link $LDFLAGS main.obj reorder.obj
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS main.obj reorder.obj
 #
 # RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > reorder.obj
 # RUN: lld-link /out:inc.exe /nodefaultlib /opt:noref /entry:main \

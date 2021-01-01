@@ -4,10 +4,10 @@
 # RUN: LDFLAGS="/out:out.exe /benchmark /opt:noref /entry:main \
 # RUN:  /nodefaultlib /incremental"
 # RUN: yaml2obj < %p/Inputs/ret42.yaml > ret42.obj
-# RUN: lld-link $LDFLAGS ret42.obj | FileCheck %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS ret42.obj | FileCheck %s
 
 CHECK: No incremental
 
-# RUN: lld-link $LDFLAGS ret42.obj | FileCheck -check-prefix=2ND %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS ret42.obj | FileCheck -check-prefix=2ND %s
 
 2ND: Attempting incremental

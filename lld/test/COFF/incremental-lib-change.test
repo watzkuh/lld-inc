@@ -6,7 +6,7 @@
 # RUN: yaml2obj %p/Inputs/function.yaml > function.obj
 # RUN: yaml2obj %p/Inputs/lorem-ipsum-reorder.yaml > unused.obj
 # RUN: llvm-ar rvs extern-data.lib extern-data.obj unused.obj
-# RUN: lld-link $LDFLAGS extern-data.lib function.obj | FileCheck %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS extern-data.lib function.obj | FileCheck %s
 
 CHECK: No incremental
 
@@ -14,7 +14,7 @@ CHECK: No incremental
 # RUN: yaml2obj %p/Inputs/extern-data-modified.yaml > extern-data.obj
 # RUN: rm extern-data.lib
 # RUN: llvm-ar rvs extern-data.lib extern-data.obj unused.obj
-# RUN: lld-link $LDFLAGS extern-data.lib function.obj | FileCheck --check-prefix=INC %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS extern-data.lib function.obj | FileCheck --check-prefix=INC %s
 
 INC: Attempting incremental link
 INC-NOT: function.obj has changed

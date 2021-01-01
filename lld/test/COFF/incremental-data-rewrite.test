@@ -3,13 +3,13 @@
 # RUN: LDFLAGS="/out:inc.exe /opt:noref /entry:main /nodefaultlib /incremental"
 # RUN: yaml2obj %p/Inputs/extern-data.yaml > extern-data.obj
 # RUN: yaml2obj %p/Inputs/function.yaml > function.obj
-# RUN: lld-link $LDFLAGS extern-data.obj function.obj | FileCheck %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS extern-data.obj function.obj | FileCheck %s
 
 CHECK: No incremental
 
 # RUN: llvm-readobj --sections --section-data inc.exe > clean-link
 # RUN: yaml2obj %p/Inputs/extern-data-modified.yaml > extern-data.obj
-# RUN: lld-link $LDFLAGS extern-data.obj function.obj | FileCheck --check-prefix=INC %s
+# RUN: env LLD_IN_TEST=1 lld-link $LDFLAGS extern-data.obj function.obj | FileCheck --check-prefix=INC %s
 
 INC: Attempting incremental link
 INC-NOT: function.obj has changed
